@@ -4,8 +4,8 @@ from http.server import HTTPServer, SimpleHTTPRequestHandler
 import telebot
 import requests
 import requests
-BOT_TOKEN = os.getenv("BOT_TOKEN") GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-bot = telebot.TeleBot(BOT_TOKEN)
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 KEYWORDS = [ "airdrop", "drop", "claim", "alpha", "node", "campaign", "аирдроп", "листинг", "тестнет", "binance", "binance web3", "okx", "okx web3", "bybit", "bitget", "mexc", "gate", "kucoin", "bingx", "kraken", "whitebit", "promo", "listing", "pool", "testnet", "giveaway" ]
 def analyze_with_gemini(text): url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={GEMINI_API_KEY}"
 prompt = f"""Ты — экспертный ИИ-аналитик крипто-сигналов и аирдропов.

@@ -11,8 +11,8 @@ KEYWORDS = ["airdrop", "binance web3", "okx web3", "promo", "listing", "pool", "
 async def handle_new_message(event):
     text = (event.raw_text or "").lower()
     if any(k in text for k in KEYWORDS):
-    msg = f"🚨 **Новый крипто-алерт!**\n\n{event.raw_text}"
-    await client.send_message(CHAT_ID, msg)
+        msg = f"🚨 **Новый крипто-алерт!**\n\n{event.raw_text}"
+        await client.send_message(CHAT_ID, msg)
 print("Запуск бота...") 
 client.start(bot_token=BOT_TOKEN) 
 print("Бот успешно запущен!") 

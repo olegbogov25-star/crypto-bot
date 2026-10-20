@@ -1,4 +1,4 @@
-import os
+ import os
 import threading
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 import telebot
@@ -33,7 +33,7 @@ def handle_message(message):
     
         full_response = f"🚀 **АНАЛИЗ СИГНАЛА (Gemini AI)**\n\n{analysis}"
     
-        bot.send_message(message.chat.id, full_response, parse_mode="Markdown")
+         bot.send_message(message.chat.id, full_response, parse_mode="Markdown")
 def run_dummy_server(): 
     port = int(os.environ.get("PORT", 10000)) 
     server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler) 

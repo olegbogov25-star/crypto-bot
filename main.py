@@ -4,7 +4,7 @@ from http.server import HTTPServer, SimpleHTTPRequestHandler
 import telebot
 import requests
 
-BOT_TOKEN = "8839509486:AAEonI--YDPiwPqBS2Io2Lpc5-jtfsNffxA"
+BOT_TOKEN = "8839509486:AAHk_qdgxGhYMVQG7DlwImy7cwaaHtBoP9s"
 CHAT_ID = 1043209905
 GEMINI_API_KEY = "AIzaSy..."
 XAI_API_KEY = "grok_487b9ccdb43557c2598f64ec6ad9c217_..."

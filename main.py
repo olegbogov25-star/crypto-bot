@@ -23,11 +23,19 @@ try:
     return f"Ошибка Gemini API (Статус {response.status_code}): {response.text}"
 except Exception as e:
     return f"Ошибка запроса к Gemini: {str(e)}"
-@bot.message_handler(func=lambda message: True) def handle_message(message): text = message.text or "" if any(keyword.lower() in text.lower() for keyword in KEYWORDS): msg = bot.reply_to(message, "⏳ Анализирую сигнал с помощью Gemini ИИ...")
+@bot.message_handler(func=lambda message: True) 
+def handle_message(message): 
+        text = message.text or "" 
+        if any(keyword.lower() in text.lower() for keyword in KEYWORDS): msg = bot.reply_to(message, "⏳ Анализирую сигнал с помощью Gemini ИИ...")
     analysis = analyze_with_gemini(text)
     
     full_response = f"🚀 **АНАЛИЗ СИГНАЛА (Gemini AI)**\n\n{analysis}"
     
     bot.send_message(message.chat.id, full_response, parse_mode="Markdown")
-def run_dummy_server(): port = int(os.environ.get("PORT", 10000)) server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler) server.serve_forever()
-if name == "main": threading.Thread(target=run_dummy_server, daemon=True).start() bot.infinity_polling()
+def run_dummy_server(): 
+    port = int(os.environ.get("PORT", 10000)) 
+    server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler) 
+    server.serve_forever()
+if __name__ == "__main__": 
+        threading.Thread(target=run_dummy_server, daemon=True).start() 
+    bot.infinity_polling()

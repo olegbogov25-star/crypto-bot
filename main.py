@@ -19,7 +19,7 @@ payload = {"contents": [{"parts": [{"text": prompt}]}]}
 try:
     response = requests.post(url, json=payload, timeout=20)
     if response.status_code == 200:
-        return response.json()["candidates"][0]["content"]["parts"][0]["text"]
+    return response.json()["candidates"][0]["content"]["parts"][0]["text"]
     return f"Ошибка Gemini API (Статус {response.status_code}): {response.text}"
 except Exception as e:
     return f"Ошибка запроса к Gemini: {str(e)}"

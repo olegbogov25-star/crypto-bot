@@ -12,7 +12,7 @@ def analyze_with_gemini(text):
     prompt = "Анализ: " + text
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
     try:
-        response = requests.post(url, json=payload, timeout=20)
+        response = requests.post(url, json=payload, timeout=60)
         if response.status_code == 200:
             return response.json()["candidates"][0]["content"]["parts"][0]["text"]
         return f"Ошибка Gemini API (Статус {response.status_code}): {response.text}"

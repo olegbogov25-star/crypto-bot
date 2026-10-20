@@ -3,11 +3,10 @@ import threading
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 import telebot
 import requests
-BOT_TOKEN = "8839509486:AAHR8Jrn5fQKR-Z0d9UR9Mtz-CmJiQdv6rs"⁠
-CHAT_ID = 1043209905
-GEMINI_API_KEY = "AIzaSy..."
-XAI_API_KEY = "grok_487b9ccdb43557c2598f64ec6ad9c217_..."
-
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+XAI_API_KEY = os.getenv("XAI_API_KEY")
 bot = telebot.TeleBot(BOT_TOKEN)
 
 KEYWORDS = [

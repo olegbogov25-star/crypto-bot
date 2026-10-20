@@ -3,27 +3,26 @@ import threading
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 import telebot
 import requests
-import requests
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 KEYWORDS = [ "airdrop", "drop", "claim", "alpha", "node", "campaign", "аирдроп", "листинг", "тестнет", "binance", "binance web3", "okx", "okx web3", "bybit", "bitget", "mexc", "gate", "kucoin", "bingx", "kraken", "whitebit", "promo", "listing", "pool", "testnet", "giveaway" ]
-def analyze_with_gemini(text): prompt = f"ПОШАГОВЫЙ ЧЕКЛИСТ: Выдели конкретные действия: что нужно сделать пользователю. 💰 ОЦЕНКА РИСКОВ И ВЕРДИКТ: Оцени потенциал и риски (скам/высокий риск/надежно, стоит ли участвовать). Текст поста: {text}" payload = {"contents": [{"parts": [{"text": prompt}]}]}
-try:
-    response = requests.post(url, json=payload, timeout=20)
-    if response.status_code == 200:
-        return response.json()["candidates"][0]["content"]["parts"][0]["text"]
-    return f"Ошибка Gemini API (Статус {response.status_code}): {response.text}"
-except Exception as e:
-    return f"Ошибка запроса к Gemini: {str(e)}" 
+def analyze_with_gemini(text):
+    prompt = "Анализ: " + text
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    try:
+        response = requests.post(url, json=payload, timeout=20)
+        if response.status_code == 200:
+            return response.json()["candidates"][0]["content"]["parts"][0]["text"]
+        return f"Ошибка Gemini API (Статус {response.status_code}): {response.text}"
+    except Exception as e:
+        return f"Ошибка запроса: {str(e)}" 
+@bot.message_handler(func=lambda message: True) 
 def handle_message(message): 
-        text = message.text or "" 
-        if any(keyword.lower() in text.lower() for keyword in KEYWORDS):
-                msg = bot.reply_to(message, 
-                "⏳ Анализирую сигнал с помощью Gemini ИИ...")
-                analysis = analyze_with_gemini(text)
-    
-        full_response = f"🚀 **АНАЛИЗ СИГНАЛА (Gemini AI)**\n\n{analysis}"
-    
+    text = message.text or "" 
+    if any(keyword.lower() in text.lower() for keyword in KEYWORDS): 
+        msg = bot.reply_to(message, "⏳ Анализирую сигнал с помощью Gemini ИИ...") 
+        analysis = analyze_with_gemini(text) 
+        full_response = f"📊 АНАЛИЗ СИГНАЛА (Gemini AI)\n\n{analysis}" 
         bot.send_message(message.chat.id, full_response, parse_mode="Markdown")
 def run_dummy_server(): 
     port = int(os.environ.get("PORT", 10000)) 

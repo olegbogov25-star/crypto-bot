@@ -1,6 +1,6 @@
 import telebot
 
-BOT_TOKEN = "8839509486:AAEzoUJou-GyxdQnBtw5KDH1dmZgUiTHQCs"
+BOT_TOKEN = "8839509486:AAFSjzuYLhQ82dnRLPSx18JRtAoV-wNC_iw"
 CHAT_ID = 1043209905
 bot = telebot.TeleBot(BOT_TOKEN)
 KEYWORDS = ["airdrop", "binance", "binance web3", "okx", "okx web3", "bybit", "bitget", "mexc", "gate", "kucoin", "bingx", "kraken", "whitebit", "promo", "listing", "pool", "testnet", "giveaway"]

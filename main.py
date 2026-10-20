@@ -13,7 +13,8 @@ KEYWORDS = [
     "airdrop", "drop", "claim", "alpha", "node", "campaign",
     "аирдроп", "листинг", "тестнет", "binance", "binance web3",
     "okx", "okx web3", "bybit", "bitget", "mexc", "gate",
-    "kucoin", "bingx", "kraken", "whitebit", "promo", "listing",def analyze_with_gemini(text): url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={GEMINI_API_KEY}"
+    "kucoin", "bingx", "kraken", "whitebit", "promo", "listing",
+    def analyze_with_gemini(text): url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={GEMINI_API_KEY}"
 prompt = f"""Ты — экспертный ИИ-аналитик крипто-сигналов и аирдропов.
 Проанализируй данный пост и ответь СТРОГО по следующей структуре:
 📋 СУТЬ И ПЕРЕВОД: (Коротко объясни суть проекта и переведи ключевую мысль на русский язык)

@@ -25,7 +25,7 @@ def handle_message(message):
         msg = bot.reply_to(message, "⏳ Анализирую сигнал с помощью Gemini ИИ...") 
         analysis = analyze_with_gemini(text) 
         full_response = f"📊 АНАЛИЗ СИГНАЛА (Gemini AI)\n\n{analysis}" 
-        bot.send_message(message.chat.id, full_response, parse_mode="Markdown")
+        bot.send_message(message.chat.id, full_response)
 def run_dummy_server(): 
     port = int(os.environ.get("PORT", 10000)) 
     server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler) 

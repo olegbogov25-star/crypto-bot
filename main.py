@@ -31,7 +31,7 @@ def handle_message(message):
                 "⏳ Анализирую сигнал с помощью Gemini ИИ...")
                 analysis = analyze_with_gemini(text)
     
-    full_response = f"🚀 **АНАЛИЗ СИГНАЛА (Gemini AI)**\n\n{analysis}"
+        full_response = f"🚀 **АНАЛИЗ СИГНАЛА (Gemini AI)**\n\n{analysis}"
     
     bot.send_message(message.chat.id, full_response, parse_mode="Markdown")
 def run_dummy_server(): 

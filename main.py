@@ -26,8 +26,10 @@ except Exception as e:
 @bot.message_handler(func=lambda message: True) 
 def handle_message(message): 
         text = message.text or "" 
-        if any(keyword.lower() in text.lower() for keyword in KEYWORDS): msg = bot.reply_to(message, "⏳ Анализирую сигнал с помощью Gemini ИИ...")
-    analysis = analyze_with_gemini(text)
+        if any(keyword.lower() in text.lower() for keyword in KEYWORDS):
+                msg = bot.reply_to(message, 
+                "⏳ Анализирую сигнал с помощью Gemini ИИ...")
+                analysis = analyze_with_gemini(text)
     
     full_response = f"🚀 **АНАЛИЗ СИГНАЛА (Gemini AI)**\n\n{analysis}"
     

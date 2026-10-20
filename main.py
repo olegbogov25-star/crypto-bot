@@ -2,7 +2,7 @@ import os
 from telethon import TelegramClient, events
 API_ID = 36041164
 API_HASH = "14b25c0df36f39ed248e22ee8f258b74"
-BOT_TOKEN = "8839509486:AAFlXDiLu4vM7a6RWYGxLZ_EQkYsnstdYk"
+BOT_TOKEN = "8839509486:AAEzoUJou-GyxdQnBtw5KDH1dmZgUiTHQCs"
 CHAT_ID = 1043209905
 print("Инициализация клиента Telegram...")
 client = TelegramClient("cryptobot", API_ID, API_HASH)

@@ -6,3 +6,4 @@ print("Инициализация клиента Telegram...") client = Telegram
 KEYWORDS = ["airdrop", "binance web3", "okx web3", "promo", "listing", "pool", "testnet", "giveaway"]
 @client.on(events.NewMessage(incoming=True)) async def handle_new_message(event): message_text = (event.raw_text or "").lower() if any(keyword in message_text for keyword in KEYWORDS): alert_message = f"🚨 Новый крипто-алерт!\n\n{event.raw_text}" await client.send_message(CHAT_ID, alert_message)
 print("Авторизация и запуск бота...") client.start(bot_token=BOT_TOKEN) print("Бот успешно авторизован и запущен!") client.run_until_disconnected()
+update

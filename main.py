@@ -1,7 +1,8 @@
-import os import threading 
-from http.server 
-import HTTPServer, SimpleHTTPRequestHandler 
-import telebot 
+import os
+import threading
+from http.server import HTTPServer, SimpleHTTPRequestHandler
+import telebot
+import requests
 import requests
 BOT_TOKEN = os.getenv("BOT_TOKEN") GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 bot = telebot.TeleBot(BOT_TOKEN)

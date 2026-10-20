@@ -5,6 +5,7 @@ import telebot
 import requests
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+bot = telebot.TeleBot(BOT_TOKEN)
 KEYWORDS = [ "airdrop", "drop", "claim", "alpha", "node", "campaign", "аирдроп", "листинг", "тестнет", "binance", "binance web3", "okx", "okx web3", "bybit", "bitget", "mexc", "gate", "kucoin", "bingx", "kraken", "whitebit", "promo", "listing", "pool", "testnet", "giveaway" ]
 def analyze_with_gemini(text):
     prompt = "Анализ: " + text

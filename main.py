@@ -3,7 +3,6 @@ import threading
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 import telebot
 import requests
-
 BOT_TOKEN = "8839509486:AAHR8Jrn5fQKR-Z0d9UR9Mtz-CmJiQdv6rs"⁠
 CHAT_ID = 1043209905
 GEMINI_API_KEY = "AIzaSy..."

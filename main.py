@@ -18,7 +18,7 @@ KEYWORDS = [
 ]
 
 def architect_gemini(text):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={GEMINI_API_KEY}"
     prompt = f"Проанализируй этот крипто-пост. Сделай на русском языке:\n1. Суть проекта и перевод.\n2. Пошаговый чеклист (что делать).\nТекст поста:\n{text}"
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
     try:

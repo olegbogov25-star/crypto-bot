@@ -6,8 +6,8 @@ import requests
 
 BOT_TOKEN = "8839509486:AAEonI--YDPiwPqBS2Io2Lpc5-jtfsNffxA"
 CHAT_ID = 1043209905
-GEMINI_API_KEY = "AQ.Ab8RN6KdL2iZuyHohYliGkwkpUqXd32tQvdg8-sgu7eMfmzrIQ"
-XAI_API_KEY = "Grok_41b58ab557c49d1d533246884dbee328_61fbc2fa7618d27c894d34ae1251390a2d44cf71d91801edd854a28943a1c6d8"
+GEMINI_API_KEY = "AIzaSy..."
+XAI_API_KEY = "grok_487b9ccdb43557c2598f64ec6ad9c217_..."
 
 bot = telebot.TeleBot(BOT_TOKEN)
 

@@ -8,7 +8,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 bot = telebot.TeleBot(BOT_TOKEN)
 KEYWORDS = [ "airdrop", "drop", "claim", "alpha", "node", "campaign", "аирдроп", "листинг", "тестнет", "binance", "binance web3", "okx", "okx web3", "bybit", "bitget", "mexc", "gate", "kucoin", "bingx", "kraken", "whitebit", "promo", "listing", "pool", "testnet", "giveaway" ]
 def analyze_with_gemini(text):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={GEMINI_API_KEY}"
     prompt = "Анализ: " + text
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
     try:

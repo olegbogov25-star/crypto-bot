@@ -61,7 +61,7 @@ def handle_message(message):
         bot.send_message(message.chat.id, "🛡 Критик (Grok) проверяет риски...")
         critique = critic_grok(blueprint)
         final_report = f"🚨 МУЛЬТИАГЕНТНЫЙ АНАЛИЗ СИГНАЛА\n\n📋 План от Архитектора:\n{blueprint}\n\n⚖️ Вердикт Критика:\n{critique}"
-       bot.send_message(message.chat.id, final_report)
+        bot.send_message(message.chat.id, final_report)
 def run_dummy_server():
     port = int(os.environ.get("PORT", 8080))
     server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)

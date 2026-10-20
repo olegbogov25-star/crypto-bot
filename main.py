@@ -7,15 +7,7 @@ import requests
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 KEYWORDS = [ "airdrop", "drop", "claim", "alpha", "node", "campaign", "аирдроп", "листинг", "тестнет", "binance", "binance web3", "okx", "okx web3", "bybit", "bitget", "mexc", "gate", "kucoin", "bingx", "kraken", "whitebit", "promo", "listing", "pool", "testnet", "giveaway" ]
-def analyze_with_gemini(text): url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={GEMINI_API_KEY}"
-prompt = f"""Ты — экспертный ИИ-аналитик крипто-сигналов и аирдропов.
-Проанализируй данный пост и ответь СТРОГО по следующей структуре:
-📋 СУТЬ И ПЕРЕВОД: (Коротко объясни суть проекта и переведи ключевую мысль на русский язык)
-📝 ПОШАГОВЫЙ ЧЕКЛИСТ: (Выдели конкретные действия: что нужно сделать пользователю)
-⚖️ ОЦЕНКА РИСКОВ И ВЕРДИКТ: (Оцени потенциал и риски: скам/высокий риск/надежно, стоит ли участвовать)
-Текст поста: {text}"""
-payload = {"contents": [{"parts": [{"text": prompt}]}]}
-
+def analyze_with_gemini(text): prompt = f""" ПОШАГОВЫЙ ЧЕКЛИСТ: (Выдели конкретные действия: что нужно сделать пользователю) 💰 ОЦЕНКА РИСКОВ И ВЕРДИКТ: (Оцени потенциал и риски: скам/высокий риск/надежно, стоит ли участвовать) Текст поста: {text}""" payload = {"contents": [{"parts": [{"text": prompt}]}]}
 try:
     response = requests.post(url, json=payload, timeout=20)
     if response.status_code == 200:

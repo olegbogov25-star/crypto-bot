@@ -11,6 +11,12 @@ logging.basicConfig(level=logging.INFO)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
+# Проверка наличия обязательных ключей
+if not TELEGRAM_TOKEN:
+    raise ValueError("ОШИБКА: TELEGRAM_TOKEN не найден в Environment Variables на Render!")
+if not GEMINI_API_KEY:
+    raise ValueError("ОШИБКА: GEMINI_API_KEY не найден в Environment Variables на Render!")
+
 # Настройка генеративной модели Gemini
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')

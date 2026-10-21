@@ -62,9 +62,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     full_prompt = f"{SYSTEM_PROMPT}\n\nВот текст анонса для анализа:\n{user_text}"
     
     response_text = None
-    for attempt in range(3):
+    # Увеличиваем количество попыток до 5 и паузу до 4 секунд для бесплатного тарифа
+    for attempt in range(5):
         try:
-            # УКАЗАНА ТРЕБУЕМАЯ ГООГЛОМ МОДЕЛЬ gemini-3.8-flash
             response = client.models.generate_content(
                 model='gemini-3.8-flash',
                 contents=full_prompt,
@@ -74,12 +74,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 break
         except Exception as e:
             logging.warning(f"Попытка {attempt + 1} не удалась: {e}")
-            time.sleep(2) # Пауза перед повтором
+            time.sleep(4)  # Даем серверам Google 4 секунды на передышку
 
     if response_text:
         await update.message.reply_text(response_text, parse_mode='Markdown')
     else:
-        await update.message.reply_text("⚠️ Сервера Google временно перегружены. Пожалуйста, отправьте текст анонса ещё раз через минуту.")
+        await update.message.reply_text("⚠️ Бесплатные сервера Google сейчас сильно перегружены. Попробуйте отправить текст ещё раз через пару минут.")
 
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()

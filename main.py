@@ -17,10 +17,10 @@ if not TELEGRAM_TOKEN:
 if not GEMINI_API_KEY:
     raise ValueError("ОШИБКА: GEMINI_API_KEY не найден в Environment Variables на Render!")
 
-# Настройка нового официального клиента Gemini
+# Настройка официального клиента Gemini
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Полная инструкция (системный промпт) со словарем всех акционных терминов
+# Системный промпт
 SYSTEM_PROMPT = """
 Ты — профессиональный крипто-аналитик, листинг-трекер и охотник за промоакциями на биржах.
 Твоя задача — проанализировать текст анонса с биржи (Binance, OKX, Bybit, MEXC, Bitget, KuCoin, Gate, HTX, BingX, CoinEx и др.), перевести его на русский язык и выдать сухую, структурированную выжимку строго по следующему шаблону:
@@ -55,18 +55,31 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
+    
+    # Если пользователь ввёл команду /start текстом
+    if user_text.strip().lower() in ["/start", "start"]:
+        await start(update, context)
+        return
+
     await update.message.reply_text("🔍 Анализирую анонс через Gemini...")
 
     try:
         full_prompt = f"{SYSTEM_PROMPT}\n\nВот текст анонса для анализа:\n{user_text}"
+        
+        # Перешли на 100% стабильную модель gemini-1.5-flash
         response = client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-1.5-flash',
             contents=full_prompt,
         )
-        await update.message.reply_text(response.text, parse_mode='Markdown')
+        
+        if response.text:
+            await update.message.reply_text(response.text, parse_mode='Markdown')
+        else:
+            await update.message.reply_text("⚠️ Не удалось получить ответ от модели. Попробуйте еще раз.")
+
     except Exception as e:
         logging.error(f"Ошибка при работе с Gemini: {e}")
-        await update.message.reply_text("⚠️ Произошла ошибка при обработке анонса. Попробуйте отправить текст ещё раз.")
+        await update.message.reply_text(f"⚠️ Ошибка Gemini API: {e}")
 
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()

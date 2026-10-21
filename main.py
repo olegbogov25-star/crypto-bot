@@ -3,11 +3,12 @@ import time
 import threading
 import feedparser
 import telebot
+from telebot import types
 from openai import OpenAI
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-TARGET_CHAT_ID = os.environ.get("TARGET_CHAT_ID")  # ID твоего чата или канала, куда слать авто-разборы
+TARGET_CHAT_ID = os.environ.get("TARGET_CHAT_ID")  # ID чата или канала для автоматических отчетов
 
 if not TELEGRAM_TOKEN or not OPENROUTER_API_KEY:
     raise ValueError("Ошибка: Не найден TELEGRAM_TOKEN или OPENROUTER_API_KEY в переменных окружения!")
@@ -63,11 +64,11 @@ RSS_FEEDS = {
     "Bitget": "https://www.bitget.com/support/rss"
 }
 
-# Множество для хранения уже обработанных ссылок, чтобы не слать дубликаты
+# Множество для хранения уже обработанных ссылок (защита от дубликатов)
 processed_links = set()
 
 def analyze_and_send(title, summary, link, exchange_name):
-    """Функция отправки текста на анализ в ИИ и рассылки в Telegram"""
+    """Функция отправки текста на анализ в ИИ и рассылки в Telegram с кнопкой приложения"""
     if not TARGET_CHAT_ID:
         return
     
@@ -84,8 +85,14 @@ def analyze_and_send(title, summary, link, exchange_name):
         )
         answer = completion.choices[0].message.content
         
-        # Отправляем готовый отчет в целевой чат
-        bot.send_message(TARGET_CHAT_ID, answer, parse_mode="Markdown")
+        # Создаем инлайн-кнопку для быстрого перехода на акцию/источник
+        markup = types.InlineKeyboardMarkup()
+        if link:
+            btn_app = types.InlineKeyboardButton(f"📱 Открыть акцию в {exchange_name}", url=link)
+            markup.add(btn_app)
+        
+        # Отправляем готовый отчет в целевой чат с кнопкой
+        bot.send_message(TARGET_CHAT_ID, answer, parse_mode="Markdown", reply_markup=markup)
     except Exception as e:
         print(f"Ошибка при ИИ-анализе RSS: {e}")
 
@@ -104,25 +111,23 @@ def monitor_rss():
                     
                     if link and link not in processed_links:
                         processed_links.add(link)
-                        # Ограничиваем размер кеша обработанных ссылок
                         if len(processed_links) > 500:
                             processed_links.pop()
                             
-                        # Запускаем анализ и постинг
                         analyze_and_send(title, summary, link, exchange)
             except Exception as e:
                 print(f"Ошибка при парсинге {exchange}: {e}")
                 
-        # Проверяй новые анонсы каждые 5 минут (300 секунд)
+        # Проверка новых анонсов каждые 5 минут (300 секунд)
         time.sleep(300)
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     bot.reply_to(
         message, 
-        "👋 **CryptoMonitor Bot с автомониторингом запущен!**\n\n"
-        "Я автоматически сканирую официальные RSS-ленты Binance, Bybit, OKX, Gate.io и Bitget, "
-        "делаю ИИ-разбор и присылаю сюда структурированные отчеты со ссылками и инструкциями для мобильных приложений."
+        "👋 **CryptoMonitor Bot активен!**\n\n"
+        "Бот автоматически отслеживает официальные RSS-ленты бирж, делает ИИ-разбор и присылает структурированные отчеты "
+        "с прямыми инлайн-кнопками для перехода в мобильное приложение."
     )
 
 @bot.message_handler(func=lambda message: True)
@@ -142,6 +147,7 @@ def handle_all_messages(message):
 
         answer = completion.choices[0].message.content
 
+        # Добавляем пустую клавиатуру или заглушку, если пользователь скинул текст вручную
         bot.edit_message_text(
             chat_id=message.chat.id,
             message_id=sent_msg.message_id,
@@ -160,7 +166,7 @@ def handle_all_messages(message):
             pass
 
 if __name__ == "__main__":
-    # Запускаем фоновый поток мониторинга официальных источников в параллельном режиме
+    # Запускаем фоновый поток мониторинга официальных источников
     bg_thread = threading.Thread(target=monitor_rss, daemon=True)
     bg_thread.start()
     

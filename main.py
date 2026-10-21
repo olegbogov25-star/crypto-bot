@@ -1,35 +1,73 @@
 import os
-import threading
-from http.server import HTTPServer, SimpleHTTPRequestHandler
-import telebot
-import requests
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-bot = telebot.TeleBot(BOT_TOKEN)
-KEYWORDS = [ "airdrop", "drop", "claim", "alpha", "node", "campaign", "аирдроп", "листинг", "тестнет", "binance", "binance web3", "okx", "okx web3", "bybit", "bitget", "mexc", "gate", "kucoin", "bingx", "kraken", "whitebit", "promo", "listing", "pool", "testnet", "giveaway" ]
-def analyze_with_gemini(text):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={GEMINI_API_KEY}"
-    prompt = "Анализ: " + text
-    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+import logging
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+import google.generativeai as genai
+
+# Настройка логов
+logging.basicConfig(level=logging.INFO)
+
+# Получаем ключи из переменных окружения Render
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+
+# Настраиваем Gemini
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel('gemini-1.5-flash')
+
+# Инструкция для нейросети (Промпт со словарем всех промоакций)
+SYSTEM_PROMPT = """
+Ты — профессиональный крипто-аналитик, листинг-трекер и охотник за халявой на биржах.
+Твоя задача — проанализировать текст анонса с биржи (Binance, OKX, Bybit, MEXC, Bitget, KuCoin, Gate, HTX, BingX и др.), перевести его на русский язык и выдать четкую сухую выжимку строго по шаблону.
+
+Учитывай все типы биржевых активностей:
+- Листинги (Listing, New Coin, Spot/Futures)
+- Фарминг (Launchpool, Launchpad, Megadrop, Staking)
+- Прогнозы и игры (Prediction Market, Price Prediction, Esports Prediction, Voting, Quiz, M-Day, Candy Bomb)
+- Посты и контент (Binance Square, Feed, Write to Earn, Creators Campaign)
+- Промо и конкурсы (Activity Splash, Trading Competition, Tournament, Mystery Box, Airdrop, Bounty, Boost, Giveaways)
+
+Шаблон ответа:
+🚀 **[Название биржи] Событие (Категория события)**
+
+📝 **Суть акции:**
+(Короткая выжимка в 1-2 предложениях: что за событие, призовой фонд, условия и даты)
+
+⚡ **Что делать:**
+1. (Пошаговое действие)
+2. (Пошаговое действие)
+
+⚠️ **Риски и вложения:**
+(Нужны ли вложения, есть ли риски или это бесплатно)
+
+🔗 **[Перейти к анонсу / акции](ВСТАВЬ_ССЫЛКУ_ЕСЛИ_ЕСТЬ)**
+
+Пиши кратко, по делу, без воды и приветствий.
+"""
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("👋 Бот-трекер анонсов и промоакций бирж успешно запущен!")
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_text = update.message.text
+    await update.message.reply_text("🔍 Анализирую анонс...")
+
     try:
-        response = requests.post(url, json=payload, timeout=60)
-        if response.status_code == 200:
-            return response.json()["candidates"][0]["content"]["parts"][0]["text"]
-        return f"Ошибка Gemini API (Статус {response.status_code}): {response.text}"
+        full_prompt = f"{SYSTEM_PROMPT}\n\nВот текст анонса для анализа:\n{user_text}"
+        response = model.generate_content(full_prompt)
+        await update.message.reply_text(response.text, parse_mode='Markdown')
     except Exception as e:
-        return f"Ошибка запроса: {str(e)}" 
-@bot.message_handler(func=lambda message: True) 
-def handle_message(message): 
-    text = message.text or "" 
-    if any(keyword.lower() in text.lower() for keyword in KEYWORDS): 
-        msg = bot.reply_to(message, "⏳ Анализирую сигнал с помощью Gemini ИИ...") 
-        analysis = analyze_with_gemini(text) 
-        full_response = f"📊 АНАЛИЗ СИГНАЛА (Gemini AI)\n\n{analysis}" 
-        bot.send_message(message.chat.id, full_response)
-def run_dummy_server(): 
-    port = int(os.environ.get("PORT", 10000)) 
-    server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler) 
-    server.serve_forever()
-if __name__ == "__main__": 
-        threading.Thread(target=run_dummy_server, daemon=True).start() 
-        bot.infinity_polling()  
+        logging.error(f"Ошибка Gemini: {e}")
+        await update.message.reply_text("⚠️ Произошла ошибка при обработке. Попробуйте еще раз.")
+
+def main():
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
+    print("Бот запускается...")
+    app.run_polling()
+
+if __name__ == '__main__':
+    main()

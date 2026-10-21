@@ -2,7 +2,7 @@ import os
 import logging
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
-import google.generativeai as genai
+from google import genai
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -17,9 +17,8 @@ if not TELEGRAM_TOKEN:
 if not GEMINI_API_KEY:
     raise ValueError("ОШИБКА: GEMINI_API_KEY не найден в Environment Variables на Render!")
 
-# Настройка генеративной модели Gemini
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')
+# Настройка нового официального клиента Gemini
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 # Полная инструкция (системный промпт) со словарем всех акционных терминов
 SYSTEM_PROMPT = """
@@ -60,7 +59,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         full_prompt = f"{SYSTEM_PROMPT}\n\nВот текст анонса для анализа:\n{user_text}"
-        response = model.generate_content(full_prompt)
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=full_prompt,
+        )
         await update.message.reply_text(response.text, parse_mode='Markdown')
     except Exception as e:
         logging.error(f"Ошибка при работе с Gemini: {e}")

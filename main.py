@@ -1,3 +1,4 @@
+import os
 import time
 import threading
 import feedparser
@@ -5,8 +6,9 @@ from openai import OpenAI
 import telebot
 
 # ==================== НАСТРОЙКИ ====================
-TELEGRAM_TOKEN = "ВАШ_ТОКЕН_БОТА_ОТ_BOTFATHER"  # Замени на свой токен
-OPENROUTER_API_KEY = "ВАШ_КЛЮЧ_OPENROUTER"       # Замени на свой ключ OpenRouter
+# Токены берутся из переменных окружения Render (или можно вписать вручную в кавычках)
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "ВАШ_ТОКЕН_БОТА_ОТ_BOTFATHER")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "ВАШ_КЛЮЧ_OPENROUTER")
 
 # ID твоей супергруппы ANTIGOI
 CHAT_ID = "-1004451728851"

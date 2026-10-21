@@ -1,5 +1,6 @@
 import os
 import logging
+import time
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 from google import genai
@@ -11,16 +12,12 @@ logging.basicConfig(level=logging.INFO)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-# Проверка наличия обязательных ключей
-if not TELEGRAM_TOKEN:
-    raise ValueError("ОШИБКА: TELEGRAM_TOKEN не найден в Environment Variables на Render!")
-if not GEMINI_API_KEY:
-    raise ValueError("ОШИБКА: GEMINI_API_KEY не найден в Environment Variables на Render!")
+if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
+    raise ValueError("ОШИБКА: Отсутствуют ключи в Environment Variables на Render!")
 
 # Настройка официального клиента Gemini
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Системный промпт со всеми категориями акций
 SYSTEM_PROMPT = """
 Ты — профессиональный крипто-аналитик, листинг-трекер и охотник за промоакциями на биржах.
 Твоя задача — проанализировать текст анонса с биржи (Binance, OKX, Bybit, MEXC, Bitget, KuCoin, Gate, HTX, BingX, CoinEx и др.), перевести его на русский язык и выдать сухую, структурированную выжимку строго по следующему шаблону:
@@ -62,23 +59,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("🔍 Анализирую анонс через Gemini...")
 
-    try:
-        full_prompt = f"{SYSTEM_PROMPT}\n\nВот текст анонса для анализа:\n{user_text}"
-        
-        # Используем актуальную модель gemini-3.8-flash
-        response = client.models.generate_content(
-            model='gemini-3.8-flash',
-            contents=full_prompt,
-        )
-        
-        if response.text:
-            await update.message.reply_text(response.text, parse_mode='Markdown')
-        else:
-            await update.message.reply_text("⚠️ Не удалось получить ответ от модели. Попробуйте еще раз.")
+    full_prompt = f"{SYSTEM_PROMPT}\n\nВот текст анонса для анализа:\n{user_text}"
+    
+    # Пробуем отправить запрос с автоматическим повтором при перегрузке (503)
+    response_text = None
+    for attempt in range(3):
+        try:
+            response = client.models.generate_content(
+                model='gemini-2.0-flash',
+                contents=full_prompt,
+            )
+            if response.text:
+                response_text = response.text
+                break
+        except Exception as e:
+            logging.warning(f"Попытка {attempt + 1} не удалась: {e}")
+            time.sleep(2)  две секунды перед повтором
 
-    except Exception as e:
-        logging.error(f"Ошибка при работе с Gemini: {e}")
-        await update.message.reply_text(f"⚠️ Ошибка Gemini API: {e}")
+    if response_text:
+        await update.message.reply_text(response_text, parse_mode='Markdown')
+    else:
+        await update.message.reply_text("⚠️ Сервера Google временно перегружены. Пожалуйста, отправьте текст анонса ещё раз через минуту.")
 
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()

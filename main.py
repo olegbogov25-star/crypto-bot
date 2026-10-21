@@ -56,7 +56,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
     
-    # Если отправлена команда /start или слово start
     if user_text.strip().lower() in ["/start", "start"]:
         await start(update, context)
         return
@@ -66,9 +65,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         full_prompt = f"{SYSTEM_PROMPT}\n\nВот текст анонса для анализа:\n{user_text}"
         
-        # Используем модель gemini-2.0-flash, поддерживаемую новым google-genai SDK
+        # Используем актуальную модель gemini-3.8-flash
         response = client.models.generate_content(
-            model='gemini-2.0-flash',
+            model='gemini-3.8-flash',
             contents=full_prompt,
         )
         

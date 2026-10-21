@@ -1,9 +1,13 @@
 import os
+import time
+import threading
+import feedparser
 import telebot
 from openai import OpenAI
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+TARGET_CHAT_ID = os.environ.get("TARGET_CHAT_ID")  # ID твоего чата или канала, куда слать авто-разборы
 
 if not TELEGRAM_TOKEN or not OPENROUTER_API_KEY:
     raise ValueError("Ошибка: Не найден TELEGRAM_TOKEN или OPENROUTER_API_KEY в переменных окружения!")
@@ -30,7 +34,7 @@ SYSTEM_PROMPT = """
 9. Kraken
 10. WhiteBIT
 
-Твоя задача — проанализировать входящий текст анонса и составить чёткий, структурированный отчёт на русском языке strictly по следующему шаблону:
+Твоя задача — проанализировать входящий текст официального анонса и составить чёткий, структурированный отчёт на русском языке strictly по следующему шаблону:
 
 📌 **Биржа / Источник:** [Укажи конкретную биржу или Web3-кошелек из списка выше]
 🏷 **Тип события / Теги:** [Подбери точные англоязычные теги из списка: #Listing, #NewListing, #InitialListing, #PreMarket, #Launchpad, #Launchpool, #CandyDrop, #Startup, #Kickstarter, #Pool, #AirDrop, #Web3Airdrop, #Web3Quest, #Cryptopedia, #Campaign, #Promotion, #Activity, #Event, #TradingCompetition, #FuturesCompetition, #SpotCompetition, #PredictToWin, #FuturesPricePrediction, #Leaderboard, #WODL, #WordOfTheDay, #LearnAndEarn, #Quiz, #TaskCenter, #RewardsHub, #MysteryBox, #LuckyDraw, #SpinAndWin, #DailyCheckIn, #ReferralProgram, #Staking, #Earn, #SimpleEarn, #Savings, #DualInvestment, #FeeRebate, #FuturesBonus, #ZeroFee, #Futures, #Spot, #CopyTrading, #GridTrading, #P2P, #Delisting]
@@ -46,19 +50,79 @@ SYSTEM_PROMPT = """
 
 🎁 **Награды / Призовой фонд:** [Общий призовой пул, ваучеры, плечи, размеры наград на человека]
 ⚠️ **Важные условия / Ограничения и риски:** [Ограничения по странам, комиссии сети, уровни KYC, мин. объем, оценка рисков]
-🔗 **Ссылка на источник/акцию:** [Вставь прямую ссылку из текста анонса, если она есть]
-
-Если присланный текст не относится напрямую к анонсам вышеуказанных бирж или Web3-кошельков, сделай краткую выжимку текста и проставь подходящие крипто-теги.
+🔗 **Ссылка на источник/акцию:** [Вставь прямую официальную ссылку из текста]
+📱 **Переход в приложение:** [Укажи инструкцию, как открыть акцию в официальном мобильном приложении биржи, например: Откройте приложение Binance -> Меню More -> Binance Alpha / Launchpad]
 """
+
+# Список официальных RSS-источников бирж для автоматического мониторинга
+RSS_FEEDS = {
+    "Binance": "https://www.binance.com/en/support/announcement/rss",
+    "Bybit": "https://announcements.bybit.com/en-US/rss/",
+    "OKX": "https://www.okx.com/support/rss",
+    "Gate.io": "https://www.gate.io/rss/article/all",
+    "Bitget": "https://www.bitget.com/support/rss"
+}
+
+# Множество для хранения уже обработанных ссылок, чтобы не слать дубликаты
+processed_links = set()
+
+def analyze_and_send(title, summary, link, exchange_name):
+    """Функция отправки текста на анализ в ИИ и рассылки в Telegram"""
+    if not TARGET_CHAT_ID:
+        return
+    
+    full_text = f"Источник: {exchange_name}\nЗаголовок: {title}\nОписание: {summary}\nСсылка: {link}"
+    
+    try:
+        completion = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": full_text}
+            ],
+            temperature=0.2,
+        )
+        answer = completion.choices[0].message.content
+        
+        # Отправляем готовый отчет в целевой чат
+        bot.send_message(TARGET_CHAT_ID, answer, parse_mode="Markdown")
+    except Exception as e:
+        print(f"Ошибка при ИИ-анализе RSS: {e}")
+
+def monitor_rss():
+    """Фоновый поток для периодической проверки официальных RSS-лент бирж"""
+    print("🚀 Модуль автомониторинга официальных источников запущен...")
+    while True:
+        for exchange, url in RSS_FEEDS.items():
+            try:
+                feed = feedparser.parse(url)
+                # Берем свежие 3 новости из ленты
+                for entry in feed.entries[:3]:
+                    link = entry.get("link", "")
+                    title = entry.get("title", "")
+                    summary = entry.get("summary", title)
+                    
+                    if link and link not in processed_links:
+                        processed_links.add(link)
+                        # Ограничиваем размер кеша обработанных ссылок
+                        if len(processed_links) > 500:
+                            processed_links.pop()
+                            
+                        # Запускаем анализ и постинг
+                        analyze_and_send(title, summary, link, exchange)
+            except Exception as e:
+                print(f"Ошибка при парсинге {exchange}: {e}")
+                
+        # Проверяй новые анонсы каждые 5 минут (300 секунд)
+        time.sleep(300)
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     bot.reply_to(
         message, 
-        "👋 **CryptoMonitor Bot готов к работе!**\n\n"
-        "Отправь мне текст анонса или промоакции с биржи или Web3-кошелька "
-        "(включая Binance Alpha, OKX Web3, Gate CandyDrop/Startup), "
-        "и я сделаю полный разбор по тегам, датам и шагам!"
+        "👋 **CryptoMonitor Bot с автомониторингом запущен!**\n\n"
+        "Я автоматически сканирую официальные RSS-ленты Binance, Bybit, OKX, Gate.io и Bitget, "
+        "делаю ИИ-разбор и присылаю сюда структурированные отчеты со ссылками и инструкциями для мобильных приложений."
     )
 
 @bot.message_handler(func=lambda message: True)
@@ -96,4 +160,9 @@ def handle_all_messages(message):
             pass
 
 if __name__ == "__main__":
+    # Запускаем фоновый поток мониторинга официальных источников в параллельном режиме
+    bg_thread = threading.Thread(target=monitor_rss, daemon=True)
+    bg_thread.start()
+    
+    # Запуск приема команд и сообщений ботом
     bot.infinity_polling()

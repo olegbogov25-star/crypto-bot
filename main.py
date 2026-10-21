@@ -74,7 +74,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 break
         except Exception as e:
             logging.warning(f"Попытка {attempt + 1} не удалась: {e}")
-            time.sleep(2)  две секунды перед повтором
+            time.sleep(2) # Пауза перед повтором
 
     if response_text:
         await update.message.reply_text(response_text, parse_mode='Markdown')

@@ -61,12 +61,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     full_prompt = f"{SYSTEM_PROMPT}\n\nВот текст анонса для анализа:\n{user_text}"
     
-    # Пробуем отправить запрос с автоматическим повтором при перегрузке (503)
     response_text = None
     for attempt in range(3):
         try:
+            # УКАЗАНА ТРЕБУЕМАЯ ГООГЛОМ МОДЕЛЬ gemini-3.8-flash
             response = client.models.generate_content(
-                model='gemini-2.0-flash',
+                model='gemini-3.8-flash',
                 contents=full_prompt,
             )
             if response.text:

@@ -20,7 +20,7 @@ if not GEMINI_API_KEY:
 # Настройка официального клиента Gemini
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Системный промпт
+# Системный промпт со всеми категориями акций
 SYSTEM_PROMPT = """
 Ты — профессиональный крипто-аналитик, листинг-трекер и охотник за промоакциями на биржах.
 Твоя задача — проанализировать текст анонса с биржи (Binance, OKX, Bybit, MEXC, Bitget, KuCoin, Gate, HTX, BingX, CoinEx и др.), перевести его на русский язык и выдать сухую, структурированную выжимку строго по следующему шаблону:
@@ -56,7 +56,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
     
-    # Если пользователь ввёл команду /start текстом
+    # Если отправлена команда /start или слово start
     if user_text.strip().lower() in ["/start", "start"]:
         await start(update, context)
         return
@@ -66,9 +66,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         full_prompt = f"{SYSTEM_PROMPT}\n\nВот текст анонса для анализа:\n{user_text}"
         
-        # Перешли на 100% стабильную модель gemini-1.5-flash
+        # Используем модель gemini-2.0-flash, поддерживаемую новым google-genai SDK
         response = client.models.generate_content(
-            model='gemini-1.5-flash',
+            model='gemini-2.0-flash',
             contents=full_prompt,
         )
         

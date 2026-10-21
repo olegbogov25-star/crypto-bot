@@ -17,8 +17,8 @@ client = OpenAI(
     api_key=OPENROUTER_API_KEY,
 )
 
-# Используем стабильную модель через OpenRouter
-MODEL_NAME = "google/gemini-flash-1.5"
+# Исправленный ID модели для OpenRouter без ошибки 404
+MODEL_NAME = "google/gemini-2.5-flash"
 
 # 3. Полная системная инструкция (10 бирж + Web3 Wallets + Все теги + Фиксированный шаблон)
 SYSTEM_PROMPT = """

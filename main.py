@@ -53,11 +53,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔍 Анализирую анонс через Gemini...")
 
     try:
-        # Собираем полный запрос к нейросети
         full_prompt = f"{SYSTEM_PROMPT}\n\nВот текст анонса для анализа:\n{user_text}"
         response = model.generate_content(full_prompt)
-        
-        # Отправляем форматированный ответ в Telegram
         await update.message.reply_text(response.text, parse_mode='Markdown')
     except Exception as e:
         logging.error(f"Ошибка при работе с Gemini: {e}")

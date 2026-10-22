@@ -44,7 +44,7 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# ==================== LINK GENERATORS ====================
+# ==================== LINK GENERATORS (С прямыми диплинками для кнопок) ====================
 def get_exchange_url(exchange, symbol):
     base_sym = symbol.replace('USDT', '')
     links = {
@@ -68,8 +68,8 @@ def get_exchange_app_url(exchange, symbol):
         "Binance": f"bnc://app.binance.com/en/futures/trade?symbol={base_sym}USDT",
         "Bybit": f"bybit://trade/usdt/{base_sym}USDT",
         "OKX": f"okx://trade?instId={base_sym}-USDT-SWAP",
-        "Gate": f"https://www.gate.io/futures/USDT/{base_sym}_USDT",
-        "Bitget": f"https://www.bitget.com/futures/usdt/{base_sym}USDT",
+        "Gate": f"gateio://futures/USDT/{base_sym}_USDT",
+        "Bitget": f"bitget://futures/usdt/{base_sym}USDT",
         "MEXC": f"mexc://futures/trade?symbol={base_sym}_USDT",
         "BingX": f"bingx://futures/forward/{base_sym}USDT",
         "KuCoin": f"kucoin://futures/trade/{base_sym}USDTM",
@@ -97,7 +97,7 @@ def normalize_symbol(raw_sym):
             sym += 'USDT'
     return sym
 
-# ==================== ADVANCED AI & FULL WEB3 / PROMO CALCULATOR ====================
+# ==================== ADVANCED AI & FULL WEB3 / PROMO CALCULATOR (42 ТЕГА) ====================
 def analyze_text(text):
     if not OPENROUTER_API_KEY:
         return text
@@ -465,11 +465,11 @@ def monitor_funding():
                         )
                         
                         markup = telebot.types.InlineKeyboardMarkup(row_width=2)
-                        sorted_exs = sorted(ex_rates.items(), key=lambda x: abs(x[1], reverse=True) if isinstance(x[1], float) else abs(x[1]), reverse=True)
+                        sorted_exs = sorted(ex_rates.items(), key=lambda x: abs(x[1]), reverse=True)
                         for ex, rate in sorted_exs[:4]:
                             markup.add(telebot.types.InlineKeyboardButton(f"{ex}: {rate:+.2f}%", url=get_exchange_app_url(ex, symbol)))
 
-                        send_now_id = send_to_topic("FUNDING", msg, reply_markup=markup)
+                        send_to_topic("FUNDING", msg, reply_markup=markup)
 
         except Exception as e:
             print(f"Funding Monitor Error: {e}")
@@ -497,7 +497,7 @@ def monitor_news():
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     
-    send_to_topic("SPREAD", "🚀 **Бот успешно запущен со всеми настройками и прямыми диплинками приложений!**")
+    send_to_topic("SPREAD", "🚀 **Бот запущен с прямыми диплинками приложений и всеми настройками!**")
     
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()

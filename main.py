@@ -238,6 +238,14 @@ def fetch_futures_data():
 
     return prices, volumes
 
+def format_volume(vol):
+    if vol >= 1_000_000:
+        return f"${vol / 1_000_000:.1f}M"
+    elif vol >= 1_000:
+        return f"${vol / 1_000:.1f}K"
+    else:
+        return f"${vol:.0f}"
+
 # ==================== SPREAD MONITOR (>= 7% и <= 50%) ====================
 def monitor_spread():
     while True:
@@ -268,12 +276,23 @@ def monitor_spread():
                         else:
                             badge = "⚡ **STRONG SPREAD (>= 7%)**"
 
-                        vol_min = volumes.get(sym, {}).get(min_ex, 50000) * 0.01
-                        vol_max = volumes.get(sym, {}).get(max_ex, 50000) * 0.01
+                        sym_vols = volumes.get(sym, {})
+                        vol_min = sym_vols.get(min_ex, 50000) * 0.01
+                        vol_max = sym_vols.get(max_ex, 50000) * 0.01
                         max_pos_usdt = int(min(vol_min, vol_max, 50000))
                         if max_pos_usdt < 100: max_pos_usdt = 100
 
-                        overview_list = [f"🔹 [{ex}]({get_exchange_url(ex, sym)}): `${p}`" for ex, p in ex_data.items()]
+                        # Сортируем биржи по суточному объему (от большего к меньшему)
+                        sorted_exs = sorted(ex_data.keys(), key=lambda ex: sym_vols.get(ex, 0), reverse=True)
+                        
+                        overview_list = []
+                        for ex in sorted_exs:
+                            p = ex_data[ex]
+                            v = sym_vols.get(ex, 0)
+                            v_str = format_volume(v)
+                            url = get_exchange_url(ex, sym)
+                            overview_list.append(f"🔹 [{ex}]({url}): `${p}` ({v_str})")
+                        
                         overview = "\n".join(overview_list)
                         
                         msg_text = (
@@ -282,7 +301,7 @@ def monitor_spread():
                             f"🟢 **Long:** `${min_p}`\n"
                             f"🔴 **Short:** `${max_p}`\n\n"
                             f"💰 **Доступный объем позиции:** `~${max_pos_usdt:,} USDT`\n\n"
-                            f"📝 **All Exchanges Overview:**\n{overview}"
+                            f"📝 **All Exchanges Overview (по ликвидности):**\n{overview}"
                         )
                         
                         msg_id = send_to_topic("SPREAD", msg_text)
@@ -417,19 +436,28 @@ def monitor_funding():
                     if sig_id not in processed_arbitrage:
                         processed_arbitrage.add(sig_id)
                         
-                        vol_min = volumes_cache.get(symbol, {}).get(min_ex, 50000) * 0.01
-                        vol_max = volumes_cache.get(symbol, {}).get(max_ex, 50000) * 0.01
+                        sym_vols = volumes_cache.get(symbol, {})
+                        vol_min = sym_vols.get(min_ex, 50000) * 0.01
+                        vol_max = sym_vols.get(max_ex, 50000) * 0.01
                         max_pos_usdt = int(min(vol_min, vol_max, 50000))
                         if max_pos_usdt < 100: max_pos_usdt = 100
 
-                        overview_list = [f"🔹 [{ex}]({get_exchange_url(ex, symbol)}): `{r:+.2f}%`" for ex, r in sorted(ex_rates.items(), key=lambda x: x[1], reverse=True)]
+                        sorted_exs = sorted(ex_rates.keys(), key=lambda ex: sym_vols.get(ex, 0), reverse=True)
+                        overview_list = []
+                        for ex in sorted_exs:
+                            r = ex_rates[ex]
+                            v = sym_vols.get(ex, 0)
+                            v_str = format_volume(v)
+                            url = get_exchange_url(ex, symbol)
+                            overview_list.append(f"🔹 [{ex}]({url}): `{r:+.2f}%` ({v_str})")
+                        
                         overview = "\n".join(overview_list)
 
                         msg = (
                             f"🔥 **FUNDING ARBITRAGE / HIGH RATE (>= ±1.0%)**\n"
                             f"🪙 **#{symbol}** (Spread: `{funding_spread:.2f}%`)\n\n"
                             f"💰 **Доступный объем позиции:** `~${max_pos_usdt:,} USDT`\n\n"
-                            f"📊 **All Exchanges Rates:**\n{overview}"
+                            f"📊 **All Exchanges Rates (по ликвидности):**\n{overview}"
                         )
 
                         send_to_topic("FUNDING", msg)
@@ -460,7 +488,7 @@ def monitor_news():
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     
-    send_to_topic("SPREAD", "🚀 **Бот запущен: в отчет о выравнивании добавлен процент оставшегося спреда!**")
+    send_to_topic("SPREAD", "🚀 **Бот запущен: биржи в обзоре теперь отсортированы по ликвидности с указанием объема ($M / $K)!**")
     
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()

@@ -15,7 +15,7 @@ ADMIN_IDS = [1043209905]
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 app = Flask(__name__)
 
-# Полная карта топиков со всеми Web3, лаунчпулами, Binance Square и биржами
+# Реальная карта твоих топиков из Telegram
 TOPICS = {
     "NEWS": 2, 
     "OKX_BOOST": 4, 
@@ -27,8 +27,8 @@ TOPICS = {
     "KUCOIN": 16, 
     "WHITEBIT": 18, 
     "KRAKEN": 20,
-    "FUNDING": 22, 
-    "SPREAD": 24,
+    "FUNDING": 76,  # Реальный ID топика FUNDING[cite: 15]
+    "SPREAD": 77,   # Реальный ID топика SPREAD[cite: 16]
     "WEB3_MONITOR": 26  # Выделенный топик для Web3, X Launch, Bybit Galaxy, Megadrop и Binance Square
 }
 
@@ -68,7 +68,7 @@ def get_message_link(message_id):
     if not CHAT_ID:
         return ""
     clean_chat_id = str(CHAT_ID).replace("-100", "")
-    thread_id = TOPICS.get("SPREAD", 24)
+    thread_id = TOPICS.get("SPREAD", 77)
     return f"https://t.me/c/{clean_chat_id}/{message_id}?thread={thread_id}"
 
 # ==================== ADVANCED AI & FULL WEB3 / PROMO CALCULATOR ====================
@@ -93,7 +93,7 @@ def analyze_text(text):
 7. 🎁 **Награды / Призовой фонд:** Все официальные награды (альфа-боксы, токены из X Launch / Megadrop, комиссии с постов Square, ваучеры, пулы токенов, бусты доходности, APY в стейкинге/ликвидности).
 8. 💡 **Детальный расчет комиссий, затрат на газ и профита (ОБЯЗАТЕЛЬНО для всех уровней):**
    - Распиши уровни объемов, депозитов, набивания оборота или транзакционных затрат в сетях ($100, $1,000, $5,000, $20,000 и т.д.).
-   - Посчитай фьючерсную/спотовую комиссию (Taker ~0.05% x 2, Maker ~0.02% x 2) или затраты на газ в Web3-сетях при фарминге и участии в пулах.
+   - Посчитай фьючерсную/спотовую комиссию (Taker ~0.05% x 2, Maker ~0.02% x 2) или затраты на газ в сетях при фарминге и участии в пулах.
    - Сопоставь затраты с официальной наградой (учитывая номинал ваучеров, потенциал дохода с Binance Square, пулов X Launch или альфа-боксов) и выдай четкий математический вердикт: выгодно ли участвовать на каждом уровне!
 
 - Если это служебное объявление без наград (ввод/вывод, техобслуживание, делистинг) — ответь строго одним словом: SKIP.
@@ -316,7 +316,6 @@ def monitor_spread():
                     secs = duration % 60
                     time_str = f"{mins}:{secs:02d}"
                     
-                    # Публикуем сообщение о сходимости ответом (reply) на оригинальный пост в ветке
                     aligned_msg = f"✅ `[{sym}]` prices aligned in `{time_str}`"
                     send_to_topic("SPREAD", aligned_msg, reply_to_message_id=data["msg_id"])
 
@@ -329,13 +328,12 @@ def monitor_spread():
 def monitor_funding():
     while True:
         try:
-            all_funding = {} # {symbol: {exchange: rate}}
+            all_funding = {}
 
             def collect_rate(exchange, symbol, rate):
                 if symbol.endswith('USDT'):
                     all_funding.setdefault(symbol, {})[exchange] = rate
 
-            # Собираем ставки со всех доступных бирж
             try:
                 for item in requests.get("https://fapi.binance.com/fapi/v1/premiumIndex", timeout=5).json():
                     collect_rate("Binance", item['symbol'], float(item['lastFundingRate']) * 100)
@@ -401,18 +399,15 @@ def monitor_funding():
                         collect_rate("Ourbit", item['symbol'], float(item['fundingRate']) * 100)
             except Exception: pass
 
-            # Анализируем ставки и ищем возможности для вилкования (от ±0.5% и выше)
             for symbol, ex_rates in all_funding.items():
                 if not ex_rates:
                     continue
                 
-                # Находим максимальную и минимальную ставку среди всех бирж для данной монеты
                 max_ex = max(ex_rates, key=ex_rates.get)
                 min_ex = min(ex_rates, key=ex_rates.get)
                 max_rate = ex_rates[max_ex]
                 min_rate = ex_rates[min_ex]
 
-                # Условие вилки: если одна из крайних ставок уходит по модулю >= 0.5%
                 if abs(max_rate) >= 0.5 or abs(min_rate) >= 0.5:
                     sig_id = f"FUND_PAIR_{symbol}_{max_ex}_{max_rate:.2f}_{min_ex}_{min_rate:.2f}"
                     if sig_id not in processed_arbitrage:
@@ -461,7 +456,7 @@ def start_cmd(message):
     if message.chat.type == "private" and message.from_user.id not in ADMIN_IDS:
         bot.reply_to(message, "⛔ Доступ ограничен.")
         return
-    bot.reply_to(message, "👋 **Bot запущен! Спреды (3-10%+ с трекингом в реплаях), парные фандинг-вилки (от ±0.5%), Web3 и Square активны.**", parse_mode="Markdown")
+    bot.reply_to(message, "👋 **Bot запущен! Спреды (3-10%+ с трекингом), парный фандинг (от ±0.5%), Web3 и Square активны.**", parse_mode="Markdown")
 
 # ==================== MAIN EXECUTION ====================
 if __name__ == "__main__":

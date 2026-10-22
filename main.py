@@ -9,7 +9,7 @@ from flask import Flask
 # ==================== CONFIGURATION ====================
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-CHAT_ID = "-1004451728851"
+CHAT_ID = "-1004451728851"  # Актуальный ID супергруппы
 ADMIN_IDS = [1043209905]
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
@@ -27,8 +27,8 @@ TOPICS = {
     "WHITEBIT": 72, 
     "KRAKEN": 73,   
     "GATE": 67,     
-    "FUNDING": 76,  
-    "SPREAD": 77    
+    "FUNDING": 76,  # ID топика фандинга
+    "SPREAD": 77    # ID топика спредов
 }
 
 processed_ids = set()
@@ -308,7 +308,6 @@ def monitor_spread():
                             f"📝 **All Exchanges Overview:**\n{overview}"
                         )
                         
-                        # Создаем кнопки быстрого перехода на биржи
                         markup = telebot.types.InlineKeyboardMarkup(row_width=2)
                         btn_min = telebot.types.InlineKeyboardButton(f"🟢 Long: {min_ex}", url=get_exchange_url(min_ex, sym))
                         btn_max = telebot.types.InlineKeyboardButton(f"🔴 Short: {max_ex}", url=get_exchange_url(max_ex, sym))
@@ -448,10 +447,9 @@ def monitor_funding():
                             f"📊 **All Exchanges Rates:**\n{overview}"
                         )
                         
-                        # Кнопки для фандинга (создаем кнопки для топ бирж с максимальным по модулю фандингом)
                         markup = telebot.types.InlineKeyboardMarkup(row_width=2)
                         sorted_exs = sorted(ex_rates.items(), key=lambda x: abs(x[1]), reverse=True)
-                        for ex, rate in sorted_exs[:4]:  г# Добавляем до 4 кнопок самых ярких бирж
+                        for ex, rate in sorted_exs[:4]:
                             markup.add(telebot.types.InlineKeyboardButton(f"{ex}: {rate:+.2f}%", url=get_exchange_url(ex, symbol)))
 
                         send_to_topic("FUNDING", msg, reply_markup=markup)
@@ -482,7 +480,6 @@ def monitor_news():
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     
-    # 🚨 ТЕСТОВОЕ СООБЩЕНИЕ ПРИ СТАРТЕ 🚨
     send_to_topic("SPREAD", "🚀 **Бот успешно запущен с боевыми фильтрами и кнопками перехода!**")
     
     threading.Thread(target=monitor_spread, daemon=True).start()

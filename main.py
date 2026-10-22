@@ -43,7 +43,7 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# ==================== LINK GENERATORS (С нативным открытием приложений) ====================
+# ==================== LINK GENERATORS ====================
 def get_exchange_url(exchange, symbol):
     base_sym = symbol.replace('USDT', '')
     links = {
@@ -62,7 +62,6 @@ def get_exchange_url(exchange, symbol):
     return links.get(exchange, "https://google.com")
 
 def get_exchange_app_url(exchange, symbol):
-    # Гарантируем возврат ссылки биржи для кнопок, чтобы iOS открывала приложение
     return get_exchange_url(exchange, symbol)
 
 def get_exchange_link(exchange, symbol):
@@ -97,7 +96,7 @@ def analyze_text(text):
    - Биржи: #Binance #Bybit #OKX #Bitget #MEXC #BingX #KuCoin #WhiteBit #Kraken #Gate #Ourbit
    - Активности: #Promotion #RewardCenter #Alpha #AlphaBox #MysteryBox #TradingTournament #Challenge #Boost #Booster #Launchpool #Launchpad #Airdrop #DepositBonus #Listing #NewListing #Earn #Savings #Staking #SimpleEarn #Flexible #Locked #VoteToList #FeeRebate #Voucher #BetVoucher #MarginVoucher #Margin #IPO #PreMarket #IDO #IEO #VIP
 
-3. 🪙 **Токен / Проект:** Участвующие монеты или активы.
+3. 🪙 **🪙 Токен / Проект:** Участвующие монеты или активы.
 4. 📅 **Даты проведения:** Период проведения.
 5. 📋 **Краткое описание:** Суть акции, буста, турнира, лаунчпула или квеста.
 6. ⚡ **Пошаговая инструкция:** Четкие действия для участия.
@@ -437,7 +436,7 @@ def monitor_news():
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     
-    send_to_topic("SPREAD", "🚀 **Бот запущен с нативными ссылками приложений, авто-закрытием спредов и фандингом от ±1%!**")
+    send_to_topic("SPREAD", "🚀 **Бот успешно запущен и работает в штатном режиме!**")
     
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()

@@ -9,7 +9,7 @@ from flask import Flask
 # ==================== CONFIGURATION ====================
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-CHAT_ID = "-1004451728851"  # Актуальный ID супергруппы
+CHAT_ID = "-1004451728851"
 ADMIN_IDS = [1043209905]
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
@@ -27,8 +27,8 @@ TOPICS = {
     "WHITEBIT": 72, 
     "KRAKEN": 73,   
     "GATE": 67,     
-    "FUNDING": 76,  # ID топика фандинга
-    "SPREAD": 77    # ID топика спредов
+    "FUNDING": 76,  
+    "SPREAD": 77    
 }
 
 processed_ids = set()
@@ -44,8 +44,8 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# ==================== LINK GENERATOR ====================
-def get_exchange_link(exchange, symbol):
+# ==================== LINK GENERATORS ====================
+def get_exchange_url(exchange, symbol):
     base_sym = symbol.replace('USDT', '')
     links = {
         "Binance": f"https://www.binance.com/en/futures/{base_sym}USDT",
@@ -60,15 +60,11 @@ def get_exchange_link(exchange, symbol):
         "Kraken": f"https://futures.kraken.com/derivatives/api/v3/tickers",
         "Ourbit": f"https://www.ourbit.com/futures/trade/{base_sym}_USDT"
     }
-    url = links.get(exchange, "https://google.com")
-    return f"[{exchange}]({url})"
+    return links.get(exchange, "https://google.com")
 
-def get_message_link(message_id):
-    if not CHAT_ID:
-        return ""
-    clean_chat_id = str(CHAT_ID).replace("-100", "")
-    thread_id = TOPICS.get("SPREAD", 77)
-    return f"https://t.me/c/{clean_chat_id}/{message_id}?thread={thread_id}"
+def get_exchange_link(exchange, symbol):
+    url = get_exchange_url(exchange, symbol)
+    return f"[{exchange}]({url})"
 
 # ==================== HELPER: NORMALIZE SYMBOL ====================
 def normalize_symbol(raw_sym):
@@ -124,7 +120,7 @@ def analyze_text(text):
         print(f"AI Error: {e}")
         return text
 
-def send_to_topic(topic_name, text, reply_to_message_id=None):
+def send_to_topic(topic_name, text, reply_to_message_id=None, reply_markup=None):
     thread_id = TOPICS.get(topic_name)
     if thread_id and CHAT_ID:
         try:
@@ -134,7 +130,8 @@ def send_to_topic(topic_name, text, reply_to_message_id=None):
                 text=text, 
                 parse_mode="Markdown", 
                 disable_web_page_preview=True,
-                reply_to_message_id=reply_to_message_id
+                reply_to_message_id=reply_to_message_id,
+                reply_markup=reply_markup
             )
             print(f"SUCCESS: Sent message to {topic_name} (ID: {thread_id}), Message ID: {res.message_id}")
             return res.message_id
@@ -284,7 +281,6 @@ def monitor_spread():
                 if min_p <= 0: continue
                 spread = ((max_p - min_p) / min_p) * 100
                 
-                # Боевой фильтр спреда: от 3.0%
                 if spread >= 3.0:
                     current_scanned_syms.add(sym)
                     
@@ -312,7 +308,13 @@ def monitor_spread():
                             f"📝 **All Exchanges Overview:**\n{overview}"
                         )
                         
-                        msg_id = send_to_topic("SPREAD", msg_text)
+                        # Создаем кнопки быстрого перехода на биржи
+                        markup = telebot.types.InlineKeyboardMarkup(row_width=2)
+                        btn_min = telebot.types.InlineKeyboardButton(f"🟢 Long: {min_ex}", url=get_exchange_url(min_ex, sym))
+                        btn_max = telebot.types.InlineKeyboardButton(f"🔴 Short: {max_ex}", url=get_exchange_url(max_ex, sym))
+                        markup.add(btn_min, btn_max)
+                        
+                        msg_id = send_to_topic("SPREAD", msg_text, reply_markup=markup)
                         if msg_id:
                             active_spreads[sym] = {
                                 "msg_id": msg_id,
@@ -428,7 +430,6 @@ def monitor_funding():
                 if not ex_rates:
                     continue
                 
-                # Боевой фильтр фандинга: от ±0.5%
                 has_high_funding = any(abs(rate) >= 0.5 for rate in ex_rates.values())
                 
                 if has_high_funding:
@@ -446,7 +447,14 @@ def monitor_funding():
                             f"🪙 **#{symbol}**\n\n"
                             f"📊 **All Exchanges Rates:**\n{overview}"
                         )
-                        send_to_topic("FUNDING", msg)
+                        
+                        # Кнопки для фандинга (создаем кнопки для топ бирж с максимальным по модулю фандингом)
+                        markup = telebot.types.InlineKeyboardMarkup(row_width=2)
+                        sorted_exs = sorted(ex_rates.items(), key=lambda x: abs(x[1]), reverse=True)
+                        for ex, rate in sorted_exs[:4]:  г# Добавляем до 4 кнопок самых ярких бирж
+                            markup.add(telebot.types.InlineKeyboardButton(f"{ex}: {rate:+.2f}%", url=get_exchange_url(ex, symbol)))
+
+                        send_to_topic("FUNDING", msg, reply_markup=markup)
 
         except Exception as e:
             print(f"Funding Monitor Error: {e}")
@@ -475,7 +483,7 @@ if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     
     # 🚨 ТЕСТОВОЕ СООБЩЕНИЕ ПРИ СТАРТЕ 🚨
-    send_to_topic("SPREAD", "🚀 **Бот успешно запущен с боевыми фильтрами (Spread >= 3%, Funding >= ±0.5%)!**")
+    send_to_topic("SPREAD", "🚀 **Бот успешно запущен с боевыми фильтрами и кнопками перехода!**")
     
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()

@@ -317,7 +317,7 @@ def format_countdown(target_timestamp):
     minutes = int((diff % 3600) // 60)
     return f"{hours}ч {minutes:02d}м"
 
-# ==================== SPREAD MONITOR (7% - 30% + Риски) ====================
+# ==================== SPREAD MONITOR (7% - 30% + Риски по биржам) ====================
 def monitor_spread():
     while True:
         try:
@@ -353,10 +353,13 @@ def monitor_spread():
                         max_pos_usdt = int(min(vol_min, vol_max, 50000))
                         if max_pos_usdt < 100: max_pos_usdt = 100
 
+                        # Авто-маркировка с указанием конкретной проблемной биржи
                         risk_tag = ""
-                        min_vol_val = min(sym_vols.get(min_ex, 0), sym_vols.get(max_ex, 0))
-                        if min_vol_val < 10000:
-                            risk_tag = "\n⚠️ **RISK: Низкая ликвидность / Мертвый стакан**\n"
+                        low_liq_exs = [ex for ex, v in sym_vols.items() if v < 10000 and ex in ex_data]
+                        
+                        if low_liq_exs:
+                            bad_exs_str = ", ".join(low_liq_exs)
+                            risk_tag = f"\n⚠️ **RISK: Низкая ликвидность ({bad_exs_str})**\n"
                         elif spread > 25.0:
                             risk_tag = "\n⚠️ **WARNING: Аномальный спред (Возможный делистинг или баг оракула!)**\n"
 
@@ -501,7 +504,7 @@ def monitor_news():
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     
-    send_to_topic("SPREAD", "🚀 **Бот запущен: объемы теперь явно подписаны как (24h)!**")
+    send_to_topic("SPREAD", "🚀 **Бот запущен: теперь плашка риска показывает название конкретной неликвидной биржи!**")
     
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()

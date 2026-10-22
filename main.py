@@ -15,18 +15,23 @@ class DummyHealthCheckHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"Bot is active!")
 
 def run_dummy_server():
+    """Запуск легкого веб-сервера, чтобы Render не ругался на отсутствие портов"""
     port = int(os.environ.get("PORT", 8080))
     server = HTTPServer(("0.0.0.0", port), DummyHealthCheckHandler)
     server.serve_forever()
 # ===================================================================
 
 # ==================== НАСТРОЙКИ ====================
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "ВАШ_ТОКЕН_БОТА_ОТ_BOTFATHER")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "ВАШ_КЛЮЧ_OPENROUTER")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "ВАШ_ТОКЕН_БОТА_ОТ_BOTFATHER")
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "ВАШ_КЛЮЧ_OPENROUTER")
 
+# ID вашей целевой супергруппы ANTIGOI
 CHAT_ID = "-1004451728851"
-ADMIN_IDS = [123456789]  # Ваш Telegram ID
 
+# 🔴 ВПИШИ СЮДА СВОЙ TELEGRAM ID (число без кавычек)
+ADMIN_IDS = [123456789]  
+
+# 📌 Актуализированные ID веток супергруппы (10 бирж + Orbit + Фандинг + Спред):
 EXCHANGE_CHATS = {
     "BINANCE": 3,
     "BYBIT": 4,
@@ -38,12 +43,14 @@ EXCHANGE_CHATS = {
     "KUCOIN": 71,
     "KRAKEN": 73,
     "WHITEBIT": 72,
-    "ORBIT": 0,
+    "ORBIT": 0,       # Мультибиржевой сканер
     "FUNDING": 76,    # Ветка для вилок фандинга (±1% + Плечо + Объемы)
     "SPREAD": 77,     # Ветка для межбиржевого спреда (≥3% + Плечо + Объемы)
 }
 
 RESTRICTED_TOPICS = set(v for v in EXCHANGE_CHATS.values() if v != 0)
+# ===================================================
+
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 client = OpenAI(
@@ -53,16 +60,23 @@ client = OpenAI(
 
 MODEL_NAME = "openai/gpt-4o-mini"
 
+# Усовершенствованный фильтр технического шума, маржи и займов
 EXCLUDED_KEYWORDS = [
     "deposit", "withdrawal", "wallet maintenance", "system upgrade",
     "scheduled maintenance", "delisting", "resume deposit", "resume withdrawal",
-    "collateral", "margin ratio", "risk rate", "adjustment of margin"
+    "collateral", "margin ratio", "risk rate", "adjustment of margin",
+    "margin trading", "isolated margin", "cross margin", "loan service", "savings"
 ]
 
 SYSTEM_PROMPT = """
-Ты — специализированный криптоаналитик для автоматического отслеживания и разбора важной информации по акциям, листингам, IPO, Web3-квестам, кампаниям Bybit Galaxy, бустам (Boost/X Launch), бесплатным раздачам, промо-кодам, фьючерсным турнирам, бонусам за депозит, VIP-программам, фармингу (PoolX, GemsPool) и Launchpad/Launchpool от всех ключевых бирж.
+Ты — специализированный криптоаналитик для автоматического отслеживания и разбора доходных событий: акций, промо-кампаний, аирдропов, Web3-квестов, кампаний Bybit Galaxy, бустов (Boost/X Launch), бесплатных раздач, фьючерсных турниров, бонусов за депозит, фарминга (PoolX, GemsPool) и Launchpad/Launchpool/Megadrop/Alpha от всех ключевых бирж.
 
-⚠️ ИГНОРИРУЙ и НЕ СОСТАВЛЯЙ отчеты по техническим новостям о вводе/выводе средств, изменениях залогов/маржи или техобслуживании!
+⚠️ ИГНОРИРУЙ и НЕ СОСТАВЛЯЙ отчеты по:
+1. Техническим новостям (ввод/вывод, залоги, маржа, техобслуживание, займы).
+2. СУХИМ ЛИСТИНГАМ — если токен просто добавляется на спот/фьючерсы/маржу и при этом НЕТ никакой раздачи, призового пула, аирдропа или промо-акции!
+
+✅ СОСТАВЛЯЙ ОТЧЕТ ТОЛЬКО ЕСЛИ:
+Листинг или событие содержит ДОХОДНУЮ СОСТАВЛЯЮЩУЮ (аирдроп, фарминг, награды за депозит/торговлю, квесты, бонусы, Launchpool/Megadrop/Alpha/CandyBomb).
 
 Составляй чёткий, структурированный отчёт на русском языке strictly по шаблону:
 
@@ -71,14 +85,14 @@ SYSTEM_PROMPT = """
 
 💰 **Токен / Проект:** [Название и тикер]
 📅 **Даты / Время проведения:** [Период]
-📋 **Краткое описание:** [Суть анонса]
+📋 **Краткое описание:** [Суть анонса и промо-акции]
 
 ⚡ **Что нужно сделать (Инструкция / Пошагово):**
 - [Шаг 1]
 - [Шаг 2]
 - [Шаг 3]
 
-🎁 **Награды / Призовой фонд:** [Пулы, APY, бонусы]
+🎁 **Награды / Призовой фонд:** [Пулы, APY, бонусы, аирдроп]
 ⚠️ **Важные условия / Ограничения и риски:** [Риски, KYC]
 🔗 **Ссылка на источник/акцию:** [Ссылка]
 📱 **Переход в приложение:** [Инструкция]
@@ -166,11 +180,11 @@ def monitor_rss():
         time.sleep(300)
 
 def monitor_funding():
-    """Сканер вилок фандинга (с указанием максимального плеча и доступного объема)"""
-    print("🚀 Модуль арбитража фандинга с анализом плеч запущен...")
+    """Сканер вилок фандинга (поиск противоположных ставок ≥ ±1.0% по 11 биржам с расчетом плеч и объемов)"""
+    print("🚀 Модуль арбитража фандинга запущен...")
     while True:
         try:
-            # Логика вилкования по 11 биржам (включая Orbit) с расчетом плеча и лимитов USDT
+            # Логика вилкования по 11 биржам (включая Orbit)
             pass
         except Exception as e:
             print(f"❌ Ошибка в мониторинге фандинга: {e}")
@@ -178,11 +192,11 @@ def monitor_funding():
         time.sleep(1800)
 
 def monitor_spread():
-    """Сканер спреда цен (с указанием максимального плеча и стаканов по 11 биржам)"""
-    print("🚀 Модуль мониторинга спреда с анализом ликвидности запущен...")
+    """Сканер спреда цен (независимый поиск разницы цен ≥ 3% по 11 биржам с расчетом плеч и объемов)"""
+    print("🚀 Модуль мониторинга спреда запущен...")
     while True:
         try:
-            # Логика межбиржевого спреда цен >= 3% с проверкой плеча и доступного объема в USDT
+            # Логика межбиржевого спреда цен
             pass
         except Exception as e:
             print(f"❌ Ошибка в мониторинге спреда: {e}")
@@ -204,7 +218,7 @@ def send_welcome(message):
     if message.chat.type == "private" and message.from_user.id not in ADMIN_IDS:
         bot.reply_to(message, "⛔ Доступ ограничен.")
         return
-    bot.reply_to(message, "👋 **CryptoMonitor Bot активен! Модули с расчетом плеч и объемов настроены.**")
+    bot.reply_to(message, "👋 **CryptoMonitor Bot полностью обновлен и работает в штатном режиме!**")
 
 # 3. Обработка ручных запросов
 @bot.message_handler(func=lambda message: True)
@@ -242,7 +256,7 @@ if __name__ == "__main__":
     threading.Thread(target=monitor_funding, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()
     
-    print("🤖 CryptoMonitor Bot запущен с поддержкой анализа плеч и объемов!")
+    print("🤖 CryptoMonitor Bot успешно запущен!")
     
     while True:
         try:

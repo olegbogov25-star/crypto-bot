@@ -489,6 +489,14 @@ def send_welcome(message):
 if __name__ == "__main__":
     threading.Thread(target=run_dummy_server, daemon=True).start()
     
+    # Принудительная тестовая проверка связи с топиками арбитража при старте
+    try:
+        bot.send_message(CHAT_ID, message_thread_id=EXCHANGE_CHATS["FUNDING"], text="🟢 Тест связи: топик FUNDING активен!")
+        bot.send_message(CHAT_ID, message_thread_id=EXCHANGE_CHATS["SPREAD"], text="🟢 Тест связи: топик SPREAD активен!")
+        print("✅ Тестовые сообщения в топики FUNDING и SPREAD успешно отправлены!")
+    except Exception as e:
+        print(f"❌ Ошибка тест-отправки в топики (проверь права администратора и ID чата): {e}")
+
     # Запуск фоновых задач мониторинга
     threading.Thread(target=monitor_news_hybrid, daemon=True).start()
     threading.Thread(target=monitor_web3, daemon=True).start()

@@ -15,10 +15,21 @@ ADMIN_IDS = [1043209905]
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 app = Flask(__name__)
 
+# Полная карта топиков со всеми Web3, бустами, лаунчпулами и биржами
 TOPICS = {
-    "NEWS": 2, "OKX_BOOST": 4, "MEXC": 6, "BYBIT": 8, "BINANCE": 10,
-    "BITGET": 12, "BINGX": 14, "KUCOIN": 16, "WHITEBIT": 18, "KRAKEN": 20,
-    "FUNDING": 22, "SPREAD": 24
+    "NEWS": 2, 
+    "OKX_BOOST": 4, 
+    "MEXC": 6, 
+    "BYBIT": 8, 
+    "BINANCE": 10,
+    "BITGET": 12, 
+    "BINGX": 14, 
+    "KUCOIN": 16, 
+    "WHITEBIT": 18, 
+    "KRAKEN": 20,
+    "FUNDING": 22, 
+    "SPREAD": 24,
+    "WEB3_MONITOR": 26  # Топик для OKX Web3, Binance Web3, альфа-боксов и квестов
 }
 
 processed_ids = set()
@@ -60,27 +71,28 @@ def get_message_link(message_id):
     thread_id = TOPICS.get("SPREAD", 24)
     return f"https://t.me/c/{clean_chat_id}/{message_id}?thread={thread_id}"
 
-# ==================== AI ANALYSIS & FULL TAG / COMMISSION CALCULATOR ====================
+# ==================== ADVANCED AI & FULL WEB3 / PROMO CALCULATOR ====================
 def analyze_text(text):
     if not OPENROUTER_API_KEY:
         return text
     prompt = f"""
-Ты — главный крипто-аналитик и эксперт по абузу биржевых промо-акций. Проанализируй текст официального анонса и сформируй детальный структурированный отчет:
+Ты — главный крипто-аналитик и эксперт по абузу биржевых промо-акций, Web3-квестов, альфа-боксов, турниров и ваучерных механик. Проанализируй текст официального анонса и сформируй детальный структурированный отчет:
 
-1. 📌 **Биржа / Источник:** Название биржи.
-2. 🏷 **Тип события / Теги:** Присвой ВСЕ подпадающие теги из списка:
-   - Биржевые теги: #Binance #Bybit #OKX #Bitget #MEXC #BingX #KuCoin #WhiteBit #Kraken #Gate #Ourbit
-   - Активности и категории: #Promotion #RewardCenter #TradingTournament #Challenge #Launchpool #Launchpad #Airdrop #DepositBonus #Listing #NewListing #Earn #Savings #VoteToList #FeeRebate #Voucher #IPO #PreMarket #IDO #IEO
+1. 📌 **Источник / Платформа:** Название биржи или экосистемы (OKX Web3, Binance Web3, Bybit, Bitget и т.д.).
+2. 🏷 **Тип события / Теги:** Присвой ВСЕ подпадающие теги из расширенного списка:
+   - Экосистемы и Web3: #OKX_Web3 #Binance_Web3 #Bybit_Web3 #Bitget_Web3 #Web3 #DApp #Quest #Task
+   - Биржи: #Binance #Bybit #OKX #Bitget #MEXC #BingX #KuCoin #WhiteBit #Kraken #Gate #Ourbit
+   - Активности, Альфа и Ваучеры: #Promotion #RewardCenter #Alpha #AlphaBox #MysteryBox #TradingTournament #Challenge #Boost #Booster #Launchpool #Launchpad #Airdrop #DepositBonus #Listing #NewListing #Earn #Savings #Staking #VoteToList #FeeRebate #Voucher #BetVoucher #MarginVoucher #IPO #PreMarket #IDO #IEO
 
-3. 🪙 **Токен / Проект:** Участвующие монеты.
-4. 📅 **Даты проведения:** Точный период проведения.
-5. 📋 **Краткое описание:** Суть события и призовой фонд.
-6. ⚡ **Пошаговая инструкция:** Что нужно сделать.
-7. 🎁 **Награды / Призовой фонд:** Все официальные награды (содержимое Mystery Box, ваучеры SOL/USDT, пул токенов).
-8. 💡 **Детальный расчет комиссий и профита (для акций с объемами/депозитами):**
-   - Распиши каждый уровень объема/депозита ($100, $1,000, $5,000, $20,000 и т.д.).
-   - Посчитай двойную комиссию на фьючерсах/споте (Taker ~0.05% x 2, Maker ~0.02% x 2).
-   - Сопоставь комиссию с официальной наградой для каждого уровня и выдай четкий вердикт: какой уровень объемa наиболее выгоден!
+3. 🪙 **Токен / Проект:** Участвующие монеты или активы.
+4. 📅 **Даты проведения:** Период проведения.
+5. 📋 **Краткое описание:** Суть акции, буста, турнира, ваучерной ставки или Web3-квеста.
+6. ⚡ **Пошаговая инструкция:** Что нужно сделать (подключение кошелька, транзакции, фарминг, набивание объема под ваучеры).
+7. 🎁 **Награды / Призовой фонд:** Все официальные награды (альфа-боксы, ваучеры на ставки/маржу, пулы токенов, бусты доходности).
+8. 💡 **Детальный расчет комиссий, затрат на газ и профита (ОБЯЗАТЕЛЬНО для всех уровней):**
+   - Распиши уровни объемов, депозитов, набивания оборота или транзакционных затрат ($100, $1,000, $5,000, $20,000 и т.д.).
+   - Посчитай фьючерсную/спотовую комиссию (Taker ~0.05% x 2, Maker ~0.02% x 2) или затраты на газ в Web3-сетях.
+   - Сопоставь затраты с официальной наградой (учитывая номинал ваучеров, шанс выпадения в альфа/мистери боксах) и выдай четкий математический вердикт: выгодно ли участвовать на каждом уровне!
 
 - Если это служебное объявление без наград (ввод/вывод, техобслуживание, делистинг) — ответь строго одним словом: SKIP.
 
@@ -119,7 +131,12 @@ def process_item(item_id, raw_text, default_topic):
     if "SKIP" in ai_result.upper():
         return
     
-    send_to_topic(default_topic, ai_result)
+    # Автоматическая маршрутизация Web3 и Альфа новостей в отдельный топик
+    target_topic = default_topic
+    if any(tag in ai_result for tag in ["#OKX_Web3", "#Binance_Web3", "#Web3", "#Alpha", "#AlphaBox"]):
+        target_topic = "WEB3_MONITOR"
+        
+    send_to_topic(target_topic, ai_result)
 
 # ==================== FUTURES PRICES FETCHING (11 EXCHANGES) ====================
 def fetch_futures_prices():
@@ -255,7 +272,6 @@ def monitor_spread():
                                 "start_time": time.time()
                             }
             
-            # Проверяем соходимость спредов
             expired_syms = []
             for sym in list(active_spreads.keys()):
                 if sym not in current_scanned_syms or sym not in prices:
@@ -396,11 +412,11 @@ def start_cmd(message):
     if message.chat.type == "private" and message.from_user.id not in ADMIN_IDS:
         bot.reply_to(message, "⛔ Доступ ограничен.")
         return
-    bot.reply_to(message, "👋 **Bot запущен! Все модули, теги и ИИ-анализ наград активны.**", parse_mode="Markdown")
+    bot.reply_to(message, "👋 **Bot запущен! Все Web3-модули, альфа-боксы, ваучерные ставки и ИИ-анализ активны.**", parse_mode="Markdown")
 
 # ==================== MAIN EXECUTION ====================
 if __name__ == "__main__":
-    send_to_topic("SPREAD", "🟢 Бот запущен: мониторинг спредов, фандинга и полный аналитический модуль активны!")
+    send_to_topic("SPREAD", "🟢 Бот запущен: мониторинг спредов, фандинга, Web3 и всех промо-акций активен!")
     
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()

@@ -2,5 +2,5 @@ pyTelegramBotAPI
 openai
 beautifulsoup4
 feedparser
-Flask
+flask
 requests

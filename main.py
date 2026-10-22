@@ -257,7 +257,6 @@ def monitor_spread():
                 if min_p <= 0: continue
                 spread = ((max_p - min_p) / min_p) * 100
                 
-                # Спред от 7% до 50%
                 if spread >= 7.0 and spread <= 50.0:
                     current_scanned_syms.add(sym)
                     
@@ -269,9 +268,7 @@ def monitor_spread():
                         else:
                             badge = "⚡ **STRONG SPREAD (>= 7%)**"
 
-                        min_url = get_exchange_url(min_ex, sym)
-                        max_url = get_exchange_url(max_ex, sym)
-                        
+                        # Расчет ликвидности для 1x (первое плечо): 1% от суточного объема каждой биржи
                         vol_min = volumes.get(sym, {}).get(min_ex, 50000) * 0.01
                         vol_max = volumes.get(sym, {}).get(max_ex, 50000) * 0.01
                         max_pos_usdt = int(min(vol_min, vol_max, 50000))
@@ -286,9 +283,7 @@ def monitor_spread():
                             f"🟢 **Long:** `${min_p}`\n"
                             f"🔴 **Short:** `${max_p}`\n\n"
                             f"💰 **Доступный объем позиции:** `~${max_pos_usdt:,} USDT`\n\n"
-                            f"📝 **All Exchanges Overview:**\n{overview}\n\n"
-                            f"🔗 **Открыть в приложениях:**\n"
-                            f"📱 [Открыть в {min_ex}]({min_url}) | 📱 [Открыть в {max_ex}]({max_url})"
+                            f"📝 **All Exchanges Overview:**\n{overview}"
                         )
                         
                         msg_id = send_to_topic("SPREAD", msg_text)
@@ -431,16 +426,11 @@ def monitor_funding():
                         overview_list = [f"🔹 [{ex}]({get_exchange_url(ex, symbol)}): `{r:+.2f}%`" for ex, r in sorted(ex_rates.items(), key=lambda x: x[1], reverse=True)]
                         overview = "\n".join(overview_list)
 
-                        sorted_exs = sorted(ex_rates.items(), key=lambda x: abs(x[1]), reverse=True)
-                        links_list = [f"📱 [Открыть в {ex}]({get_exchange_url(ex, symbol)})" for ex, rate in sorted_exs[:4]]
-                        links_text = " | ".join(links_list)
-
                         msg = (
                             f"🔥 **FUNDING ARBITRAGE / HIGH RATE (>= ±1.0%)**\n"
                             f"🪙 **#{symbol}** (Spread: `{funding_spread:.2f}%`)\n\n"
                             f"💰 **Доступный объем позиции:** `~${max_pos_usdt:,} USDT`\n\n"
-                            f"📊 **All Exchanges Rates:**\n{overview}\n\n"
-                            f"🔗 **Открыть приложения:**\n{links_text}"
+                            f"📊 **All Exchanges Rates:**\n{overview}"
                         )
 
                         send_to_topic("FUNDING", msg)
@@ -471,7 +461,7 @@ def monitor_news():
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     
-    send_to_topic("SPREAD", "🚀 **Бот запущен с обновленным фильтром спредов (7-50%) и расчетом объема позиций!**")
+    send_to_topic("SPREAD", "🚀 **Бот запущен: лишние кнопки удалены, расчет доступного объема USDT добавлен!**")
     
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()

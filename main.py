@@ -9,7 +9,7 @@ from flask import Flask
 # ==================== CONFIGURATION ====================
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-CHAT_ID = os.environ.get("CHAT_ID") # Пример: -1001234567890 (нужен числовой ID чата для прямых ссылок на сообщения)
+CHAT_ID = os.environ.get("CHAT_ID")
 ADMIN_IDS = [1043209905]
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
@@ -24,7 +24,7 @@ TOPICS = {
 processed_ids = set()
 processed_arbitrage = set()
 
-# Словарь для отслеживания активных спредов: sym -> {"msg_id": int, "start_time": float, "min_ex": str, "max_ex": str}
+# Словарь для отслеживания активных спредов: sym -> {"msg_id": int, "start_time": float}
 active_spreads = {}
 
 # ==================== HEALTHCHECK SERVER ====================
@@ -56,22 +56,29 @@ def get_exchange_link(exchange, symbol):
     return f"[{exchange}]({url})"
 
 def get_message_link(message_id):
-    """Формирует ссылку на конкретное сообщение в супергруппе с топиками"""
     if not CHAT_ID:
         return ""
-    # Очищаем ID чата от префикса -100 для ссылки формата t.me/c/...
     clean_chat_id = str(CHAT_ID).replace("-100", "")
     thread_id = TOPICS.get("SPREAD", 24)
     return f"https://t.me/c/{clean_chat_id}/{message_id}?thread={thread_id}"
 
-# ==================== AI ANALYSIS ====================
+# ==================== ADVANCED AI ANALYSIS & COMMISSION CALC ====================
 def analyze_text(text):
     if not OPENROUTER_API_KEY:
         return text
     prompt = f"""
-Ты — профессиональный крипто-аналитик. Проанализируй текст и выдели только самое важное:
-- Название акции/события, награды (в $ или токенах), даты, требования.
-- Если это служебное объявление (ввод/вывод, техобслуживание, листинг без наград) — ответь строго одним словом: SKIP.
+Ты — профессиональный крипто-аналитик и эксперт по абузу биржевых промо-акций. Проанализируй текст анонса (турнир, Mystery Box, торговый челлендж, промо-акция) и сформируй структурированный отчет:
+
+1. **Биржа / Источник и Теги:** (например, #Promotion #RewardCenter #TradingTournament)
+2. **Название события, Токен, Даты проведения.**
+3. **Краткое описание и призовой фонд.**
+4. **Пошаговая инструкция:** что нужно сделать по пунктам.
+5. **💡 Математический расчет и оценка выгодности (ОБЯЗАТЕЛЬНО для всех заданий на объем):**
+   - Распиши все доступные уровни торгового объема из условий (например: $100, $5,000, $20,000).
+   - Для каждого уровня **только математически точно** посчитай затраты на комиссию (учитывай, что на фьючерсах комиссия платится и за вход, и за выход. Средняя Taker-комиссия фьючерсов ~0.05% / $5 на $10,000 оборота, а при Maker-ордерах ~0.02% / $2 на $10,000).
+   - Четко выдели **самый выгодный уровень** (например: *"Уровень $100 — идеальный выбор, затраты на комиссию копеечные (~$0.05), окупается гарантированно. Уровни от $5,000+ требуют оценки призового пула"*).
+
+- Если это служебное объявление без наград (ввод/вывод, техобслуживание, делистинг) — ответь строго одним словом: SKIP.
 
 Текст для анализа:
 {text}
@@ -110,7 +117,7 @@ def process_item(item_id, raw_text, default_topic):
     
     send_to_topic(default_topic, ai_result)
 
-# ==================== FUTURES PRICES FETCHING ====================
+# ==================== FUTURES PRICES FETCHING (11 EXCHANGES) ====================
 def fetch_futures_prices():
     prices = {}
     
@@ -224,7 +231,6 @@ def monitor_spread():
                 if spread >= 3.0:
                     current_scanned_syms.add(sym)
                     
-                    # Если монеты еще не было в активных спредах — публикуем новый сигнал
                     if sym not in active_spreads:
                         min_link = get_exchange_link(min_ex, sym)
                         max_link = get_exchange_link(max_ex, sym)
@@ -246,30 +252,32 @@ def monitor_spread():
                                 "start_time": time.time()
                             }
             
-            # Проверяем, какие спреды сошлись (пали ниже 1.5% или пропали из скана)
+            # Проверяем сошедшие спреды
             expired_syms = []
-            for sym, data in active_spreads.items():
+            for sym in list(active_spreads.keys()):
                 if sym not in current_scanned_syms or sym not in prices:
                     expired_syms.append(sym)
                 else:
                     ex_data = prices[sym]
-                    min_p = min(ex_data.values())
-                    max_p = max(ex_data.values())
-                    curr_spread = ((max_p - min_p) / min_p) * 100
-                    if curr_spread < 1.5:
-                        expired_syms.append(sym)
+                    if len(ex_data) >= 2:
+                        curr_min = min(ex_data.values())
+                        curr_max = max(ex_data.values())
+                        if curr_min > 0:
+                            curr_spread = ((curr_max - curr_min) / curr_min) * 100
+                            if curr_spread < 1.5:
+                                expired_syms.append(sym)
 
-            # Публикуем отчет о сведении со ссылкой на исходный пост
             for sym in expired_syms:
-                data = active_spreads.pop(sym)
-                duration = int(time.time() - data["start_time"])
-                mins = duration // 60
-                secs = duration % 60
-                time_str = f"{mins}:{secs:02d}"
-                
-                post_link = get_message_link(data["msg_id"])
-                aligned_msg = f"[{sym}]({post_link}) aligned in {time_str}"
-                send_to_topic("SPREAD", aligned_msg)
+                data = active_spreads.pop(sym, None)
+                if data:
+                    duration = int(time.time() - data["start_time"])
+                    mins = duration // 60
+                    secs = duration % 60
+                    time_str = f"{mins}:{secs:02d}"
+                    
+                    post_link = get_message_link(data["msg_id"])
+                    aligned_msg = f"[{sym}]({post_link}) aligned in {time_str}"
+                    send_to_topic("SPREAD", aligned_msg)
 
         except Exception as e:
             print(f"Futures Spread Monitor Error: {e}")
@@ -279,7 +287,6 @@ def monitor_spread():
 def monitor_funding():
     while True:
         try:
-            # Сбор фандинга по всем 11 биржам
             try:
                 for item in requests.get("https://fapi.binance.com/fapi/v1/premiumIndex", timeout=5).json():
                     check_and_send_funding("Binance", item['symbol'], float(item['lastFundingRate']) * 100)
@@ -386,11 +393,11 @@ def start_cmd(message):
     if message.chat.type == "private" and message.from_user.id not in ADMIN_IDS:
         bot.reply_to(message, "⛔ Доступ ограничен.")
         return
-    bot.reply_to(message, "👋 **Bot запущен! Отслеживание схождения спредов со ссылками активно!**", parse_mode="Markdown")
+    bot.reply_to(message, "👋 **Bot запущен! Все модули соединены и работают.**", parse_mode="Markdown")
 
 # ==================== MAIN EXECUTION ====================
 if __name__ == "__main__":
-    send_to_topic("SPREAD", "🟢 Мониторинг спредов с функцией 'aligned' запущен!")
+    send_to_topic("SPREAD", "🟢 Мониторинг спредов, фандинга и промо-акций с расчётом комиссий готов к работе!")
     
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()

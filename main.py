@@ -15,7 +15,7 @@ ADMIN_IDS = [1043209905]
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 app = Flask(__name__)
 
-# Полная карта топиков со всеми Web3, бустами, лаунчпулами и биржами
+# Полная карта топиков со всеми Web3, лаунчпулами, Binance Square и биржами
 TOPICS = {
     "NEWS": 2, 
     "OKX_BOOST": 4, 
@@ -29,7 +29,7 @@ TOPICS = {
     "KRAKEN": 20,
     "FUNDING": 22, 
     "SPREAD": 24,
-    "WEB3_MONITOR": 26  # Топик для OKX Web3, Binance Web3, Bybit Galaxy, альфа-боксов и квестов
+    "WEB3_MONITOR": 26  # Выделенный топик для Web3, X Launch, Bybit Galaxy, Megadrop и Binance Square
 }
 
 processed_ids = set()
@@ -76,23 +76,25 @@ def analyze_text(text):
     if not OPENROUTER_API_KEY:
         return text
     prompt = f"""
-Ты — главный крипто-аналитик и эксперт по абузу биржевых промо-акций, Web3-квестов, альфа-боксов (Bybit Galaxy, Binance Alpha, OKX Web3), турниров и ваучерных механик. Проанализируй текст официального анонса и сформируй детальный структурированный отчет:
+Ты — главный крипто-аналитик и эксперт по абузу биржевых промо-акций, Web3-экосистем, лаунчпулов, пулов ликвидности и контентных программ. Проанализируй текст официального анонса (с сайта биржи, веб-кошельков, платформ вроде OKX Web3 / X Launch, Bybit Galaxy, Binance Alpha, Square) и сформируй детальный структурированный отчет:
 
-1. 📌 **Источник / Платформа:** Название биржи или экосистемы (OKX Web3, Binance Web3, Bybit Galaxy, Bitget и т.д.).
+1. 📌 **Источник / Платформа:** Название биржи или Web3-экосистемы (OKX Web3, Binance Web3, Binance Square, Bybit Galaxy, Bybit Web3 и т.д.).
 2. 🏷 **Тип события / Теги:** Присвой ВСЕ подпадающие теги из расширенного списка:
-   - Экосистемы и Web3: #OKX_Web3 #Binance_Web3 #Bybit_Web3 #Bitget_Web3 #Web3 #DApp #Quest #Task
+   - Web3, Экосистемы и Кошельки: #OKX_Web3 #Binance_Web3 #Bybit_Web3 #Bitget_Web3 #Web3 #DApp #Quest #Task #XLiquidity
+   - X-экосистема и Специфические разделы: #XLaunch #XTrade #TokenSplash #Megadrop #ByVotes #BinancePay
+   - Контент и Авторские программы: #BinanceSquare #Square #WriteToEarn #CreatorPad
    - Биржи: #Binance #Bybit #OKX #Bitget #MEXC #BingX #KuCoin #WhiteBit #Kraken #Gate #Ourbit
-   - Активности, Альфа и Ваучеры: #Promotion #RewardCenter #Alpha #AlphaBox #MysteryBox #TradingTournament #Challenge #Boost #Booster #Launchpool #Launchpad #Airdrop #DepositBonus #Listing #NewListing #Earn #Savings #Staking #VoteToList #FeeRebate #Voucher #BetVoucher #MarginVoucher #IPO #PreMarket #IDO #IEO
+   - Активности, Альфа, Стейкинг и Ваучеры: #Promotion #RewardCenter #Alpha #AlphaBox #MysteryBox #TradingTournament #Challenge #Boost #Booster #Launchpool #Launchpad #Airdrop #DepositBonus #Listing #NewListing #Earn #Savings #Staking #SimpleEarn #Flexible #Locked #VoteToList #FeeRebate #Voucher #BetVoucher #MarginVoucher #Margin #IPO #PreMarket #IDO #IEO #VIP
 
 3. 🪙 **Токен / Проект:** Участвующие монеты или активы.
 4. 📅 **Даты проведения:** Период проведения.
-5. 📋 **Краткое описание:** Суть акции, буста, турнира, ваучерной ставки или Web3-квеста.
-6. ⚡ **Пошаговая инструкция:** Что нужно сделать (подключение кошелька, транзакции, фарминг, набивание объема под ваучеры).
-7. 🎁 **Награды / Призовой фонд:** Все официальные награды (альфа-боксы, ваучеры на ставки/маржу, пулы токенов, бусты доходности).
+5. 📋 **Краткое описание:** Суть акции, буста, турнира, лаунчпула, пула ликвидности, Web3-квеста или контентной программы.
+6. ⚡ **Пошаговая инструкция:** Что нужно сделать (подключение кошелька, транзакции, фарминг в пулах ликвидности X Launch, написание постов под Write to Earn, набивание объема под ваучеры).
+7. 🎁 **Награды / Призовой фонд:** Все официальные награды (альфа-боксы, токены из X Launch / Megadrop, комиссии с постов Square, ваучеры, пулы токенов, бусты доходности, APY в стейкинге/ликвидности).
 8. 💡 **Детальный расчет комиссий, затрат на газ и профита (ОБЯЗАТЕЛЬНО для всех уровней):**
    - Распиши уровни объемов, депозитов, набивания оборота или транзакционных затрат в сетях ($100, $1,000, $5,000, $20,000 и т.д.).
-   - Посчитай фьючерсную/спотовую комиссию (Taker ~0.05% x 2, Maker ~0.02% x 2) или затраты на газ в Web3-сетях.
-   - Сопоставь затраты с официальной наградой (учитывая номинал ваучеров, шанс выпадения в альфа/мистери боксах) и выдай четкий математический вердикт: выгодно ли участвовать на каждом уровне!
+   - Посчитай фьючерсную/спотовую комиссию (Taker ~0.05% x 2, Maker ~0.02% x 2) или затраты на газ в Web3-сетях при фарминге и участии в пулах.
+   - Сопоставь затраты с официальной наградой (учитывая номинал ваучеров, потенциал дохода с Binance Square, пулов X Launch или альфа-боксов) и выдай четкий математический вердикт: выгодно ли участвовать на каждом уровне!
 
 - Если это служебное объявление без наград (ввод/вывод, техобслуживание, делистинг) — ответь строго одним словом: SKIP.
 
@@ -131,9 +133,13 @@ def process_item(item_id, raw_text, default_topic):
     if "SKIP" in ai_result.upper():
         return
     
-    # Автоматическая маршрутизация Web3 и Альфа новостей в отдельный топик
+    # Автоматическая маршрутизация Web3, Альфа, X Launch, Megadrop и Square новостей в выделенный топик
     target_topic = default_topic
-    if any(tag in ai_result for tag in ["#OKX_Web3", "#Binance_Web3", "#Bybit_Web3", "#Web3", "#Alpha", "#AlphaBox"]):
+    web3_tags = [
+        "#OKX_Web3", "#Binance_Web3", "#Bybit_Web3", "#Web3", "#Alpha", "#AlphaBox", 
+        "#BinanceSquare", "#WriteToEarn", "#XLaunch", "#XTrade", "#XLiquidity", "#Megadrop", "#ByVotes", "#TokenSplash"
+    ]
+    if any(tag in ai_result for tag in web3_tags):
         target_topic = "WEB3_MONITOR"
         
     send_to_topic(target_topic, ai_result)
@@ -408,7 +414,7 @@ def monitor_news():
             except Exception as e:
                 print(f"RSS Error ({url}): {e}")
         
-        # Безопасный интервал 10 минут для новостей и Web3
+        # Безопасный интервал 10 минут для новостей, Web3 и экосистемных порталов
         time.sleep(600)
 
 # ==================== TELEGRAM HANDLERS ====================
@@ -417,11 +423,11 @@ def start_cmd(message):
     if message.chat.type == "private" and message.from_user.id not in ADMIN_IDS:
         bot.reply_to(message, "⛔ Доступ ограничен.")
         return
-    bot.reply_to(message, "👋 **Bot запущен! Все Web3-модули, альфа-боксы, ваучеры и безопасные интервалы активны.**", parse_mode="Markdown")
+    bot.reply_to(message, "👋 **Bot запущен! Все Web3-модули, X Launch, Megadrop, Binance Square, стейкинг и безопасные тайминги активны.**", parse_mode="Markdown")
 
 # ==================== MAIN EXECUTION ====================
 if __name__ == "__main__":
-    send_to_topic("SPREAD", "🟢 Бот запущен: мониторинг спредов (45с), фандинга (5м), Web3 и промо (10м) активен!")
+    send_to_topic("SPREAD", "🟢 Бот запущен: мониторинг спредов (45с), фандинга (5м), Web3, экосистем и Square (10м) активен!")
     
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()

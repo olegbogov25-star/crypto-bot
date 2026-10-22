@@ -15,20 +15,20 @@ ADMIN_IDS = [1043209905]
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 app = Flask(__name__)
 
-# Точная карта топиков со всеми реальными ID из твоих скриншотов
+# Точная карта топиков со всеми реальными ID из твоего канала
 TOPICS = {
     "NEWS": 2, 
-    "MEXC": 68,     #
-    "BYBIT": 4,     #
-    "BINANCE": 3,   #
-    "BITGET": 69,   #
-    "BINGX": 70,    #
-    "KUCOIN": 71,   #
-    "WHITEBIT": 72, #
-    "KRAKEN": 73,   #
-    "GATE": 67,     #
-    "FUNDING": 76,  #
-    "SPREAD": 77    #
+    "MEXC": 68,     
+    "BYBIT": 4,     
+    "BINANCE": 3,   
+    "BITGET": 69,   
+    "BINGX": 70,    
+    "KUCOIN": 71,   
+    "WHITEBIT": 72, 
+    "KRAKEN": 73,   
+    "GATE": 67,     
+    "FUNDING": 76,  # 👈 Обновленный правильный ID топика фандинга
+    "SPREAD": 77    # 👈 Обновленный правильный ID топика спредов
 }
 
 processed_ids = set()
@@ -136,7 +136,6 @@ def process_item(item_id, raw_text, default_topic):
     if "SKIP" in ai_result.upper():
         return
     
-    # Автоматическая маршрутизация в папку соответствующей биржи
     target_topic = default_topic
     upper_res = ai_result.upper()
     
@@ -254,7 +253,7 @@ def fetch_futures_prices():
 
     return prices
 
-# ==================== SPREAD MONITOR (GRADUATION 3%, 5%, 7%, 10% + REPLY ALIGN) ====================
+# ==================== SPREAD MONITOR ====================
 def monitor_spread():
     while True:
         try:
@@ -337,7 +336,7 @@ def monitor_spread():
         
         time.sleep(45)
 
-# ==================== FUNDING MONITOR (EXCHANGE PAIRS & HEDGING FROM ±0.5%) ====================
+# ==================== FUNDING MONITOR ====================
 def monitor_funding():
     while True:
         try:
@@ -421,7 +420,6 @@ def monitor_funding():
                 max_rate = ex_rates[max_ex]
                 min_rate = ex_rates[min_ex]
 
-                # Ловим порог от ±0.5% и выше (0.6, 0.7, 0.9, 1.2 и т.д.)
                 if abs(max_rate) >= 0.5 or abs(min_rate) >= 0.5:
                     sig_id = f"FUND_PAIR_{symbol}_{max_ex}_{max_rate:.2f}_{min_ex}_{min_rate:.2f}"
                     if sig_id not in processed_arbitrage:
@@ -474,7 +472,6 @@ def start_cmd(message):
 
 # ==================== MAIN EXECUTION ====================
 if __name__ == "__main__":
-    # Фоновые потоки запущены без ошибочных стартовых отправок в топики
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()

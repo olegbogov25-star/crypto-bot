@@ -9,13 +9,12 @@ from flask import Flask
 # ==================== CONFIGURATION ====================
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-CHAT_ID = "-1004451728851"  # Актуальный ID супергруппы
+CHAT_ID = "-1004451728851"
 ADMIN_IDS = [1043209905]
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 app = Flask(__name__)
 
-# Точная карта топиков со всеми реальными ID
 TOPICS = {
     "NEWS": 2, 
     "MEXC": 68,     
@@ -27,8 +26,8 @@ TOPICS = {
     "WHITEBIT": 72, 
     "KRAKEN": 73,   
     "GATE": 67,     
-    "FUNDING": 76,  # ID топика фандинга
-    "SPREAD": 77    # ID топика спредов
+    "FUNDING": 76,  
+    "SPREAD": 77    
 }
 
 processed_ids = set()
@@ -264,7 +263,7 @@ def fetch_futures_prices():
 
 # ==================== SPREAD MONITOR (>= 3.0%) ====================
 def monitor_spread():
-    while True:
+    while Type := True:
         try:
             prices = fetch_futures_prices()
             current_scanned_syms = set()
@@ -399,92 +398,4 @@ def monitor_funding():
                 for item in requests.get("https://open-api.bingx.com/openApi/swap/v2/quote/premiumIndex", timeout=5).json().get('data', []):
                     if 'lastFundingRate' in item:
                         collect_rate("BingX", item['symbol'], float(item['lastFundingRate']) * 100)
-            except Exception: pass
-
-            try:
-                for item in requests.get("https://api-futures.kucoin.com/api/v1/contracts/active", timeout=5).json().get('data', []):
-                    if 'fundingFeeRate' in item:
-                        collect_rate("KuCoin", item['symbol'], float(item['fundingFeeRate']) * 100)
-            except Exception: pass
-
-            try:
-                for item in requests.get("https://whitebit.com/api/v4/public/futures", timeout=5).json().get('result', []):
-                    if 'funding_rate' in item:
-                        collect_rate("WhiteBit", item['ticker'], float(item['funding_rate']) * 100)
-            except Exception: pass
-
-            try:
-                for item in requests.get("https://futures.kraken.com/derivatives/api/v3/tickers", timeout=5).json().get('tickers', []):
-                    if 'fundingRate' in item:
-                        collect_rate("Kraken", item['symbol'], float(item['fundingRate']) * 100)
-            except Exception: pass
-
-            try:
-                for item in requests.get("https://api.ourbit.com/api/v1/futures/market/tickers", timeout=5).json().get('data', []):
-                    if 'fundingRate' in item:
-                        collect_rate("Ourbit", item['symbol'], float(item['fundingRate']) * 100)
-            except Exception: pass
-
-            for symbol, ex_rates in all_funding.items():
-                if not ex_rates:
-                    continue
-                
-                has_high_funding = any(abs(rate) >= 0.5 for rate in ex_rates.values())
-                
-                if has_high_funding:
-                    rates_str = "_".join([f"{ex}:{rate:.2f}" for ex, rate in sorted(ex_rates.items())])
-                    sig_id = f"HIGH_FUND_{symbol}_{rates_str}"
-                    
-                    if sig_id not in processed_arbitrage:
-                        processed_arbitrage.add(sig_id)
-                        
-                        overview_list = [f"🔹 {get_exchange_link(ex, symbol)}: `{r:+.2f}%`" for ex, r in sorted(ex_rates.items(), key=lambda x: x[1], reverse=True)]
-                        overview = "\n".join(overview_list)
-
-                        msg = (
-                            f"🔥 **HIGH FUNDING ALERT (>= ±0.5%)**\n"
-                            f"🪙 **#{symbol}**\n\n"
-                            f"📊 **All Exchanges Rates:**\n{overview}"
-                        )
-                        
-                        markup = telebot.types.InlineKeyboardMarkup(row_width=2)
-                        sorted_exs = sorted(ex_rates.items(), key=lambda x: abs(x[1]), reverse=True)
-                        for ex, rate in sorted_exs[:4]:
-                            markup.add(telebot.types.InlineKeyboardButton(f"{ex}: {rate:+.2f}%", url=get_exchange_url(ex, symbol)))
-
-                        send_to_topic("FUNDING", msg, reply_markup=markup)
-
-        except Exception as e:
-            print(f"Funding Monitor Error: {e}")
-            
-        time.sleep(300)
-
-# ==================== NEWS & RSS MONITORS ====================
-def monitor_news():
-    feeds = [
-        ("https://cointelegraph.com/rss", "NEWS"),
-        ("https://coindesk.com/arc/outboundfeeds/rss/", "NEWS")
-    ]
-    while True:
-        for url, topic in feeds:
-            try:
-                feed = feedparser.parse(url)
-                for entry in feed.entries[:3]:
-                    process_item(entry.id, f"{entry.title}\n{entry.link}", topic)
-            except Exception as e:
-                print(f"RSS Error ({url}): {e}")
-        
-        time.sleep(600)
-
-# ==================== MAIN EXECUTION ====================
-if __name__ == "__main__":
-    threading.Thread(target=run_flask, daemon=True).start()
-    
-    send_to_topic("SPREAD", "🚀 **Бот успешно запущен с боевыми фильтрами и кнопками перехода!**")
-    
-    threading.Thread(target=monitor_spread, daemon=True).start()
-    threading.Thread(target=monitor_funding, daemon=True).start()
-    threading.Thread(target=monitor_news, daemon=True).start()
-    
-    while True:
-        time.sleep(3600)
+            except Exception:, pass

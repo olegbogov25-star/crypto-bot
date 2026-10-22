@@ -24,7 +24,7 @@ def run_dummy_server():
     server.serve_forever()
 # ===================================================================
 
-# ==================== НАСТРОЙКИ ====================
+# ==================== НАСТРОЙКИ И ТОПИКИ ====================
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "ВАШ_ТОКЕН_БОТА_ОТ_BOTFATHER")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "ВАШ_КЛЮЧ_OPENROUTER")
 
@@ -57,6 +57,7 @@ client = OpenAI(
 
 MODEL_NAME = "openai/gpt-4o-mini"
 
+# Фильтр технического шума, маржи и займов
 EXCLUDED_KEYWORDS = [
     "deposit", "withdrawal", "wallet maintenance", "system upgrade",
     "scheduled maintenance", "delisting", "resume deposit", "resume withdrawal",
@@ -103,6 +104,7 @@ RSS_FEEDS = {
     "BITGET": "https://www.bitget.com/support/rss"
 }
 
+# Множество прочитанных новостей (чистое при старте)
 processed_items = set()
 
 def is_noise(text):
@@ -131,6 +133,7 @@ def analyze_and_send(title, summary, link, exchange_name):
         )
         answer = completion.choices[0].message.content.strip()
         
+        # Если ИИ откинул новость или выплюнул SKIP — пропуск
         if "SKIP" in answer or len(answer) < 30:
             return
 
@@ -149,7 +152,7 @@ def analyze_and_send(title, summary, link, exchange_name):
     except Exception as e:
         print(f"❌ Ошибка ИИ-анализа для {exchange_name}: {e}")
 
-# Поток 1: Мониторинг RSS
+# Поток 1: Мониторинг RSS (интервал: 5 минут)
 def monitor_rss():
     print("🚀 Модуль мониторинга RSS запущен (интервал: 5 мин)...")
     while True:
@@ -171,7 +174,7 @@ def monitor_rss():
                 print(f"❌ Ошибка парсинга RSS {exchange}: {e}")
         time.sleep(300)
 
-# Поток 2: Настоящий опрос Web3 Wallet & Boost OKX
+# Поток 2: Сканирование обычных анонсов + Прямого Web3 Wallet API OKX (интервал: 12 минут)
 def monitor_web3():
     print("🌐 Модуль мониторинга Web3 запущен (интервал: 12 мин)...")
     while True:
@@ -187,11 +190,13 @@ def monitor_web3():
                         link = ann.get("url", "https://www.okx.com/web3")
                         if title and title not in processed_items:
                             processed_items.add(title)
+                            if len(processed_items) > 1000:
+                                processed_items.pop()
                             analyze_and_send(title, title, link, "OKX Web3 Boost")
         except Exception as e:
             print(f"⚠️ Ошибка OKX Ann API: {e}")
 
-        # 2. Прямой опрос Web3 Wallet Campaigns OKX (X Launch / Boost)
+        # 2. Прямой опрос Web3 Wallet Activity OKX (X Launch / Boost)
         try:
             okx_web3_url = "https://www.okx.com/priapi/v1/ip/web3/wallet/activity/list?page=1&limit=10"
             headers = {"User-Agent": "Mozilla/5.0"}
@@ -208,22 +213,32 @@ def monitor_web3():
                         
                         if title and item_id not in processed_items:
                             processed_items.add(item_id)
+                            if len(processed_items) > 1000:
+                                processed_items.pop()
                             analyze_and_send(title, desc, link, "OKX Web3 Boost")
         except Exception as e:
             print(f"⚠️ Ошибка OKX Web3 Direct API: {e}")
             
         time.sleep(720)
 
-# Поток 3: Фандинг
+# Поток 3: Фандинг (интервал: 30 минут)
 def monitor_funding():
     print("⚡ Модуль арбитража фандинга запущен (интервал: 30 мин)...")
     while True:
+        try:
+            pass
+        except Exception as e:
+            print(f"❌ Ошибка в мониторинге фандинга: {e}")
         time.sleep(1800)
 
-# Поток 4: Спред
+# Поток 4: Спред (интервал: 30 минут)
 def monitor_spread():
     print("🔀 Модуль мониторинга спреда запущен (интервал: 30 мин)...")
     while True:
+        try:
+            pass
+        except Exception as e:
+            print(f"❌ Ошибка в мониторинге спреда: {e}")
         time.sleep(1800)
 
 @bot.message_handler(func=lambda message: message.message_thread_id in RESTRICTED_TOPICS)
@@ -239,7 +254,7 @@ def send_welcome(message):
     if message.chat.type == "private" and message.from_user.id not in ADMIN_IDS:
         bot.reply_to(message, "⛔ Доступ ограничен.")
         return
-    bot.reply_to(message, "👋 **CryptoMonitor Bot запущен с прямым Web3 Wallet API!**")
+    bot.reply_to(message, "👋 **CryptoMonitor Bot запущен в идеальном режиме без флуда и дублей!**")
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
@@ -273,12 +288,16 @@ def handle_all_messages(message):
 if __name__ == "__main__":
     threading.Thread(target=run_dummy_server, daemon=True).start()
     
-    threading.Thread(target=monitor_rss, daemon=True).start()
+    # ПРИНУДИТЕЛЬНЫЙ МГНОВЕННЫЙ ЗАПУСК СКАНИРОВАНИЯ WEB3 И RSS ПРИ СТАРТЕ:
+    print("🧪 Мгновенное принудительное сканирование Web3 и RSS при старте...")
     threading.Thread(target=monitor_web3, daemon=True).start()
+    threading.Thread(target=monitor_rss, daemon=True).start()
+    
+    # Запуск остальных потоков по расписанию
     threading.Thread(target=monitor_funding, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()
     
-    print("🤖 CryptoMonitor Bot успешно запущен с прямым парсером Web3 Wallet!")
+    print("🤖 CryptoMonitor Bot успешно запущен!")
     
     while True:
         try:

@@ -264,7 +264,7 @@ def fetch_futures_data():
     except Exception: pass
 
     try:
-        r = requests.get("https://open-api.bingx.com/openApi/swap/v2/quote/premiumIndex", timeout=5).json().get('data', []):
+        r = requests.get("https://open-api.bingx.com/openApi/swap/v2/quote/premiumIndex", timeout=5).json().get('data', [])
         for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym and 'lastFundingRate' in item:
@@ -301,11 +301,11 @@ def fetch_futures_data():
 
 def format_volume(vol):
     if vol >= 1_000_000:
-        return f"${vol / 1_000_000:.1f}M"
+        return f"${vol / 1_000_000:.1f}M (24h)"
     elif vol >= 1_000:
-        return f"${vol / 1_000:.1f}K"
+        return f"${vol / 1_000:.1f}K (24h)"
     else:
-        return f"${vol:.0f}"
+        return f"${vol:.0f} (24h)"
 
 def format_countdown(target_timestamp):
     if not target_timestamp:
@@ -336,7 +336,6 @@ def monitor_spread():
                 if min_p <= 0: continue
                 spread = ((max_p - min_p) / min_p) * 100
                 
-                # Диапазон от 7% до 30%
                 if spread >= 7.0 and spread <= 30.0:
                     current_scanned_syms.add(sym)
                     
@@ -354,7 +353,6 @@ def monitor_spread():
                         max_pos_usdt = int(min(vol_min, vol_max, 50000))
                         if max_pos_usdt < 100: max_pos_usdt = 100
 
-                        # Авто-маркировка рисков
                         risk_tag = ""
                         min_vol_val = min(sym_vols.get(min_ex, 0), sym_vols.get(max_ex, 0))
                         if min_vol_val < 10000:
@@ -489,8 +487,6 @@ def monitor_news():
         ("https://coindesk.com/arc/outboundfeeds/rss/", "NEWS")
     ]
     while True:
-        for url, topic : feeds if isinstance(feeds, list) else []: # Safe iteration
-            pass
         for url, topic in feeds:
             try:
                 feed = feedparser.parse(url)
@@ -505,7 +501,7 @@ def monitor_news():
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     
-    send_to_topic("SPREAD", "🚀 **Бот запущен: диапазон 7%-30% и авто-маркировка рисков по ликвидности активированы!**")
+    send_to_topic("SPREAD", "🚀 **Бот запущен: объемы теперь явно подписаны как (24h)!**")
     
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()

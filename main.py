@@ -44,7 +44,7 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# ==================== LINK GENERATORS ====================
+# ==================== LINK GENERATORS (С автопереходом в мобильные приложения) ====================
 def get_exchange_url(exchange, symbol):
     base_sym = symbol.replace('USDT', '')
     links = {
@@ -80,7 +80,7 @@ def normalize_symbol(raw_sym):
             sym += 'USDT'
     return sym
 
-# ==================== ADVANCED AI & FULL WEB3 / PROMO CALCULATOR ====================
+# ==================== ADVANCED AI & FULL WEB3 / PROMO CALCULATOR (42 ТЕГА) ====================
 def analyze_text(text):
     if not OPENROUTER_API_KEY:
         return text
@@ -97,7 +97,7 @@ def analyze_text(text):
 
 3. 🪙 **Токен / Проект:** Участвующие монеты или активы.
 4. 📅 **Даты проведения:** Период проведения.
-5. 📋 **Kраткое описание:** Суть акции, буста, турнира, лаунчпула или квеста.
+5. 📋 **Краткое описание:** Суть акции, буста, турнира, лаунчпула или квеста.
 6. ⚡ **Пошаговая инструкция:** Четкие действия для участия.
 7. 🎁 **Награды / Призовой фонд:** Официальные награды.
 8. 💡 **Детальный расчет комиссий, затрат на газ и профита:** Посчитай затраты и выдай математический вердикт для разных уровней депозитов ($100, $1,000, $5,000, $20,000+).
@@ -480,7 +480,7 @@ def monitor_news():
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     
-    send_to_topic("SPREAD", "🚀 **Бот успешно запущен со всеми фильтрами и кнопками!**")
+    send_to_topic("SPREAD", "🚀 **Бот успешно запущен со всеми боевыми настройками!**")
     
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()

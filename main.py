@@ -61,13 +61,6 @@ def get_exchange_url(exchange, symbol):
     }
     return links.get(exchange, "https://google.com")
 
-def get_exchange_app_url(exchange, symbol):
-    return get_exchange_url(exchange, symbol)
-
-def get_exchange_link(exchange, symbol):
-    url = get_exchange_url(exchange, symbol)
-    return f"[{exchange}]({url})"
-
 def normalize_symbol(raw_sym):
     if not raw_sym:
         return ""
@@ -96,7 +89,7 @@ def analyze_text(text):
    - Биржи: #Binance #Bybit #OKX #Bitget #MEXC #BingX #KuCoin #WhiteBit #Kraken #Gate #Ourbit
    - Активности: #Promotion #RewardCenter #Alpha #AlphaBox #MysteryBox #TradingTournament #Challenge #Boost #Booster #Launchpool #Launchpad #Airdrop #DepositBonus #Listing #NewListing #Earn #Savings #Staking #SimpleEarn #Flexible #Locked #VoteToList #FeeRebate #Voucher #BetVoucher #MarginVoucher #Margin #IPO #PreMarket #IDO #IEO #VIP
 
-3. 🪙 **🪙 Токен / Проект:** Участвующие монеты или активы.
+3. 🪙 **Токен / Проект:** Участвующие монеты или активы.
 4. 📅 **Даты проведения:** Период проведения.
 5. 📋 **Краткое описание:** Суть акции, буста, турнира, лаунчпула или квеста.
 6. ⚡ **Пошаговая инструкция:** Четкие действия для участия.
@@ -121,7 +114,7 @@ def analyze_text(text):
         print(f"AI Error: {e}")
         return text
 
-def send_to_topic(topic_name, text, reply_to_message_id=None, reply_markup=None):
+def send_to_topic(topic_name, text, reply_to_message_id=None):
     thread_id = TOPICS.get(topic_name)
     if thread_id and CHAT_ID:
         try:
@@ -131,8 +124,7 @@ def send_to_topic(topic_name, text, reply_to_message_id=None, reply_markup=None)
                 text=text, 
                 parse_mode="Markdown", 
                 disable_web_page_preview=True,
-                reply_to_message_id=reply_to_message_id,
-                reply_markup=reply_markup
+                reply_to_message_id=reply_to_message_id
             )
             return res.message_id
         except Exception as e:
@@ -260,26 +252,23 @@ def monitor_spread():
                         else:
                             badge = "🚨 **SPREAD (>= 3%)**"
 
-                        min_link = get_exchange_link(min_ex, sym)
-                        max_link = get_exchange_link(max_ex, sym)
+                        min_url = get_exchange_url(min_ex, sym)
+                        max_url = get_exchange_url(max_ex, sym)
                         
-                        overview_list = [f"🔹 {get_exchange_link(ex, sym)}: `${p}`" for ex, p in ex_data.items()]
+                        overview_list = [f"🔹 [{ex}]({get_exchange_url(ex, sym)}): `${p}`" for ex, p in ex_data.items()]
                         overview = "\n".join(overview_list)
                         
                         msg_text = (
                             f"{badge}\n"
                             f"🪙 **#{sym} | Spread: `{spread:.2f}%`**\n\n"
-                            f"🟢 **Long ({min_link}):** `${min_p}`\n"
-                            f"🔴 **Short ({max_link}):** `${max_p}`\n\n"
-                            f"📝 **All Exchanges Overview:**\n{overview}"
+                            f"🟢 **Long:** `${min_p}`\n"
+                            f"🔴 **Short:** `${max_p}`\n\n"
+                            f"📝 **All Exchanges Overview:**\n{overview}\n\n"
+                            f"🔗 **Открыть в приложениях:**\n"
+                            f"📱 [Открыть в {min_ex}]({min_url}) | 📱 [Открыть в {max_ex}]({max_url})"
                         )
                         
-                        markup = telebot.types.InlineKeyboardMarkup(row_width=2)
-                        btn_min = telebot.types.InlineKeyboardButton(f"🟢 Long: {min_ex}", url=get_exchange_app_url(min_ex, sym))
-                        btn_max = telebot.types.InlineKeyboardButton(f"🔴 Short: {max_ex}", url=get_exchange_app_url(max_ex, sym))
-                        markup.add(btn_min, btn_max)
-                        
-                        msg_id = send_to_topic("SPREAD", msg_text, reply_markup=markup)
+                        msg_id = send_to_topic("SPREAD", msg_text)
                         if msg_id:
                             active_spreads[sym] = {
                                 "msg_id": msg_id,
@@ -394,21 +383,21 @@ def monitor_funding():
                     if sig_id not in processed_arbitrage:
                         processed_arbitrage.add(sig_id)
                         
-                        overview_list = [f"🔹 {get_exchange_link(ex, symbol)}: `{r:+.2f}%`" for ex, r in sorted(ex_rates.items(), key=lambda x: x[1], reverse=True)]
+                        overview_list = [f"🔹 [{ex}]({get_exchange_url(ex, symbol)}): `{r:+.2f}%`" for ex, r in sorted(ex_rates.items(), key=lambda x: x[1], reverse=True)]
                         overview = "\n".join(overview_list)
+
+                        sorted_exs = sorted(ex_rates.items(), key=lambda x: abs(x[1]), reverse=True)
+                        links_list = [f"📱 [Открыть в {ex}]({get_exchange_url(ex, symbol)})" for ex, rate in sorted_exs[:4]]
+                        links_text = " | ".join(links_list)
 
                         msg = (
                             f"🔥 **FUNDING ARBITRAGE / HIGH RATE (>= ±1.0%)**\n"
                             f"🪙 **#{symbol}** (Spread: `{funding_spread:.2f}%`)\n\n"
-                            f"📊 **All Exchanges Rates:**\n{overview}"
+                            f"📊 **All Exchanges Rates:**\n{overview}\n\n"
+                            f"🔗 **Открыть приложения:**\n{links_text}"
                         )
-                        
-                        markup = telebot.types.InlineKeyboardMarkup(row_width=2)
-                        sorted_exs = sorted(ex_rates.items(), key=lambda x: abs(x[1]), reverse=True)
-                        for ex, rate in sorted_exs[:4]:
-                            markup.add(telebot.types.InlineKeyboardButton(f"{ex}: {rate:+.2f}%", url=get_exchange_app_url(ex, symbol)))
 
-                        send_to_topic("FUNDING", msg, reply_markup=markup)
+                        send_to_topic("FUNDING", msg)
 
         except Exception as e:
             print(f"Funding Monitor Error: {e}")

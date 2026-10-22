@@ -29,7 +29,7 @@ TOPICS = {
     "KRAKEN": 20,
     "FUNDING": 22, 
     "SPREAD": 24,
-    "WEB3_MONITOR": 26  # Топик для OKX Web3, Binance Web3, альфа-боксов и квестов
+    "WEB3_MONITOR": 26  # Топик для OKX Web3, Binance Web3, Bybit Galaxy, альфа-боксов и квестов
 }
 
 processed_ids = set()
@@ -76,9 +76,9 @@ def analyze_text(text):
     if not OPENROUTER_API_KEY:
         return text
     prompt = f"""
-Ты — главный крипто-аналитик и эксперт по абузу биржевых промо-акций, Web3-квестов, альфа-боксов, турниров и ваучерных механик. Проанализируй текст официального анонса и сформируй детальный структурированный отчет:
+Ты — главный крипто-аналитик и эксперт по абузу биржевых промо-акций, Web3-квестов, альфа-боксов (Bybit Galaxy, Binance Alpha, OKX Web3), турниров и ваучерных механик. Проанализируй текст официального анонса и сформируй детальный структурированный отчет:
 
-1. 📌 **Источник / Платформа:** Название биржи или экосистемы (OKX Web3, Binance Web3, Bybit, Bitget и т.д.).
+1. 📌 **Источник / Платформа:** Название биржи или экосистемы (OKX Web3, Binance Web3, Bybit Galaxy, Bitget и т.д.).
 2. 🏷 **Тип события / Теги:** Присвой ВСЕ подпадающие теги из расширенного списка:
    - Экосистемы и Web3: #OKX_Web3 #Binance_Web3 #Bybit_Web3 #Bitget_Web3 #Web3 #DApp #Quest #Task
    - Биржи: #Binance #Bybit #OKX #Bitget #MEXC #BingX #KuCoin #WhiteBit #Kraken #Gate #Ourbit
@@ -90,7 +90,7 @@ def analyze_text(text):
 6. ⚡ **Пошаговая инструкция:** Что нужно сделать (подключение кошелька, транзакции, фарминг, набивание объема под ваучеры).
 7. 🎁 **Награды / Призовой фонд:** Все официальные награды (альфа-боксы, ваучеры на ставки/маржу, пулы токенов, бусты доходности).
 8. 💡 **Детальный расчет комиссий, затрат на газ и профита (ОБЯЗАТЕЛЬНО для всех уровней):**
-   - Распиши уровни объемов, депозитов, набивания оборота или транзакционных затрат ($100, $1,000, $5,000, $20,000 и т.д.).
+   - Распиши уровни объемов, депозитов, набивания оборота или транзакционных затрат в сетях ($100, $1,000, $5,000, $20,000 и т.д.).
    - Посчитай фьючерсную/спотовую комиссию (Taker ~0.05% x 2, Maker ~0.02% x 2) или затраты на газ в Web3-сетях.
    - Сопоставь затраты с официальной наградой (учитывая номинал ваучеров, шанс выпадения в альфа/мистери боксах) и выдай четкий математический вердикт: выгодно ли участвовать на каждом уровне!
 
@@ -133,7 +133,7 @@ def process_item(item_id, raw_text, default_topic):
     
     # Автоматическая маршрутизация Web3 и Альфа новостей в отдельный топик
     target_topic = default_topic
-    if any(tag in ai_result for tag in ["#OKX_Web3", "#Binance_Web3", "#Web3", "#Alpha", "#AlphaBox"]):
+    if any(tag in ai_result for tag in ["#OKX_Web3", "#Binance_Web3", "#Bybit_Web3", "#Web3", "#Alpha", "#AlphaBox"]):
         target_topic = "WEB3_MONITOR"
         
     send_to_topic(target_topic, ai_result)
@@ -300,7 +300,9 @@ def monitor_spread():
 
         except Exception as e:
             print(f"Futures Spread Monitor Error: {e}")
-        time.sleep(30)
+        
+        # Безопасный интервал 45 секунд для спредов
+        time.sleep(45)
 
 # ==================== FUNDING MONITOR (FAST SIGNALS, NO AI) ====================
 def monitor_funding():
@@ -374,7 +376,8 @@ def monitor_funding():
         except Exception as e:
             print(f"Funding Monitor Error: {e}")
             
-        time.sleep(120)
+        # Оптимальный интервал 5 минут для фандинга
+        time.sleep(300)
 
 def check_and_send_funding(exchange, symbol, rate):
     if abs(rate) >= 0.5:
@@ -404,7 +407,9 @@ def monitor_news():
                     process_item(entry.id, f"{entry.title}\n{entry.link}", topic)
             except Exception as e:
                 print(f"RSS Error ({url}): {e}")
-        time.sleep(120)
+        
+        # Безопасный интервал 10 минут для новостей и Web3
+        time.sleep(600)
 
 # ==================== TELEGRAM HANDLERS ====================
 @bot.message_handler(commands=['start'])
@@ -412,11 +417,11 @@ def start_cmd(message):
     if message.chat.type == "private" and message.from_user.id not in ADMIN_IDS:
         bot.reply_to(message, "⛔ Доступ ограничен.")
         return
-    bot.reply_to(message, "👋 **Bot запущен! Все Web3-модули, альфа-боксы, ваучерные ставки и ИИ-анализ активны.**", parse_mode="Markdown")
+    bot.reply_to(message, "👋 **Bot запущен! Все Web3-модули, альфа-боксы, ваучеры и безопасные интервалы активны.**", parse_mode="Markdown")
 
 # ==================== MAIN EXECUTION ====================
 if __name__ == "__main__":
-    send_to_topic("SPREAD", "🟢 Бот запущен: мониторинг спредов, фандинга, Web3 и всех промо-акций активен!")
+    send_to_topic("SPREAD", "🟢 Бот запущен: мониторинг спредов (45с), фандинга (5м), Web3 и промо (10м) активен!")
     
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()

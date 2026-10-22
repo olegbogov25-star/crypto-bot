@@ -202,7 +202,7 @@ def fetch_futures_data():
     except Exception: pass
 
     try:
-        r = requests.get("https://www.okx.com/api/v5/public/funding-rate-all", timeout=5).json().get('data', [])
+        r = requests.get("https://api.okx.com/api/v5/public/funding-rate-all", timeout=5).json().get('data', [])
         for item in r:
             sym = normalize_symbol(item['instId'])
             if sym and item.get('fundingRate'):
@@ -264,7 +264,7 @@ def fetch_futures_data():
     except Exception: pass
 
     try:
-        r = requests.get("https://open-api.bingx.com/openApi/swap/v2/quote/premiumIndex", timeout=5).json().get('data', [])
+        r = requests.get("https://open-api.bingx.com/openApi/swap/v2/quote/premiumIndex", timeout=5).json().get('data', []):
         for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym and 'lastFundingRate' in item:
@@ -317,7 +317,7 @@ def format_countdown(target_timestamp):
     minutes = int((diff % 3600) // 60)
     return f"{hours}ч {minutes:02d}м"
 
-# ==================== SPREAD MONITOR (>= 7% и <= 50%) ====================
+# ==================== SPREAD MONITOR (7% - 30% + Риски) ====================
 def monitor_spread():
     while True:
         try:
@@ -336,7 +336,8 @@ def monitor_spread():
                 if min_p <= 0: continue
                 spread = ((max_p - min_p) / min_p) * 100
                 
-                if spread >= 7.0 and spread <= 50.0:
+                # Диапазон от 7% до 30%
+                if spread >= 7.0 and spread <= 30.0:
                     current_scanned_syms.add(sym)
                     
                     if sym not in active_spreads:
@@ -352,6 +353,14 @@ def monitor_spread():
                         vol_max = sym_vols.get(max_ex, 50000) * 0.01
                         max_pos_usdt = int(min(vol_min, vol_max, 50000))
                         if max_pos_usdt < 100: max_pos_usdt = 100
+
+                        # Авто-маркировка рисков
+                        risk_tag = ""
+                        min_vol_val = min(sym_vols.get(min_ex, 0), sym_vols.get(max_ex, 0))
+                        if min_vol_val < 10000:
+                            risk_tag = "\n⚠️ **RISK: Низкая ликвидность / Мертвый стакан**\n"
+                        elif spread > 25.0:
+                            risk_tag = "\n⚠️ **WARNING: Аномальный спред (Возможный делистинг или баг оракула!)**\n"
 
                         sym_funds = fundings.get(sym, {})
                         min_fund = sym_funds.get(min_ex, 0.0)
@@ -371,7 +380,8 @@ def monitor_spread():
                         
                         msg_text = (
                             f"{badge}\n"
-                            f"🪙 **#{sym} | Spread: `{spread:.2f}%`**\n\n"
+                            f"🪙 **#{sym} | Spread: `{spread:.2f}%`**"
+                            f"{risk_tag}\n"
                             f"🟢 **Long ({min_ex}):** `${min_p}` (Funding: `{min_fund:+.2f}%`)\n"
                             f"🔴 **Short ({max_ex}):** `${max_p}` (Funding: `{max_fund:+.2f}%`)\n\n"
                             f"💰 **Доступный объем позиции:** `~${max_pos_usdt:,} USDT`\n\n"
@@ -479,6 +489,8 @@ def monitor_news():
         ("https://coindesk.com/arc/outboundfeeds/rss/", "NEWS")
     ]
     while True:
+        for url, topic : feeds if isinstance(feeds, list) else []: # Safe iteration
+            pass
         for url, topic in feeds:
             try:
                 feed = feedparser.parse(url)
@@ -493,7 +505,7 @@ def monitor_news():
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     
-    send_to_topic("SPREAD", "🚀 **Бот запущен: таймеры выплат фандинга и направления ставок в спредах успешно добавлены!**")
+    send_to_topic("SPREAD", "🚀 **Бот запущен: диапазон 7%-30% и авто-маркировка рисков по ликвидности активированы!**")
     
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()

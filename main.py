@@ -23,8 +23,6 @@ TOPICS = {
 
 processed_ids = set()
 processed_arbitrage = set()
-
-# Словарь для отслеживания активных спредов: sym -> {"msg_id": int, "start_time": float}
 active_spreads = {}
 
 # ==================== HEALTHCHECK SERVER ====================
@@ -49,7 +47,7 @@ def get_exchange_link(exchange, symbol):
         "BingX": f"https://bingx.com/futures/forward/{base_sym}USDT",
         "KuCoin": f"https://www.kucoin.com/futures/trade/{base_sym}USDTM",
         "WhiteBit": f"https://whitebit.com/trade/{base_sym}_USDT?type=futures",
-        "Kraken": f"https://futures.kraken.com/trade/futures/{base_sym}USD",
+        "Kraken": f"https://futures.kraken.com/derivatives/api/v3/tickers",
         "Ourbit": f"https://www.ourbit.com/futures/trade/{base_sym}_USDT"
     }
     url = links.get(exchange, "https://google.com")
@@ -62,21 +60,27 @@ def get_message_link(message_id):
     thread_id = TOPICS.get("SPREAD", 24)
     return f"https://t.me/c/{clean_chat_id}/{message_id}?thread={thread_id}"
 
-# ==================== ADVANCED AI ANALYSIS & COMMISSION CALC ====================
+# ==================== AI ANALYSIS FOR PROMOTIONS / RSS ====================
 def analyze_text(text):
     if not OPENROUTER_API_KEY:
         return text
     prompt = f"""
-Ты — профессиональный крипто-аналитик и эксперт по абузу биржевых промо-акций. Проанализируй текст анонса (турнир, Mystery Box, торговый челлендж, промо-акция) и сформируй структурированный отчет:
+Ты — профессиональный аналитик крипто-биржевых промо-акций. Проанализируй текст официального анонса и сформируй детальный структурированный отчет:
 
-1. **Биржа / Источник и Теги:** (например, #Promotion #RewardCenter #TradingTournament)
-2. **Название события, Токен, Даты проведения.**
-3. **Краткое описание и призовой фонд.**
-4. **Пошаговая инструкция:** что нужно сделать по пунктам.
-5. **💡 Математический расчет и оценка выгодности (ОБЯЗАТЕЛЬНО для всех заданий на объем):**
-   - Распиши все доступные уровни торгового объема из условий (например: $100, $5,000, $20,000).
-   - Для каждого уровня **только математически точно** посчитай затраты на комиссию (учитывай, что на фьючерсах комиссия платится и за вход, и за выход. Средняя Taker-комиссия фьючерсов ~0.05% / $5 на $10,000 оборота, а при Maker-ордерах ~0.02% / $2 на $10,000).
-   - Четко выдели **самый выгодный уровень** (например: *"Уровень $100 — идеальный выбор, затраты на комиссию копеечные (~$0.05), окупается гарантированно. Уровни от $5,000+ требуют оценки призового пула"*).
+1. 📌 **Биржа / Источник:** Название биржи.
+2. 🏷 **Тип события / Теги:** Присвой ВСЕ подпадающие теги из списка:
+   - Биржи: #Binance #Bybit #OKX #Bitget #MEXC #BingX #KuCoin #WhiteBit #Kraken #Gate #Ourbit
+   - Активности: #Promotion #RewardCenter #TradingTournament #Challenge #Launchpool #Launchpad #Airdrop #DepositBonus #Listing #NewListing #Earn #Savings #VoteToList #FeeRebate #Voucher
+
+3. 🪙 **Токен / Проект:** Участвующие монеты.
+4. 📅 **Даты проведения:** Точный период проведения.
+5. 📋 **Краткое описание:** Суть события и призовой фонд.
+6. ⚡ **Пошаговая инструкция:** Что нужно сделать.
+7. 🎁 **Награды / Призовой фонд:** Все официальные награды (Mystery Box, ваучеры, пул USDT, токены).
+8. 💡 **Детальный расчет комиссий и профита (для акций с объемами/депозитами):**
+   - Распиши каждый уровень объема/депозита ($100, $1,000, $5,000, $20,000 и т.д.).
+   - Посчитай двойную комиссию на фьючерсах/споте (Taker ~0.05% x 2, Maker ~0.02% x 2).
+   - Сопоставь комиссию с официальной наградой и выдай вердикт: какой уровень объемa наиболее выгоден!
 
 - Если это служебное объявление без наград (ввод/вывод, техобслуживание, делистинг) — ответь строго одним словом: SKIP.
 
@@ -117,10 +121,9 @@ def process_item(item_id, raw_text, default_topic):
     
     send_to_topic(default_topic, ai_result)
 
-# ==================== FUTURES PRICES FETCHING (11 EXCHANGES) ====================
+# ==================== FUTURES PRICES FETCHING ====================
 def fetch_futures_prices():
     prices = {}
-    
     try:
         r = requests.get("https://fapi.binance.com/fapi/v1/ticker/price", timeout=5).json()
         for item in r:
@@ -209,7 +212,7 @@ def fetch_futures_prices():
 
     return prices
 
-# ==================== SPREAD MONITOR WITH ALIGNED TRACKING ====================
+# ==================== SPREAD MONITOR (FAST SIGNALS, NO AI) ====================
 def monitor_spread():
     while True:
         try:
@@ -252,7 +255,7 @@ def monitor_spread():
                                 "start_time": time.time()
                             }
             
-            # Проверяем сошедшие спреды
+            # Проверяем соходимость
             expired_syms = []
             for sym in list(active_spreads.keys()):
                 if sym not in current_scanned_syms or sym not in prices:
@@ -283,7 +286,7 @@ def monitor_spread():
             print(f"Futures Spread Monitor Error: {e}")
         time.sleep(30)
 
-# ==================== FUNDING MONITOR ====================
+# ==================== FUNDING MONITOR (FAST SIGNALS, NO AI) ====================
 def monitor_funding():
     while True:
         try:
@@ -393,11 +396,11 @@ def start_cmd(message):
     if message.chat.type == "private" and message.from_user.id not in ADMIN_IDS:
         bot.reply_to(message, "⛔ Доступ ограничен.")
         return
-    bot.reply_to(message, "👋 **Bot запущен! Все модули соединены и работают.**", parse_mode="Markdown")
+    bot.reply_to(message, "👋 **Bot запущен! Разделение быстрого мониторинга и ИИ-анализа промо-акций готово.**", parse_mode="Markdown")
 
 # ==================== MAIN EXECUTION ====================
 if __name__ == "__main__":
-    send_to_topic("SPREAD", "🟢 Мониторинг спредов, фандинга и промо-акций с расчётом комиссий готов к работе!")
+    send_to_topic("SPREAD", "🟢 Бот запущен: раздельная работа быстрых сигналов и ИИ-анализа акций включена!")
     
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()

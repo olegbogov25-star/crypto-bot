@@ -9,13 +9,12 @@ from flask import Flask
 # ==================== CONFIGURATION ====================
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-CHAT_ID = "-1004451728851"  # Актуальный ID супергруппы
+CHAT_ID = "-1004451728851"
 ADMIN_IDS = [1043209905]
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 app = Flask(__name__)
 
-# Точная карта топиков со всеми реальными ID
 TOPICS = {
     "NEWS": 2, 
     "MEXC": 68,     
@@ -27,8 +26,8 @@ TOPICS = {
     "WHITEBIT": 72, 
     "KRAKEN": 73,   
     "GATE": 67,     
-    "FUNDING": 76,  # ID топика фандинга
-    "SPREAD": 77    # ID топика спредов
+    "FUNDING": 76,  
+    "SPREAD": 77    
 }
 
 processed_ids = set()
@@ -44,7 +43,7 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# ==================== LINK GENERATORS (С прямыми диплинками для кнопок) ====================
+# ==================== LINK GENERATORS ====================
 def get_exchange_url(exchange, symbol):
     base_sym = symbol.replace('USDT', '')
     links = {
@@ -57,33 +56,18 @@ def get_exchange_url(exchange, symbol):
         "BingX": f"https://bingx.com/futures/forward/{base_sym}USDT",
         "KuCoin": f"https://www.kucoin.com/futures/trade/{base_sym}USDTM",
         "WhiteBit": f"https://whitebit.com/trade/{base_sym}_USDT?type=futures",
-        "Kraken": f"https://futures.kraken.com/derivatives/api/v3/tickers",
+        "Kraken": f"https://futures.kraken.com",
         "Ourbit": f"https://www.ourbit.com/futures/trade/{base_sym}_USDT"
     }
     return links.get(exchange, "https://google.com")
 
 def get_exchange_app_url(exchange, symbol):
-    base_sym = symbol.replace('USDT', '')
-    app_links = {
-        "Binance": f"bnc://app.binance.com/en/futures/trade?symbol={base_sym}USDT",
-        "Bybit": f"bybit://trade/usdt/{base_sym}USDT",
-        "OKX": f"okx://trade?instId={base_sym}-USDT-SWAP",
-        "Gate": f"gateio://futures/USDT/{base_sym}_USDT",
-        "Bitget": f"bitget://futures/usdt/{base_sym}USDT",
-        "MEXC": f"mexc://futures/trade?symbol={base_sym}_USDT",
-        "BingX": f"bingx://futures/forward/{base_sym}USDT",
-        "KuCoin": f"kucoin://futures/trade/{base_sym}USDTM",
-        "WhiteBit": f"whitebit://trade/{base_sym}_USDT",
-        "Kraken": f"https://futures.kraken.com",
-        "Ourbit": f"https://www.ourbit.com"
-    }
-    return app_links.get(exchange, get_exchange_url(exchange, symbol))
+    return get_exchange_url(exchange, symbol)
 
 def get_exchange_link(exchange, symbol):
     url = get_exchange_url(exchange, symbol)
     return f"[{exchange}]({url})"
 
-# ==================== HELPER: NORMALIZE SYMBOL ====================
 def normalize_symbol(raw_sym):
     if not raw_sym:
         return ""
@@ -97,7 +81,7 @@ def normalize_symbol(raw_sym):
             sym += 'USDT'
     return sym
 
-# ==================== ADVANCED AI & FULL WEB3 / PROMO CALCULATOR (42 ТЕГА) ====================
+# ==================== ADVANCED AI & PROMO CALCULATOR ====================
 def analyze_text(text):
     if not OPENROUTER_API_KEY:
         return text
@@ -150,12 +134,9 @@ def send_to_topic(topic_name, text, reply_to_message_id=None, reply_markup=None)
                 reply_to_message_id=reply_to_message_id,
                 reply_markup=reply_markup
             )
-            print(f"SUCCESS: Sent message to {topic_name} (ID: {thread_id}), Message ID: {res.message_id}")
             return res.message_id
         except Exception as e:
-            print(f"❌ Send Error ({topic_name}) with thread_id {thread_id}: {e}")
-    else:
-        print(f"❌ Send Error ({topic_name}): Missing CHAT_ID ({CHAT_ID}) or thread_id ({thread_id})")
+            print(f"❌ Send Error ({topic_name}): {e}")
     return None
 
 def process_item(item_id, raw_text, default_topic):
@@ -170,30 +151,14 @@ def process_item(item_id, raw_text, default_topic):
     target_topic = default_topic
     upper_res = ai_result.upper()
     
-    if "#BINANCE" in upper_res or "BINANCE" in upper_res:
-        target_topic = "BINANCE"
-    elif "#BYBIT" in upper_res or "BYBIT" in upper_res:
-        target_topic = "BYBIT"
-    elif "#OKX" in upper_res or "OKX" in upper_res:
-        target_topic = "OKX" if "OKX" in TOPICS else "NEWS"
-    elif "#BITGET" in upper_res or "BITGET" in upper_res:
-        target_topic = "BITGET"
-    elif "#MEXC" in upper_res or "MEXC" in upper_res:
-        target_topic = "MEXC"
-    elif "#BINGX" in upper_res or "BINGX" in upper_res:
-        target_topic = "BINGX"
-    elif "#KUCOIN" in upper_res or "KUCOIN" in upper_res:
-        target_topic = "KUCOIN"
-    elif "#WHITEBIT" in upper_res or "WHITEBIT" in upper_res:
-        target_topic = "WHITEBIT"
-    elif "#KRAKEN" in upper_res or "KRAKEN" in upper_res:
-        target_topic = "KRAKEN"
-    elif "#GATE" in upper_res or "GATE" in upper_res:
-        target_topic = "GATE"
-        
+    for ex_name in TOPICS.keys():
+        if f"#{ex_name}" in upper_res or ex_name in upper_res:
+            target_topic = ex_name
+            break
+            
     send_to_topic(target_topic, ai_result)
 
-# ==================== FUTURES PRICES FETCHING (11 EXCHANGES) ====================
+# ==================== FUTURES PRICES FETCHING (Без Kraken и WhiteBit) ====================
 def fetch_futures_prices():
     prices = {}
     try:
@@ -204,15 +169,15 @@ def fetch_futures_prices():
     except Exception: pass
 
     try:
-        r = requests.get("https://api.bybit.com/v5/market/tickers?category=linear", timeout=5).json()
-        for item in r.get('result', {}).get('list', []):
+        r = requests.get("https://api.bybit.com/v5/market/tickers?category=linear", timeout=5).json().get('result', {}).get('list', [])
+        for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym: prices.setdefault(sym, {})['Bybit'] = float(item['lastPrice'])
     except Exception: pass
 
     try:
-        r = requests.get("https://www.okx.com/api/v5/market/tickers?instType=SWAP", timeout=5).json()
-        for item in r.get('data', []):
+        r = requests.get("https://www.okx.com/api/v5/market/tickers?instType=SWAP", timeout=5).json().get('data', [])
+        for item in r:
             sym = normalize_symbol(item['instId'])
             if sym: prices.setdefault(sym, {})['OKX'] = float(item['last'])
     except Exception: pass
@@ -225,53 +190,37 @@ def fetch_futures_prices():
     except Exception: pass
 
     try:
-        r = requests.get("https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES", timeout=5).json()
-        for item in r.get('data', []):
+        r = requests.get("https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES", timeout=5).json().get('data', [])
+        for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym: prices.setdefault(sym, {})['Bitget'] = float(item['lastPr'])
     except Exception: pass
 
     try:
-        r = requests.get("https://contract.mexc.com/api/v1/contract/ticker", timeout=5).json()
-        for item in r.get('data', []):
+        r = requests.get("https://contract.mexc.com/api/v1/contract/ticker", timeout=5).json().get('data', [])
+        for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym: prices.setdefault(sym, {})['MEXC'] = float(item['lastPrice'])
     except Exception: pass
 
     try:
-        r = requests.get("https://open-api.bingx.com/openApi/swap/v2/quote/ticker", timeout=5).json()
-        for item in r.get('data', []):
+        r = requests.get("https://open-api.bingx.com/openApi/swap/v2/quote/ticker", timeout=5).json().get('data', [])
+        for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym: prices.setdefault(sym, {})['BingX'] = float(item['lastPrice'])
     except Exception: pass
 
     try:
-        r = requests.get("https://api-futures.kucoin.com/api/v1/contracts/active", timeout=5).json()
-        for item in r.get('data', []):
+        r = requests.get("https://api-futures.kucoin.com/api/v1/contracts/active", timeout=5).json().get('data', [])
+        for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym and 'lastTradePrice' in item:
                 prices.setdefault(sym, {})['KuCoin'] = float(item['lastTradePrice'])
     except Exception: pass
 
     try:
-        r = requests.get("https://whitebit.com/api/v4/public/futures", timeout=5).json()
-        for item in r.get('result', []):
-            sym = normalize_symbol(item['ticker'])
-            if sym and 'last_price' in item:
-                prices.setdefault(sym, {})['WhiteBit'] = float(item['last_price'])
-    except Exception: pass
-
-    try:
-        r = requests.get("https://futures.kraken.com/derivatives/api/v3/tickers", timeout=5).json()
-        for item in r.get('tickers', []):
-            sym = normalize_symbol(item['symbol'])
-            if sym and 'last' in item:
-                prices.setdefault(sym, {})['Kraken'] = float(item['last'])
-    except Exception: pass
-
-    try:
-        r = requests.get("https://api.ourbit.com/api/v1/futures/market/tickers", timeout=5).json()
-        for item in r.get('data', []):
+        r = requests.get("https://api.ourbit.com/api/v1/futures/market/tickers", timeout=5).json().get('data', [])
+        for item in r:
             sym = normalize_symbol(item.get('symbol', ''))
             if sym and 'close' in item:
                 prices.setdefault(sym, {})['Ourbit'] = float(item['close'])
@@ -279,7 +228,7 @@ def fetch_futures_prices():
 
     return prices
 
-# ==================== SPREAD MONITOR (>= 3.0%) ====================
+# ==================== SPREAD MONITOR (>= 3.0% до 50%) ====================
 def monitor_spread():
     while True:
         try:
@@ -298,7 +247,7 @@ def monitor_spread():
                 if min_p <= 0: continue
                 spread = ((max_p - min_p) / min_p) * 100
                 
-                if spread >= 3.0:
+                if spread >= 3.0 and spread <= 50.0:
                     current_scanned_syms.add(sym)
                     
                     if sym not in active_spreads:
@@ -336,38 +285,12 @@ def monitor_spread():
                                 "msg_id": msg_id,
                                 "start_time": time.time()
                             }
-            
-            expired_syms = []
-            for sym in list(active_spreads.keys()):
-                if sym not in current_scanned_syms or sym not in prices:
-                    expired_syms.append(sym)
-                else:
-                    ex_data = prices[sym]
-                    if len(ex_data) >= 2:
-                        curr_min = min(ex_data.values())
-                        curr_max = max(ex_data.values())
-                        if curr_min > 0:
-                            curr_spread = ((curr_max - curr_min) / curr_min) * 100
-                            if curr_spread < 1.0:
-                                expired_syms.append(sym)
-
-            for sym in expired_syms:
-                data = active_spreads.pop(sym, None)
-                if data:
-                    duration = int(time.time() - data["start_time"])
-                    mins = duration // 60
-                    secs = duration % 60
-                    time_str = f"{mins}:{secs:02d}"
-                    
-                    aligned_msg = f"✅ `[{sym}]` prices aligned in `{time_str}`"
-                    send_to_topic("SPREAD", aligned_msg, reply_to_message_id=data["msg_id"])
-
         except Exception as e:
-            print(f"Futures Spread Monitor Error: {e}")
+            print(f"Spread Monitor Error: {e}")
         
         time.sleep(45)
 
-# ==================== FUNDING MONITOR (>= ±0.5%) ====================
+# ==================== FUNDING MONITOR (>= ±1.0% + МЕЖБИРЖЕВОЙ СПРЕД ФАНДИНГА) ====================
 def monitor_funding():
     while True:
         try:
@@ -424,33 +347,25 @@ def monitor_funding():
                         collect_rate("KuCoin", item['symbol'], float(item['fundingFeeRate']) * 100)
             except Exception: pass
 
-            try:
-                for item in requests.get("https://whitebit.com/api/v4/public/futures", timeout=5).json().get('result', []):
-                    if 'funding_rate' in item:
-                        collect_rate("WhiteBit", item['ticker'], float(item['funding_rate']) * 100)
-            except Exception: pass
-
-            try:
-                for item in requests.get("https://futures.kraken.com/derivatives/api/v3/tickers", timeout=5).json().get('tickers', []):
-                    if 'fundingRate' in item:
-                        collect_rate("Kraken", item['symbol'], float(item['fundingRate']) * 100)
-            except Exception: pass
-
-            try:
-                for item in requests.get("https://api.ourbit.com/api/v1/futures/market/tickers", timeout=5).json().get('data', []):
-                    if 'fundingRate' in item:
-                        collect_rate("Ourbit", item['symbol'], float(item['fundingRate']) * 100)
-            except Exception: pass
-
             for symbol, ex_rates in all_funding.items():
-                if not ex_rates:
+                if len(ex_rates) < 2:
                     continue
                 
-                has_high_funding = any(abs(rate) >= 0.5 for rate in ex_rates.values())
+                # Ищем минимальную и максимальную ставку фандинга среди бирж для этой монеты
+                min_ex = min(ex_rates, key=ex_rates.get)
+                max_ex = max(ex_rates, key=ex_rates.get)
+                min_rate = ex_rates[min_ex]
+                max_rate = ex_rates[max_ex]
                 
-                if has_high_funding:
+                funding_spread = max_rate - min_rate  # Межбанковский спред фандинга
+                
+                # Условие сработки: либо любая ставка >= 1% / <= -1%, либо межбанковский спред фандинга >= 1.0%
+                has_high_absolute = any(abs(rate) >= 1.0 for rate in ex_rates.values())
+                has_funding_spread = funding_spread >= 1.0
+                
+                if has_high_absolute or has_funding_spread:
                     rates_str = "_".join([f"{ex}:{rate:.2f}" for ex, rate in sorted(ex_rates.items())])
-                    sig_id = f"HIGH_FUND_{symbol}_{rates_str}"
+                    sig_id = f"FUND_SPREAD_{symbol}_{rates_str}"
                     
                     if sig_id not in processed_arbitrage:
                         processed_arbitrage.add(sig_id)
@@ -459,8 +374,8 @@ def monitor_funding():
                         overview = "\n".join(overview_list)
 
                         msg = (
-                            f"🔥 **HIGH FUNDING ALERT (>= ±0.5%)**\n"
-                            f"🪙 **#{symbol}**\n\n"
+                            f"🔥 **FUNDING ARBITRAGE / HIGH RATE (>= ±1.0%)**\n"
+                            f"🪙 **#{symbol}** (Spread: `{funding_spread:.2f}%`)\n\n"
                             f"📊 **All Exchanges Rates:**\n{overview}"
                         )
                         
@@ -497,7 +412,7 @@ def monitor_news():
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     
-    send_to_topic("SPREAD", "🚀 **Бот запущен с прямыми диплинками приложений и всеми настройками!**")
+    send_to_topic("SPREAD", "🚀 **Бот запущен с обновленным фандингом (от ±1% и межбанковским спредом фандинга)!**")
     
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()

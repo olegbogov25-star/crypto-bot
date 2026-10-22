@@ -21,17 +21,13 @@ EXCHANGE_CHATS = {
     "BINANCE": 3,
     "BYBIT": 4,
     "OKX": 6,
-    "GATE": 7,
-    "BITGET": 8,
-    "MEXC": 9,
-    "BINGX": 10,
-    "KUCOIN": 11,
-    "KRAKEN": 12,
-    "WHITEBIT": 13,
-    "SUMMARY": 17,  # Ветка Сводки
-    "STAKING": 14,
-    "FUNDING": 15,
-    "SPREAD": 16,
+    "GATE": 67,
+    "BITGET": 69,
+    "MEXC": 68,
+    "BINGX": 70,
+    "KUCOIN": 71,
+    "KRAKEN": 73,
+    "WHITEBIT": 72,
 }
 
 RESTRICTED_TOPICS = set(EXCHANGE_CHATS.values())
@@ -140,7 +136,7 @@ def analyze_and_send(title, summary, link, exchange_name):
 def monitor_rss():
     print("🚀 Модуль автомониторинга RSS запущен...")
     
-    # 🛡 Предварительная загрузка текущих новостей при старте для исключения дубликатов
+    # Предварительная загрузка текущих новостей при старте для исключения дубликатов
     for exchange, url in RSS_FEEDS.items():
         try:
             feed = feedparser.parse(url)
@@ -202,13 +198,14 @@ def monitor_funding():
                             f"🔗 **Ссылка:** [Открыть фьючерсы]({trade_url})"
                         )
                         
-                        bot.send_message(
-                            chat_id=CHAT_ID,
-                            message_thread_id=EXCHANGE_CHATS["FUNDING"],
-                            text=text,
-                            parse_mode="Markdown",
-                            reply_markup=markup
-                        )
+                        if "FUNDING" in EXCHANGE_CHATS:
+                            bot.send_message(
+                                chat_id=CHAT_ID,
+                                message_thread_id=EXCHANGE_CHATS["FUNDING"],
+                                text=text,
+                                parse_mode="Markdown",
+                                reply_markup=markup
+                            )
                         time.sleep(1)
         except Exception as e:
             print(f"❌ Ошибка в мониторинге фандинга: {e}")
@@ -286,7 +283,7 @@ if __name__ == "__main__":
     threading.Thread(target=monitor_funding, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()
     
-    print("🤖 CryptoMonitor Bot запущен и готов к работе!")
+    print("🤖 CryptoMonitor Bot запущен со всеми ветками бирж!")
     
     # Защищенный цикл бесконечного подбора сообщений
     while True:

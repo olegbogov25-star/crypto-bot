@@ -15,21 +15,20 @@ ADMIN_IDS = [1043209905]
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 app = Flask(__name__)
 
-# Реальная карта твоих топиков из Telegram
+# Точная карта топиков со всеми реальными ID из твоих скриншотов
 TOPICS = {
     "NEWS": 2, 
-    "OKX_BOOST": 4, 
-    "MEXC": 6, 
-    "BYBIT": 8, 
-    "BINANCE": 10,
-    "BITGET": 12, 
-    "BINGX": 14, 
-    "KUCOIN": 16, 
-    "WHITEBIT": 18, 
-    "KRAKEN": 20,
-    "FUNDING": 76,  # Реальный ID топика FUNDING[cite: 15]
-    "SPREAD": 77,   # Реальный ID топика SPREAD[cite: 16]
-    "WEB3_MONITOR": 26  # Выделенный топик для Web3, X Launch, Bybit Galaxy, Megadrop и Binance Square
+    "MEXC": 68,     #[cite: 14]
+    "BYBIT": 4,     #[cite: 12]
+    "BINANCE": 3,   #[cite: 15]
+    "BITGET": 69,   #[cite: 21]
+    "BINGX": 70,    #[cite: 10]
+    "KUCOIN": 71,   #[cite: 13]
+    "WHITEBIT": 72, #[cite: 17]
+    "KRAKEN": 73,   #[cite: 18]
+    "GATE": 67,     #[cite: 16]
+    "FUNDING": 76,  #[cite: 19]
+    "SPREAD": 77    #[cite: 20]
 }
 
 processed_ids = set()
@@ -76,25 +75,22 @@ def analyze_text(text):
     if not OPENROUTER_API_KEY:
         return text
     prompt = f"""
-Ты — главный крипто-аналитик и эксперт по абузу биржевых промо-акций, Web3-экосистем, лаунчпулов, пулов ликвидности и контентных программ. Проанализируй текст официального анонса (с сайта биржи, веб-кошельков, платформ вроде OKX Web3 / X Launch, Bybit Galaxy, Binance Alpha, Square) и сформируй детальный структурированный отчет:
+Ты — главный крипто-аналитик и эксперт по абузу биржевых промо-акций, Web3-экосистем, лаунчпулов, пулов ликвидности и контентных программ. Проанализируй текст официального анонса и сформируй детальный структурированный отчет:
 
-1. 📌 **Источник / Платформа:** Название биржи или Web3-экосистемы (OKX Web3, Binance Web3, Binance Square, Bybit Galaxy, Bybit Web3 и т.д.).
+1. 📌 **Источник / Платформа:** Название биржи (Binance, Bybit, OKX, Bitget, MEXC и т.д.).
 2. 🏷 **Тип события / Теги:** Присвой ВСЕ подпадающие теги из расширенного списка:
-   - Web3, Экосистемы и Кошельки: #OKX_Web3 #Binance_Web3 #Bybit_Web3 #Bitget_Web3 #Web3 #DApp #Quest #Task #XLiquidity
-   - X-экосистема и Специфические разделы: #XLaunch #XTrade #TokenSplash #Megadrop #ByVotes #BinancePay
-   - Контент и Авторские программы: #BinanceSquare #Square #WriteToEarn #CreatorPad
+   - Web3 и Экосистемы: #OKX_Web3 #Binance_Web3 #Bybit_Web3 #Web3 #DApp #Quest #Task #XLiquidity
+   - Разделы: #XLaunch #XTrade #TokenSplash #Megadrop #ByVotes #BinancePay
+   - Контент: #BinanceSquare #Square #WriteToEarn #CreatorPad
    - Биржи: #Binance #Bybit #OKX #Bitget #MEXC #BingX #KuCoin #WhiteBit #Kraken #Gate #Ourbit
-   - Активности, Альфа, Стейкинг и Ваучеры: #Promotion #RewardCenter #Alpha #AlphaBox #MysteryBox #TradingTournament #Challenge #Boost #Booster #Launchpool #Launchpad #Airdrop #DepositBonus #Listing #NewListing #Earn #Savings #Staking #SimpleEarn #Flexible #Locked #VoteToList #FeeRebate #Voucher #BetVoucher #MarginVoucher #Margin #IPO #PreMarket #IDO #IEO #VIP
+   - Активности: #Promotion #RewardCenter #Alpha #AlphaBox #MysteryBox #TradingTournament #Challenge #Boost #Booster #Launchpool #Launchpad #Airdrop #DepositBonus #Listing #NewListing #Earn #Savings #Staking #SimpleEarn #Flexible #Locked #VoteToList #FeeRebate #Voucher #BetVoucher #MarginVoucher #Margin #IPO #PreMarket #IDO #IEO #VIP
 
 3. 🪙 **Токен / Проект:** Участвующие монеты или активы.
 4. 📅 **Даты проведения:** Период проведения.
-5. 📋 **Краткое описание:** Суть акции, буста, турнира, лаунчпула, пула ликвидности, Web3-квеста или контентной программы.
-6. ⚡ **Пошаговая инструкция:** Что нужно сделать (подключение кошелька, транзакции, фарминг в пулах ликвидности X Launch, написание постов под Write to Earn, набивание объема под ваучеры).
-7. 🎁 **Награды / Призовой фонд:** Все официальные награды (альфа-боксы, токены из X Launch / Megadrop, комиссии с постов Square, ваучеры, пулы токенов, бусты доходности, APY в стейкинге/ликвидности).
-8. 💡 **Детальный расчет комиссий, затрат на газ и профита (ОБЯЗАТЕЛЬНО для всех уровней):**
-   - Распиши уровни объемов, депозитов, набивания оборота или транзакционных затрат в сетях ($100, $1,000, $5,000, $20,000 и т.д.).
-   - Посчитай фьючерсную/спотовую комиссию (Taker ~0.05% x 2, Maker ~0.02% x 2) или затраты на газ в сетях при фарминге и участии в пулах.
-   - Сопоставь затраты с официальной наградой (учитывая номинал ваучеров, потенциал дохода с Binance Square, пулов X Launch или альфа-боксов) и выдай четкий математический вердикт: выгодно ли участвовать на каждом уровне!
+5. 📋 **Краткое описание:** Суть акции, буста, турнира, лаунчпула или квеста.
+6. ⚡ **Пошаговая инструкция:** Четкие действия для участия.
+7. 🎁 **Награды / Призовой фонд:** Официальные награды.
+8. 💡 **Детальный расчет комиссий, затрат на газ и профита:** Посчитай затраты и выдай математический вердикт для разных уровней депозитов ($100, $1,000, $5,000, $20,000+).
 
 - Если это служебное объявление без наград (ввод/вывод, техобслуживание, делистинг) — ответь строго одним словом: SKIP.
 
@@ -140,13 +136,30 @@ def process_item(item_id, raw_text, default_topic):
     if "SKIP" in ai_result.upper():
         return
     
+    # Автоматическая маршрутизация в папку соответствующей биржи
     target_topic = default_topic
-    web3_tags = [
-        "#OKX_Web3", "#Binance_Web3", "#Bybit_Web3", "#Web3", "#Alpha", "#AlphaBox", 
-        "#BinanceSquare", "#WriteToEarn", "#XLaunch", "#XTrade", "#XLiquidity", "#Megadrop", "#ByVotes", "#TokenSplash"
-    ]
-    if any(tag in ai_result for tag in web3_tags):
-        target_topic = "WEB3_MONITOR"
+    upper_res = ai_result.upper()
+    
+    if "#BINANCE" in upper_res or "BINANCE" in upper_res:
+        target_topic = "BINANCE"
+    elif "#BYBIT" in upper_res or "BYBIT" in upper_res:
+        target_topic = "BYBIT"
+    elif "#OKX" in upper_res or "OKX" in upper_res:
+        target_topic = "OKX" if "OKX" in TOPICS else "NEWS"
+    elif "#BITGET" in upper_res or "BITGET" in upper_res:
+        target_topic = "BITGET"
+    elif "#MEXC" in upper_res or "MEXC" in upper_res:
+        target_topic = "MEXC"
+    elif "#BINGX" in upper_res or "BINGX" in upper_res:
+        target_topic = "BINGX"
+    elif "#KUCOIN" in upper_res or "KUCOIN" in upper_res:
+        target_topic = "KUCOIN"
+    elif "#WHITEBIT" in upper_res or "WHITEBIT" in upper_res:
+        target_topic = "WHITEBIT"
+    elif "#KRAKEN" in upper_res or "KRAKEN" in upper_res:
+        target_topic = "KRAKEN"
+    elif "#GATE" in upper_res or "GATE" in upper_res:
+        target_topic = "GATE"
         
     send_to_topic(target_topic, ai_result)
 
@@ -408,6 +421,7 @@ def monitor_funding():
                 max_rate = ex_rates[max_ex]
                 min_rate = ex_rates[min_ex]
 
+                # Ловим порог от ±0.5% и выше (0.6, 0.7, 0.9, 1.2 и т.д.)
                 if abs(max_rate) >= 0.5 or abs(min_rate) >= 0.5:
                     sig_id = f"FUND_PAIR_{symbol}_{max_ex}_{max_rate:.2f}_{min_ex}_{min_rate:.2f}"
                     if sig_id not in processed_arbitrage:
@@ -456,11 +470,11 @@ def start_cmd(message):
     if message.chat.type == "private" and message.from_user.id not in ADMIN_IDS:
         bot.reply_to(message, "⛔ Доступ ограничен.")
         return
-    bot.reply_to(message, "👋 **Bot запущен! Спреды (3-10%+ с трекингом), парный фандинг (от ±0.5%), Web3 и Square активны.**", parse_mode="Markdown")
+    bot.reply_to(message, "👋 **Bot запущен! Все топики бирж синхронизированы, спреды (3-10%+), фандинг (от ±0.5% и выше) активны.**", parse_mode="Markdown")
 
 # ==================== MAIN EXECUTION ====================
 if __name__ == "__main__":
-    send_to_topic("SPREAD", "🟢 Бот запущен: мониторинг спредов (45с), фандинг-вилок от ±0.5% (5м), Web3 и Square (10м) активен!")
+    send_to_topic("SPREAD", "🟢 Бот запущен: мониторинг спредов (45с), фандинга от ±0.5% (5м) активен!")
     
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()

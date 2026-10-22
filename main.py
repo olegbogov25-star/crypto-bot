@@ -57,23 +57,24 @@ client = OpenAI(
 
 MODEL_NAME = "openai/gpt-4o-mini"
 
-# Исключаем тех. шум: депозиты, выводы, техобслуживание
+# Усовершенствованный фильтр: исключаем тех. шум, депозиты, выводы и изменения залогов/маржи
 EXCLUDED_KEYWORDS = [
     "deposit", "withdrawal", "wallet maintenance", "system upgrade",
-    "scheduled maintenance", "delisting", "resume deposit", "resume withdrawal"
+    "scheduled maintenance", "delisting", "resume deposit", "resume withdrawal",
+    "collateral", "margin ratio", "risk rate", "adjustment of margin"
 ]
 
 SYSTEM_PROMPT = """
 Ты — специализированный криптоаналитик для автоматического отслеживания и разбора важной информации по акциям, листингам, IPO, Web3-квестам, кампанию Bybit Galaxy, бустам (Boost/X Launch), бесплатным раздачам, промо-кодам, фьючерсным турнирам, бонусам за депозит, VIP-программам, фармингу (PoolX, GemsPool) и Launchpad/Launchpool от всех ключевых бирж.
 
-⚠️ ИГНОРИРУЙ и НЕ СОСТАВЛЯЙ отчеты по техническим новостям о вводе/выводе средств (Deposits/Withdrawals), плановом обслуживании кошельков (Maintenance) или мелких внутренних обновлениях!
+⚠️ ИГНОРИРУЙ и НЕ СОСТАВЛЯЙ отчеты по техническим новостям о вводе/выводе средств (Deposits/Withdrawals), изменениях залогов/маржи (Collateral/Margin), плановом обслуживании кошельков (Maintenance) или мелких внутренних обновлениях!
 
 Составляй чёткий, структурированный отчёт на русском языке strictly по следующему шаблону:
 
 📌 **Биржа / Источник:** [Укажи конкретную биржу или направление]
 🏷 **Тип события / Теги:** [Подбери точные англоязычные теги из списка под любой тип акции на любой бирже: #Listing, #NewListing, #InitialListing, #PreMarket, #IPO, #Launchpad, #Launchpool, #Megadrop, #Alpha, #CandyDrop, #CandyBomb, #Startup, #Kickstarter, #AirDrop, #Web3Airdrop, #Web3Quest, #Quest, #Galaxy, #Arcade, #Boost, #XLaunch, #Liquidity, #Yield, #Campaign, #Promotion, #Activity, #Event, #TradingCompetition, #LearnAndEarn, #FlashEarn, #Prediction, #Voucher, #Bonus, #VIP, #Futures, #Staking, #Earn, #PoolX, #GemsPool, #ByStarter, #HoldAndEarn, #CryptoBox, #TrialFund, #WOTD, #TradeBoost, #Code, #RewardCenter]
 
-💰 **Токен / Проект:** [Название токена, акции и тикер, например: BTC, NOT, DOGS, HMSTR, NVDA, M-Score]
+💰 **Токен / Проект:** [Название токена, акции и тикер, например: BTC, NOT, DOGS, HMSTR, NVDA]
 📅 **Даты / Время проведения:** [Период проведения, даты листинга, дедлайны]
 📋 **Краткое описание:** [2-3 предложения — главная суть анонса/акции/квеста/буста/прогноза/IPO/бонусов/Galaxy]
 
@@ -101,7 +102,7 @@ processed_links = set()
 
 
 def is_noise(text):
-    """Фильтрация служебных анонсов о вводах/выводах и техобслуживании"""
+    """Фильтрация служебных анонсов (вводы/выводы, залоги, техобслуживание)"""
     text_lower = text.lower()
     return any(keyword in text_lower for keyword in EXCLUDED_KEYWORDS)
 
@@ -113,7 +114,7 @@ def analyze_and_send(title, summary, link, exchange_name):
     
     # Отсекаем технический шум
     if is_noise(title) or is_noise(summary):
-        print(f"ℹ️ Пропущен служебный анонс (ввод/вывод/обслуживание): {title}")
+        print(f"ℹ️ Пропущен служебный анонс: {title}")
         return
 
     thread_id = EXCHANGE_CHATS[exchange_key]

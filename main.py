@@ -1,19 +1,22 @@
 import os
 import time
 import threading
+import requests
 import feedparser
 from openai import OpenAI
 import telebot
 
 # ==================== НАСТРОЙКИ ====================
-# Токены берутся из переменных окружения Render (или можно вписать вручную в кавычках)
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "ВАШ_ТОКЕН_БОТА_ОТ_BOTFATHER")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "ВАШ_КЛЮЧ_OPENROUTER")
 
-# ID твоей супергруппы ANTIGOI
+# ID вашей целевой супергруппы ANTIGOI
 CHAT_ID = "-1004451728851"
 
-# Словарь веток (биржи + стейкинг) с их message_thread_id
+# 🔴 ВПИШИ СЮДА СВОЙ TELEGRAM ID (число без кавычек, например: 987654321)
+ADMIN_IDS = [123456789]  # Узнать свой ID можно в боте @userinfobot
+
+# 📌 Актуализированные ID веток супергруппы:
 EXCHANGE_CHATS = {
     "BINANCE": 3,
     "BYBIT": 4,
@@ -25,10 +28,12 @@ EXCHANGE_CHATS = {
     "KUCOIN": 11,
     "KRAKEN": 12,
     "WHITEBIT": 13,
-    "STAKING": 14,  # Дополнительная ветка для Earn / Стейкинга
+    "SUMMARY": 17,  # Ветка Сводки
+    "STAKING": 14,
+    "FUNDING": 15,
+    "SPREAD": 16,
 }
 
-# Множество ID защищенных веток, куда обычным пользователям писать запрещено
 RESTRICTED_TOPICS = set(EXCHANGE_CHATS.values())
 # ===================================================
 
@@ -41,41 +46,37 @@ client = OpenAI(
 
 MODEL_NAME = "openai/gpt-4o-mini"
 
+# Исключаем тех. шум: депозиты, выводы, техобслуживание
+EXCLUDED_KEYWORDS = [
+    "deposit", "withdrawal", "wallet maintenance", "system upgrade",
+    "scheduled maintenance", "delisting", "resume deposit", "resume withdrawal"
+]
+
 SYSTEM_PROMPT = """
-Ты — специализированный криптоаналитик для автоматического отслеживания и разбора официальных анонсов, акций, листингов, Web3-квестов и промо-кампаний от следующих ключевых бирж и связанных экосистем:
-1. Binance (включая Binance Web3 Wallet / Binance Alpha)
-2. Bybit
-3. OKX (включая OKX Web3 Wallet / Cryptopedia / X Launch / X Trade)
-4. MEXC
-5. BingX
-6. Gate.io (включая Gate CandyDrop, Startup, Kickstarter)
-7. Bitget
-8. KuCoin
-9. Kraken
-10. WhiteBIT
-11. Staking / Earn / SimpleEarn / Savings / DualInvestment
+Ты — специализированный криптоаналитик для автоматического отслеживания и разбора важной информации по акциям, листингам, Web3-квестам, кампаниям и Launchpad/Launchpool от ключевых бирж.
 
-Твоя задача — проанализировать входящий текст официального анонса и составить чёткий, структурированный отчёт на русском языке strictly по следующему шаблону:
+⚠️ ИГНОРИРУЙ и НЕ СОСТАВЛЯЙ отчеты по техническим новостям о вводе/выводе средств (Deposits/Withdrawals), плановом обслуживании кошельков (Maintenance) или мелких внутренних обновлениях!
 
-📌 **Биржа / Источник:** [Укажи конкретную биржу или направление из списка выше]
-🏷 **Тип события / Теги:** [Подбери точные англоязычные теги из списка: #Listing, #NewListing, #InitialListing, #PreMarket, #Launchpad, #Launchpool, #CandyDrop, #Startup, #Kickstarter, #Pool, #AirDrop, #Web3Airdrop, #Web3Quest, #Cryptopedia, #Campaign, #Promotion, #Activity, #Event, #TradingCompetition, #FuturesCompetition, #SpotCompetition, #PredictToWin, #FuturesPricePrediction, #Leaderboard, #WODL, #WordOfTheDay, #LearnAndEarn, #Quiz, #TaskCenter, #RewardsHub, #MysteryBox, #LuckyDraw, #SpinAndWin, #DailyCheckIn, #ReferralProgram, #Staking, #Earn, #SimpleEarn, #Savings, #DualInvestment, #FeeRebate, #FuturesBonus, #ZeroFee, #Futures, #Spot, #CopyTrading, #GridTrading, #P2P, #Delisting]
+Составляй чёткий, структурированный отчёт на русском языке strictly по следующему шаблону:
+
+📌 **Биржа / Источник:** [Укажи конкретную биржу или направление]
+🏷 **Тип события / Теги:** [Подбери точные англоязычные теги из списка: #Listing, #NewListing, #InitialListing, #PreMarket, #Launchpad, #Launchpool, #CandyDrop, #Startup, #Kickstarter, #AirDrop, #Web3Airdrop, #Web3Quest, #Campaign, #Promotion, #Activity, #Event, #TradingCompetition, #LearnAndEarn, #Staking, #Earn]
 
 💰 **Токен / Проект:** [Название токена и тикер, например: BTC, NOT, DOGS, HMSTR]
-📅 **Даты / Время проведения:** [Период проведения, даты снимков баланса, время листинга, дедлайны]
+📅 **Даты / Время проведения:** [Период проведения, даты листинга, дедлайны]
 📋 **Краткое описание:** [2-3 предложения — главная суть анонса/акции/квеста]
 
 ⚡ **Что нужно сделать (Инструкция / Пошагово):**
 - [Шаг 1: Пройти KYC / Подключить Web3 Wallet / Депозит / Регистрация]
-- [Шаг 2: Сделать Swap / Торговый объем / Собрать конфеты в CandyDrop / Участие в Startup]
+- [Шаг 2: Торговый объем / Участие в акции / Сбор наград]
 - [Шаг 3: Ожидание распределения наград или клейм]
 
-🎁 **Награды / Призовой фонд:** [Общий призовой пул, ваучеры, плечи, размеры наград на человека]
-⚠️ **Важные условия / Ограничения и риски:** [Ограничения по странам, комиссии сети, уровни KYC, мин. объем, оценка рисков]
+🎁 **Награды / Призовой фонд:** [Общий призовой пул, размеры наград]
+⚠️ **Важные условия / Ограничения и риски:** [Ограничения по странам, комиссии сети, уровни KYC, оценка рисков]
 🔗 **Ссылка на источник/акцию:** [Вставь прямую официальную ссылку из текста]
-📱 **Переход в приложение:** [Укажи инструкцию, как открыть акцию в официальном мобильном приложении биржи]
+📱 **Переход в приложение:** [Укажи инструкцию, как открыть акцию в мобильном приложении]
 """
 
-# Список официальных RSS-источников бирж для автоматического мониторинга
 RSS_FEEDS = {
     "BINANCE": "https://www.binance.com/en/support/announcement/rss",
     "BYBIT": "https://announcements.bybit.com/en-US/rss/",
@@ -84,16 +85,26 @@ RSS_FEEDS = {
     "BITGET": "https://www.bitget.com/support/rss"
 }
 
-# Множество для хранения уже обработанных ссылок (защита от дубликатов)
+# Множество для защиты от дубликатов новостей
 processed_links = set()
 
 
+def is_noise(text):
+    """Фильтрация служебных анонсов о вводах/выводах и техобслуживании"""
+    text_lower = text.lower()
+    return any(keyword in text_lower for keyword in EXCLUDED_KEYWORDS)
+
+
 def analyze_and_send(title, summary, link, exchange_name):
-    """Функция отправки текста на анализ в ИИ и рассылки в соответствующую ветку форума"""
     exchange_key = exchange_name.upper()
     if exchange_key not in EXCHANGE_CHATS:
         return
     
+    # Отсекаем технический шум
+    if is_noise(title) or is_noise(summary):
+        print(f"ℹ️ Пропущен служебный анонс (ввод/вывод/обслуживание): {title}")
+        return
+
     thread_id = EXCHANGE_CHATS[exchange_key]
     full_text = f"Источник: {exchange_name}\nЗаголовок: {title}\nОписание: {summary}\nСсылка: {link}"
     
@@ -108,13 +119,12 @@ def analyze_and_send(title, summary, link, exchange_name):
         )
         answer = completion.choices[0].message.content
         
-        # Создаем инлайн-кнопку для быстрого перехода на акцию/источник
         markup = telebot.types.InlineKeyboardMarkup()
         if link:
             btn_app = telebot.types.InlineKeyboardButton(f"📱 Открыть акцию в {exchange_name}", url=link)
             markup.add(btn_app)
         
-        # Отправляем готовый отчет в конкретную ветку биржи
+        # Отправляем сообщение в обычном режиме с нормальными уведомлениями
         bot.send_message(
             chat_id=CHAT_ID,
             message_thread_id=thread_id,
@@ -128,8 +138,21 @@ def analyze_and_send(title, summary, link, exchange_name):
 
 
 def monitor_rss():
-    """Фоновый поток для периодической проверки официальных RSS-лент бирж"""
-    print("🚀 Модуль автомониторинга официальных источников запущен...")
+    print("🚀 Модуль автомониторинга RSS запущен...")
+    
+    # 🛡 Предварительная загрузка текущих новостей при старте для исключения дубликатов
+    for exchange, url in RSS_FEEDS.items():
+        try:
+            feed = feedparser.parse(url)
+            for entry in feed.entries[:5]:
+                link = entry.get("link", "")
+                if link:
+                    processed_links.add(link)
+        except Exception as e:
+            print(f"⚠️ Ошибка первичной подгрузки RSS {exchange}: {e}")
+            
+    print(f"✅ База защиты от дублей сформирована ({len(processed_links)} ссылок). Мониторинг в работе.")
+
     while True:
         for exchange, url in RSS_FEEDS.items():
             try:
@@ -141,7 +164,7 @@ def monitor_rss():
                     
                     if link and link not in processed_links:
                         processed_links.add(link)
-                        if len(processed_links) > 500:
+                        if len(processed_links) > 1000:
                             processed_links.pop()
                             
                         analyze_and_send(title, summary, link, exchange)
@@ -151,54 +174,91 @@ def monitor_rss():
         time.sleep(300)
 
 
-def broadcast_start_messages():
-    """Отправляет приветственное сообщение во все ветки при старте бота"""
-    print("🚀 Запуск стартовой рассылки по всем веткам...")
-    for category, thread_id in EXCHANGE_CHATS.items():
-        if category == "STAKING":
-            text = "💰 <b>Канал Staking & Earn активен!</b>\n\nЗдесь публикуются лучшие предложения по пассивному доходу."
-        else:
-            text = f"🤖 <b>Канал новостей {category} активен!</b>\n\nЗдесь будут публиковаться актуальные анонсы и обновления биржи."
-            
+def monitor_funding():
+    """Фоновый поток: мониторинг критического фандинга каждые 30 минут (порог ±0.9%)"""
+    print("🚀 Модуль мониторинга фандинга запущен...")
+    while True:
         try:
-            bot.send_message(
-                chat_id=CHAT_ID,
-                message_thread_id=thread_id,
-                text=text,
-                parse_mode="HTML"
-            )
-            time.sleep(0.3)
+            url = "https://api.bybit.com/v5/market/tickers?category=linear"
+            response = requests.get(url, timeout=10)
+            data = response.json()
+            
+            if data.get("retCode") == 0:
+                for item in data["result"]["list"]:
+                    symbol = item.get("symbol", "")
+                    funding_rate = float(item.get("fundingRate", 0)) * 100
+                    
+                    if abs(funding_rate) >= 0.9:
+                        markup = telebot.types.InlineKeyboardMarkup()
+                        trade_url = f"https://www.bybit.com/trade/usdt/{symbol}"
+                        markup.add(telebot.types.InlineKeyboardButton(f"📱 Открыть {symbol} на Bybit", url=trade_url))
+                        
+                        text = (
+                            f"⚡ **Внимание! Высокий фандинг**\n\n"
+                            f"📌 **Биржа:** Bybit\n"
+                            f"🪙 **Монета:** `{symbol}`\n"
+                            f"📊 **Ставка:** `{funding_rate:.4f}%`\n"
+                            f"⚙️ **Макс. плечо:** Доступно в терминале\n"
+                            f"🔗 **Ссылка:** [Открыть фьючерсы]({trade_url})"
+                        )
+                        
+                        bot.send_message(
+                            chat_id=CHAT_ID,
+                            message_thread_id=EXCHANGE_CHATS["FUNDING"],
+                            text=text,
+                            parse_mode="Markdown",
+                            reply_markup=markup
+                        )
+                        time.sleep(1)
         except Exception as e:
-            print(f"❌ Ошибка при стартовой отправке в тему {category}: {e}")
+            print(f"❌ Ошибка в мониторинге фандинга: {e}")
+            
+        time.sleep(1800)
 
 
-# -------------------------------------------------------------
-# Модерация: автоудаление сообщений пользователей из защищенных веток
-# -------------------------------------------------------------
+def monitor_spread():
+    """Фоновый поток: мониторинг спреда"""
+    print("🚀 Модуль мониторинга спреда запущен...")
+    while True:
+        try:
+            pass
+        except Exception as e:
+            print(f"❌ Ошибка в мониторинге спреда: {e}")
+            
+        time.sleep(600)
+
+
+# 1. Автоудаление пользовательских сообщений в защищенных топиках
 @bot.message_handler(func=lambda message: message.message_thread_id in RESTRICTED_TOPICS)
 def auto_delete_user_messages(message):
-    """Удаляет любые сообщения участников в темах бирж и стейкинга"""
     if not message.from_user.is_bot:
         try:
             bot.delete_message(chat_id=message.chat.id, message_id=message.message_id)
-            print(f"🗑 Удалено сообщение от @{message.from_user.username or message.from_user.id} из защищенной ветки.")
-        except Exception as e:
-            print(f"❌ Не удалось удалить сообщение: {e}")
+        except Exception:
+            pass
 
 
+# 2. Команды /start и /help (Доступ только для владельца в ЛС)
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    bot.reply_to(
-        message, 
-        "👋 **CryptoMonitor Bot активен!**\n\n"
-        "Бот автоматически отслеживает официальные RSS-ленты бирж, делает ИИ-разбор и присылает структурированные отчеты "
-        "в соответствующие ветки форума."
-    )
+    if message.chat.type == "private" and message.from_user.id not in ADMIN_IDS:
+        bot.reply_to(message, "⛔ Доступ ограничен. Этот бот работает в приватном режиме.")
+        return
+    bot.reply_to(message, "👋 **CryptoMonitor Bot запущен и работает в штатном режиме!**")
 
 
+# 3. Обработка ручных запросов (Защита от сторонних пользователей)
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
-    """Ручной анализ текста, если отправить его боту напрямую"""
+    # Блокировка личных сообщений от сторонних пользователей
+    if message.chat.type == "private" and message.from_user.id not in ADMIN_IDS:
+        bot.reply_to(message, "⛔ Доступ в личные сообщения бота ограничен.")
+        return
+
+    # В супергруппе реагируем только в разрешенных незащищенных ветках
+    if message.chat.type in ["group", "supergroup"] and message.message_thread_id in RESTRICTED_TOPICS:
+        return
+
     user_text = message.text
     sent_msg = bot.reply_to(message, "🔍 Анализирую анонс...")
 
@@ -212,32 +272,26 @@ def handle_all_messages(message):
             temperature=0.2,
         )
         answer = completion.choices[0].message.content
-
-        bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=sent_msg.message_id,
-            text=answer,
-            parse_mode="Markdown"
-        )
+        bot.edit_message_text(chat_id=message.chat.id, message_id=sent_msg.message_id, text=answer, parse_mode="Markdown")
     except Exception as e:
         try:
-            bot.edit_message_text(
-                chat_id=message.chat.id,
-                message_id=sent_msg.message_id,
-                text=f"❌ Ошибка при обработке:\n{str(e)}"
-            )
+            bot.edit_message_text(chat_id=message.chat.id, message_id=sent_msg.message_id, text=f"❌ Ошибка:\n{str(e)}")
         except Exception:
             pass
 
 
 if __name__ == "__main__":
-    # 1. Отправляем приветствия по всем веткам форума
-    broadcast_start_messages()
-
-    # 2. Запускаем фоновый поток мониторинга официальных RSS-источников
-    bg_thread = threading.Thread(target=monitor_rss, daemon=True)
-    bg_thread.start()
+    # Запуск всех модулей без приветственного спама
+    threading.Thread(target=monitor_rss, daemon=True).start()
+    threading.Thread(target=monitor_funding, daemon=True).start()
+    threading.Thread(target=monitor_spread, daemon=True).start()
     
-    # 3. Запуск приема команд и сообщений ботом
-    print("🤖 Бот запущен и слушает события...")
-    bot.infinity_polling(skip_pending=True)
+    print("🤖 CryptoMonitor Bot запущен и готов к работе!")
+    
+    # Защищенный цикл бесконечного подбора сообщений
+    while True:
+        try:
+            bot.infinity_polling(timeout=20, long_polling_timeout=10, skip_pending=True)
+        except Exception as e:
+            print(f"⚠️ Сбой сети/Telegram API: {e}. Перезапуск через 5 секунд...")
+            time.sleep(5)

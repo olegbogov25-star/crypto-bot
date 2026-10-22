@@ -64,9 +64,10 @@ EXCLUDED_KEYWORDS = [
 SYSTEM_PROMPT = """
 Ты — специализированный криптоаналитик для автоматического отслеживания и разбора доходных событий: акций, промо-кампаний, аирдропов, Web3-квестов, кампаний Bybit Galaxy/Arcade, Binance Web3 Airdrops/Megadrop, OKX Web3 Boost (X Launch, X Liquidity), бустов, бесплатных раздач, фьючерсных турниров, бонусов за депозит, фарминга (PoolX, GemsPool) и Launchpad/Launchpool/Megadrop/Alpha от всех ключевых бирж.
 
-⚠️ ИГНОРИРУЙ и НЕ СОСТАВЛЯЙ отчеты по:
-1. Техническим новостям (ввод/вывод, залоги, маржа, техобслуживание, займы).
-2. СУХИМ ЛИСТИНГАМ — если токен просто добавляется на спот/фьючерсы/маржу и при этом НЕТ никакой раздачи, призового пула, аирдропа, пула бустов (X Launch, Web3 Wallet Quest) или промо-акции!
+⚠️ КРИТИЧЕСКИЕ ПРАВИЛА:
+1. ИГНОРИРУЙ технические новости (ввод/вывод, залоги, маржа, техобслуживание, займы).
+2. ИГНОРИРУЙ СУХИЕ ЛИСТИНГИ — если токен просто добавляется на спот/фьючерсы/маржу и при этом НЕТ никакой раздачи, призового пула, аирдропа, пула бустов (X Launch, Web3 Wallet Quest) или промо-акции!
+3. ЕСЛИ СОБЫТИЕ НЕ СОДЕРЖИТ КОНКРЕТНЫХ НАГРАД, ПРИЗОВОГО ФОНДА ИЛИ АИРДРОПА (например, просто поздравления, сухие новости) — НАПИШИ РОВНО ОДНО СЛОВО: SKIP
 
 ✅ СОСТАВЛЯЙ ОТЧЕТ ТОЛЬКО ЕСЛИ:
 Событие содержит ДОХОДНУЮ СОСТАВЛЯЮЩУЮ (аирдроп, фарминг, награды за депозит/торговлю, Web3-квесты, бонусы, X Launch, Boost, Launchpool/Megadrop/Alpha/CandyBomb).
@@ -99,7 +100,7 @@ RSS_FEEDS = {
     "BITGET": "https://www.bitget.com/support/rss"
 }
 
-processed_links = set()
+processed_items = set()
 
 def is_noise(text):
     text_lower = text.lower()
@@ -125,8 +126,12 @@ def analyze_and_send(title, summary, link, exchange_name):
             ],
             temperature=0.2,
         )
-        answer = completion.choices[0].message.content
+        answer = completion.choices[0].message.content.strip()
         
+        # Защита от спама: если ИИ решил пропустить событие, просто выходим
+        if "SKIP" in answer or len(answer) < 30:
+            return
+
         markup = telebot.types.InlineKeyboardMarkup()
         if link:
             btn_app = telebot.types.InlineKeyboardButton(f"📱 Открыть в {exchange_name}", url=link)
@@ -149,9 +154,9 @@ def monitor_rss():
         try:
             feed = feedparser.parse(url)
             for entry in feed.entries[:5]:
-                link = entry.get("link", "")
-                if link:
-                    processed_links.add(link)
+                item_id = entry.get("link", "") or entry.get("title", "")
+                if item_id:
+                    processed_items.add(item_id)
         except Exception as e:
             print(f"⚠️ Ошибка инициализации RSS {exchange}: {e}")
 
@@ -163,17 +168,18 @@ def monitor_rss():
                     link = entry.get("link", "")
                     title = entry.get("title", "")
                     summary = entry.get("summary", title)
+                    item_id = link or title
                     
-                    if link and link not in processed_links:
-                        processed_links.add(link)
-                        if len(processed_links) > 1000:
-                            processed_links.pop()
+                    if item_id and item_id not in processed_items:
+                        processed_items.add(item_id)
+                        if len(processed_items) > 1000:
+                            processed_items.pop()
                         analyze_and_send(title, summary, link, exchange)
             except Exception as e:
                 print(f"❌ Ошибка парсинга RSS {exchange}: {e}")
-        time.sleep(300) # 5 минут
+        time.sleep(300)
 
-# Поток 2: Отдельный безопасный мониторинг Web3 (каждые 12 минут)
+# Поток 2: Мониторинг Web3 (каждые 12 минут, с защитой от дублей)
 def monitor_web3():
     print("🌐 Модуль мониторинга Web3 запущен (интервал: 12 мин)...")
     while True:
@@ -186,13 +192,17 @@ def monitor_web3():
                     for ann in data["data"][0].get("details", [])[:5]:
                         title = ann.get("title", "")
                         link = ann.get("url", "https://www.okx.com/web3")
-                        if link and link not in processed_links:
-                            processed_links.add(link)
+                        
+                        # Фильтрация по уникальному названию анонса
+                        if title and title not in processed_items:
+                            processed_items.add(title)
+                            if len(processed_items) > 1000:
+                                processed_items.pop()
                             analyze_and_send(title, title, link, "OKX Web3 Boost")
         except Exception as e:
             print(f"⚠️ Ошибка подгрузки Web3 API OKX: {e}")
             
-        time.sleep(720) # 12 минут — абсолютно безопасно от блокировок
+        time.sleep(720)
 
 # Поток 3: Фандинг (каждые 30 минут)
 def monitor_funding():
@@ -227,7 +237,7 @@ def send_welcome(message):
     if message.chat.type == "private" and message.from_user.id not in ADMIN_IDS:
         bot.reply_to(message, "⛔ Доступ ограничен.")
         return
-    bot.reply_to(message, "👋 **CryptoMonitor Bot запущен с раздельными безопасными таймерами!**")
+    bot.reply_to(message, "👋 **CryptoMonitor Bot запущен в идеальном режиме без флуда и дублей!**")
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
@@ -261,13 +271,13 @@ def handle_all_messages(message):
 if __name__ == "__main__":
     threading.Thread(target=run_dummy_server, daemon=True).start()
     
-    # Запуск всех независимых потоков с правильными интервалами
+    # Запуск всех независимых потоков
     threading.Thread(target=monitor_rss, daemon=True).start()
     threading.Thread(target=monitor_web3, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()
     
-    print("🤖 CryptoMonitor Bot успешно запущен с индивидуальными интервалами!")
+    print("🤖 CryptoMonitor Bot успешно запущен!")
     
     while True:
         try:

@@ -262,7 +262,7 @@ def fetch_futures_prices():
 
     return prices
 
-# ==================== SPREAD MONITOR ====================
+# ==================== SPREAD MONITOR (TEST MODE: >= 0.1%) ====================
 def monitor_spread():
     while True:
         try:
@@ -281,18 +281,12 @@ def monitor_spread():
                 if min_p <= 0: continue
                 spread = ((max_p - min_p) / min_p) * 100
                 
-                if spread >= 3.0:
+                # 👇 ВРЕМЕННЫЙ ТЕСТОВЫЙ ПОРОГ (0.1% вместо 3.0%)
+                if spread >= 0.1:
                     current_scanned_syms.add(sym)
                     
                     if sym not in active_spreads:
-                        if spread >= 10.0:
-                            badge = "🔥🔥🔥 **MEGA SPREAD (>= 10%)**"
-                        elif spread >= 7.0:
-                            badge = "🔥 **HIGH SPREAD (>= 7%)**"
-                        elif spread >= 5.0:
-                            badge = "⚡ **STRONG SPREAD (>= 5%)**"
-                        else:
-                            badge = "🚨 **SPREAD (>= 3%)**"
+                        badge = "🚨 **TEST SPREAD (>= 0.1%)**"
 
                         min_link = get_exchange_link(min_ex, sym)
                         max_link = get_exchange_link(max_ex, sym)
@@ -326,7 +320,7 @@ def monitor_spread():
                         curr_max = max(ex_data.values())
                         if curr_min > 0:
                             curr_spread = ((curr_max - curr_min) / curr_min) * 100
-                            if curr_spread < 1.5:
+                            if curr_spread < 0.05:
                                 expired_syms.append(sym)
 
             for sym in expired_syms:
@@ -345,7 +339,7 @@ def monitor_spread():
         
         time.sleep(45)
 
-# ==================== FUNDING MONITOR (HIGH FUNDING ALERT) ====================
+# ==================== FUNDING MONITOR (TEST MODE: >= ±0.01%) ====================
 def monitor_funding():
     while True:
         try:
@@ -424,7 +418,8 @@ def monitor_funding():
                 if not ex_rates:
                     continue
                 
-                has_high_funding = any(abs(rate) >= 0.5 for rate in ex_rates.values())
+                # 👇 ВРЕМЕННЫЙ ТЕСТОВЫЙ ПОРОГ (0.01% вместо 0.5%)
+                has_high_funding = any(abs(rate) >= 0.01 for rate in ex_rates.values())
                 
                 if has_high_funding:
                     rates_str = "_".join([f"{ex}:{rate:.2f}" for ex, rate in sorted(ex_rates.items())])
@@ -437,7 +432,7 @@ def monitor_funding():
                         overview = "\n".join(overview_list)
 
                         msg = (
-                            f"🔥 **HIGH FUNDING ALERT (>= ±0.5%)**\n"
+                            f"🔥 **TEST FUNDING ALERT (>= ±0.01%)**\n"
                             f"🪙 **#{symbol}**\n\n"
                             f"📊 **All Exchanges Rates:**\n{overview}"
                         )
@@ -472,7 +467,5 @@ if __name__ == "__main__":
     threading.Thread(target=monitor_funding, daemon=True).start()
     threading.Thread(target=monitor_news, daemon=True).start()
     
-    # Полностью убран метод поллинга (getUpdates). 
-    # Ошибка 409 Conflict больше физически не может возникнуть.
     while True:
         time.sleep(3600)

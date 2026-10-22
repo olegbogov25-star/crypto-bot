@@ -44,7 +44,7 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# ==================== LINK GENERATORS (С автопереходом в мобильные приложения) ====================
+# ==================== LINK GENERATORS ====================
 def get_exchange_url(exchange, symbol):
     base_sym = symbol.replace('USDT', '')
     links = {
@@ -61,6 +61,23 @@ def get_exchange_url(exchange, symbol):
         "Ourbit": f"https://www.ourbit.com/futures/trade/{base_sym}_USDT"
     }
     return links.get(exchange, "https://google.com")
+
+def get_exchange_app_url(exchange, symbol):
+    base_sym = symbol.replace('USDT', '')
+    app_links = {
+        "Binance": f"bnc://app.binance.com/en/futures/trade?symbol={base_sym}USDT",
+        "Bybit": f"bybit://trade/usdt/{base_sym}USDT",
+        "OKX": f"okx://trade?instId={base_sym}-USDT-SWAP",
+        "Gate": f"https://www.gate.io/futures/USDT/{base_sym}_USDT",
+        "Bitget": f"https://www.bitget.com/futures/usdt/{base_sym}USDT",
+        "MEXC": f"mexc://futures/trade?symbol={base_sym}_USDT",
+        "BingX": f"bingx://futures/forward/{base_sym}USDT",
+        "KuCoin": f"kucoin://futures/trade/{base_sym}USDTM",
+        "WhiteBit": f"whitebit://trade/{base_sym}_USDT",
+        "Kraken": f"https://futures.kraken.com",
+        "Ourbit": f"https://www.ourbit.com"
+    }
+    return app_links.get(exchange, get_exchange_url(exchange, symbol))
 
 def get_exchange_link(exchange, symbol):
     url = get_exchange_url(exchange, symbol)
@@ -80,7 +97,7 @@ def normalize_symbol(raw_sym):
             sym += 'USDT'
     return sym
 
-# ==================== ADVANCED AI & FULL WEB3 / PROMO CALCULATOR (42 ТЕГА) ====================
+# ==================== ADVANCED AI & FULL WEB3 / PROMO CALCULATOR ====================
 def analyze_text(text):
     if not OPENROUTER_API_KEY:
         return text
@@ -309,8 +326,8 @@ def monitor_spread():
                         )
                         
                         markup = telebot.types.InlineKeyboardMarkup(row_width=2)
-                        btn_min = telebot.types.InlineKeyboardButton(f"🟢 Long: {min_ex}", url=get_exchange_url(min_ex, sym))
-                        btn_max = telebot.types.InlineKeyboardButton(f"🔴 Short: {max_ex}", url=get_exchange_url(max_ex, sym))
+                        btn_min = telebot.types.InlineKeyboardButton(f"🟢 Long: {min_ex}", url=get_exchange_app_url(min_ex, sym))
+                        btn_max = telebot.types.InlineKeyboardButton(f"🔴 Short: {max_ex}", url=get_exchange_app_url(max_ex, sym))
                         markup.add(btn_min, btn_max)
                         
                         msg_id = send_to_topic("SPREAD", msg_text, reply_markup=markup)
@@ -448,11 +465,11 @@ def monitor_funding():
                         )
                         
                         markup = telebot.types.InlineKeyboardMarkup(row_width=2)
-                        sorted_exs = sorted(ex_rates.items(), key=lambda x: abs(x[1]), reverse=True)
+                        sorted_exs = sorted(ex_rates.items(), key=lambda x: abs(x[1], reverse=True) if isinstance(x[1], float) else abs(x[1]), reverse=True)
                         for ex, rate in sorted_exs[:4]:
-                            markup.add(telebot.types.InlineKeyboardButton(f"{ex}: {rate:+.2f}%", url=get_exchange_url(ex, symbol)))
+                            markup.add(telebot.types.InlineKeyboardButton(f"{ex}: {rate:+.2f}%", url=get_exchange_app_url(ex, symbol)))
 
-                        send_to_topic("FUNDING", msg, reply_markup=markup)
+                        send_now_id = send_to_topic("FUNDING", msg, reply_markup=markup)
 
         except Exception as e:
             print(f"Funding Monitor Error: {e}")
@@ -480,7 +497,7 @@ def monitor_news():
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     
-    send_to_topic("SPREAD", "🚀 **Бот успешно запущен со всеми боевыми настройками!**")
+    send_to_topic("SPREAD", "🚀 **Бот успешно запущен со всеми настройками и прямыми диплинками приложений!**")
     
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()

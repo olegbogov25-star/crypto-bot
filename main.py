@@ -268,7 +268,6 @@ def monitor_spread():
                         else:
                             badge = "⚡ **STRONG SPREAD (>= 7%)**"
 
-                        # Расчет ликвидности для 1x (первое плечо): 1% от суточного объема каждой биржи
                         vol_min = volumes.get(sym, {}).get(min_ex, 50000) * 0.01
                         vol_max = volumes.get(sym, {}).get(max_ex, 50000) * 0.01
                         max_pos_usdt = int(min(vol_min, vol_max, 50000))
@@ -296,7 +295,7 @@ def monitor_spread():
             expired_syms = []
             for sym in list(active_spreads.keys()):
                 if sym not in current_scanned_syms or sym not in prices:
-                    expired_syms.append(sym)
+                    expired_syms.append((sym, 0.0))
                 else:
                     ex_data = prices[sym]
                     if len(ex_data) >= 2:
@@ -305,9 +304,9 @@ def monitor_spread():
                         if curr_min > 0:
                             curr_spread = ((curr_max - curr_min) / curr_min) * 100
                             if curr_spread < 1.0:
-                                expired_syms.append(sym)
+                                expired_syms.append((sym, curr_spread))
 
-            for sym in expired_syms:
+            for sym, final_spread in expired_syms:
                 data = active_spreads.pop(sym, None)
                 if data:
                     duration = int(time.time() - data["start_time"])
@@ -315,7 +314,7 @@ def monitor_spread():
                     secs = duration % 60
                     time_str = f"{mins}:{secs:02d}"
                     
-                    aligned_msg = f"✅ `[{sym}]` prices aligned in `{time_str}`"
+                    aligned_msg = f"✅ `[{sym}]` prices aligned in `{time_str}` (spread: `{final_spread:.2f}%`)"
                     send_to_topic("SPREAD", aligned_msg, reply_to_message_id=data["msg_id"])
 
         except Exception as e:
@@ -461,7 +460,7 @@ def monitor_news():
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     
-    send_to_topic("SPREAD", "🚀 **Бот запущен: лишние кнопки удалены, расчет доступного объема USDT добавлен!**")
+    send_to_topic("SPREAD", "🚀 **Бот запущен: в отчет о выравнивании добавлен процент оставшегося спреда!**")
     
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()

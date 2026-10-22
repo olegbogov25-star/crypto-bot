@@ -42,9 +42,9 @@ EXCHANGE_CHATS = {
     "KUCOIN": 71,
     "KRAKEN": 73,
     "WHITEBIT": 72,
-    "ORBIT": 0,       # Мультибиржевой сканер
-    "FUNDING": 76,    # Ветка для вилок фандинга (±1% + Плечо + Объемы)
-    "SPREAD": 77,     # Ветка для межбиржевого спреда (≥3% + Плечо + Объемы)
+    "ORBIT": 0,       # Мультибиржевой / Арбитражный поток
+    "FUNDING": 76,    # Ветка для вилок фандинга (±1%)
+    "SPREAD": 77,     # Ветка для межбиржевого спреда (от 3%, 5%, 7%, 10%)
 }
 
 RESTRICTED_TOPICS = set(v for v in EXCHANGE_CHATS.values() if v != 0)
@@ -57,7 +57,6 @@ client = OpenAI(
 
 MODEL_NAME = "openai/gpt-4o-mini"
 
-# Фильтр технического шума, маржи и займов
 EXCLUDED_KEYWORDS = [
     "deposit", "withdrawal", "wallet maintenance", "system upgrade",
     "scheduled maintenance", "delisting", "resume deposit", "resume withdrawal",
@@ -70,16 +69,16 @@ SYSTEM_PROMPT = """
 
 ⚠️ КРИТИЧЕСКИЕ ПРАВИЛА:
 1. ИГНОРИРУЙ технические новости (ввод/вывод, залоги, маржа, техобслуживание, займы).
-2. ИГНОРИРУЙ СУХИЕ ЛИСТИНГИ — если токен просто добавляется на спот/фьючерсы/маржу и при этом НЕТ никакой раздачи, призового пула, аирдропа, пула бустов (X Launch, Web3 Wallet Quest) или промо-акции!
-3. ЕСЛИ СОБЫТИЕ НЕ СОДЕРЖИТ КОНКРЕТНЫХ НАГРАД, ПРИЗОВОГО ФОНДА ИЛИ АИРДРОПА (например, просто поздравления, сухие новости) — НАПИШИ РОВНО ОДНО СЛОВО: SKIP
+2. ИГНОРИРУЙ СУХИЕ ЛИСТИНГИ — если токен просто добавляется на спот/фьючерсы/маржу и при этом НЕТ никакой раздачи, призового пула, аирдропа, пула бустов или промо-акции!
+3. ЕСЛИ СОБЫТИЕ НЕ СОДЕРЖИТ КОНКРЕТНЫХ НАГРАД, ПРИЗОВОГО ФОНДА ИЛИ АИРДРОПА — НАПИШИ РОВНО ОДНО СЛОВО: SKIP
 
 ✅ СОСТАВЛЯЙ ОТЧЕТ ТОЛЬКО ЕСЛИ:
-Событие содержит ДОХОДНУЮ СОСТАВЛЯЮЩУЮ (аирдроп, фарминг, награды за депозит/торговлю, Web3-квесты, бонусы, X Launch, Boost, Launchpool/Megadrop/Alpha/CandyBomb).
+Событие содержит ДОХОДНУЮ СОСТАВЛЯЮЩУЮ (аирдроп, фарминг, награды за депозит/торговлю, Web3-квесты, бонусы, X Launch, Boost, Launchpool/Megadrop/Alpha).
 
 Составляй чёткий, структурированный отчёт на русском языке strictly по шаблону:
 
-📌 **Биржа / Источник:** [Укажи биржу и раздел, например OKX Web3 Boost / Binance Web3]
-🏷 **Тип события / Теги:** [#Listing, #NewListing, #InitialListing, #PreMarket, #IPO, #Launchpad, #Launchpool, #Megadrop, #Alpha, #CandyDrop, #CandyBomb, #Startup, #Kickstarter, #AirDrop, #Web3Airdrop, #Web3Quest, #Quest, #Galaxy, #Arcade, #Boost, #XLaunch, #Liquidity, #Yield, #Campaign, #Promotion, #Activity, #Event, #TradingCompetition, #LearnAndEarn, #FlashEarn, #Prediction, #Voucher, #Bonus, #VIP, #Futures, #Staking, #Earn, #PoolX, #GemsPool, #ByStarter, #HoldAndEarn, #CryptoBox, #TrialFund, #WOTD, #TradeBoost, #Code, #RewardCenter]
+📌 **Биржа / Источник:** [Укажи биржу и раздел]
+🏷 **Тип события / Теги:** [#Listing, #Launchpad, #Launchpool, #Megadrop, #Alpha, #AirDrop, #Web3Airdrop, #Web3Quest, #Boost, #XLaunch, #PoolX, #GemsPool, #Promotion, #RewardCenter]
 
 💰 **Токен / Проект:** [Название и тикер]
 📅 **Даты / Время проведения:** [Период]
@@ -88,12 +87,10 @@ SYSTEM_PROMPT = """
 ⚡ **Что нужно сделать (Инструкция / Пошагово):**
 - [Шаг 1]
 - [Шаг 2]
-- [Шаг 3]
 
 🎁 **Награды / Призовой фонд:** [Пулы, APY, бонусы, аирдроп]
 ⚠️ **Важные условия / Ограничения и риски:** [Риски, KYC, Сеть/Кошелек]
 🔗 **Ссылка на источник/акцию:** [Ссылка]
-📱 **Переход в приложение:** [Инструкция]
 """
 
 RSS_FEEDS = {
@@ -105,6 +102,7 @@ RSS_FEEDS = {
 }
 
 processed_items = set()
+processed_arbitrage = set()
 
 def is_noise(text):
     text_lower = text.lower()
@@ -150,10 +148,11 @@ def analyze_and_send(title, summary, link, exchange_name):
     except Exception as e:
         print(f"❌ Ошибка ИИ-анализа для {exchange_name}: {e}")
 
-# Поток 1: Мониторинг RSS (каждые 5 минут)
-def monitor_rss():
-    print("🚀 Модуль мониторинга RSS запущен (интервал: 5 мин)...")
+# Поток 1: Сквозной гибридный мониторинг новостей (RSS + Прямые API ВСЕХ бирж каждые 5 мин)
+def monitor_news_hybrid():
+    print("🚀 Тотальный гибридный модуль мониторинга новостей (RSS + API всех бирж) запущен...")
     while True:
+        # 1. RSS
         for exchange, url in RSS_FEEDS.items():
             try:
                 feed = feedparser.parse(url)
@@ -165,14 +164,191 @@ def monitor_rss():
                     
                     if item_id and item_id not in processed_items:
                         processed_items.add(item_id)
-                        if len(processed_items) > 1000:
+                        if len(processed_items) > 2500:
                             processed_items.pop()
                         analyze_and_send(title, summary, link, exchange)
             except Exception as e:
-                print(f"❌ Ошибка парсинга RSS {exchange}: {e}")
+                print(f"❌ Ошибка RSS {exchange}: {e}")
+
+        # 2. Binance API
+        try:
+            b_res = requests.get("https://www.binance.com/bapi/composite/v1/public/content/support/search/list?type=1&pageNo=1&pageSize=10", timeout=10)
+            if b_res.status_code == 200:
+                articles = b_res.json().get("data", {}).get("catalogs", [{}])[0].get("articles", [])
+                for art in articles:
+                    title = art.get("title", "")
+                    code = art.get("code", "")
+                    link = f"https://www.binance.com/en/support/announcement/{code}" if code else "https://www.binance.com"
+                    item_id = f"binance_api_{code or title}"
+                    if item_id not in processed_items:
+                        processed_items.add(item_id)
+                        if len(processed_items) > 2500:
+                            processed_items.pop()
+                        analyze_and_send(title, title, link, "BINANCE")
+        except Exception as e:
+            print(f"⚠️ Ошибка Binance Direct API: {e}")
+
+        # 3. Bybit API
+        try:
+            by_res = requests.get("https://api.bybit.com/v5/announcements/index?locale=en-US&limit=10", timeout=10)
+            if by_res.status_code == 200:
+                list_items = by_res.json().get("result", {}).get("list", [])
+                for item in list_items:
+                    title = item.get("title", "")
+                    link = item.get("link", "https://announcements.bybit.com")
+                    item_id = f"bybit_api_{title}"
+                    if item_id not in processed_items:
+                        processed_items.add(item_id)
+                        if len(processed_items) > 2500:
+                            processed_items.pop()
+                        analyze_and_send(title, item.get("description", title), link, "BYBIT")
+        except Exception as e:
+            print(f"⚠️ Ошибка Bybit Direct API: {e}")
+
+        # 4. OKX API
+        try:
+            okx_res = requests.get("https://www.okx.com/api/v5/support/announcements?page=1", timeout=10)
+            if okx_res.status_code == 200:
+                details = okx_res.json().get("data", [{}])[0].get("details", [])
+                for ann in details[:10]:
+                    title = ann.get("title", "")
+                    link = ann.get("url", "https://www.okx.com/support")
+                    item_id = f"okx_api_{title}"
+                    if item_id not in processed_items:
+                        processed_items.add(item_id)
+                        if len(processed_items) > 2500:
+                            processed_items.pop()
+                        analyze_and_send(title, title, link, "OKX")
+        except Exception as e:
+            print(f"⚠️ Ошибка OKX Direct API: {e}")
+
+        # 5. Gate.io API
+        try:
+            g_res = requests.get("https://www.gate.io/json_svr/query/?u=10&c=11000&type=1&page=1&status=1", timeout=10)
+            if g_res.status_code == 200:
+                items = g_res.json().get("data", []) or g_res.json().get("list", [])
+                for item in items:
+                    title = item.get("title", "")
+                    art_id = item.get("id", "")
+                    link = f"https://www.gate.io/article/{art_id}" if art_id else "https://www.gate.io"
+                    item_id = f"gate_api_{art_id or title}"
+                    if title and item_id not in processed_items:
+                        processed_items.add(item_id)
+                        if len(processed_items) > 2500:
+                            processed_items.pop()
+                        analyze_and_send(title, title, link, "GATE")
+        except Exception as e:
+            print(f"⚠️ Ошибка Gate Direct API: {e}")
+
+        # 6. Bitget API
+        try:
+            bg_res = requests.get("https://www.bitget.com/v1/support/bulletin/notices?language=en_US&pageSize=10", timeout=10)
+            if bg_res.status_code == 200:
+                notices = bg_res.json().get("data", {}).get("resultList", [])
+                for n in notices:
+                    title = n.get("annTitle", "")
+                    nid = n.get("annId", "")
+                    link = f"https://www.bitget.com/support/articles/{nid}" if nid else "https://www.bitget.com"
+                    item_id = f"bitget_api_{nid or title}"
+                    if title and item_id not in processed_items:
+                        processed_items.add(item_id)
+                        if len(processed_items) > 2500:
+                            processed_items.pop()
+                        analyze_and_send(title, title, link, "BITGET")
+        except Exception as e:
+            print(f"⚠️ Ошибка Bitget Direct API: {e}")
+
+        # 7. MEXC API
+        try:
+            mexc_res = requests.get("https://www.mexc.com/api/platform/announcement/list?page=1&pageSize=10", timeout=10)
+            if mexc_res.status_code == 200:
+                mexc_list = mexc_res.json().get("data", {}).get("resultList", [])
+                for m in mexc_list:
+                    title = m.get("title", "")
+                    mid = m.get("id", "")
+                    link = f"https://www.mexc.com/support/articles/{mid}" if mid else "https://www.mexc.com"
+                    item_id = f"mexc_api_{mid or title}"
+                    if title and item_id not in processed_items:
+                        processed_items.add(item_id)
+                        if len(processed_items) > 2500:
+                            processed_items.pop()
+                        analyze_and_send(title, title, link, "MEXC")
+        except Exception as e:
+            print(f"⚠️ Ошибка MEXC Direct API: {e}")
+
+        # 8. BingX API
+        try:
+            bx_res = requests.get("https://ck.bingx.com/api/v1/notice/list?language=en-US&pageNo=1&pageSize=10", timeout=10)
+            if bx_res.status_code == 200:
+                bx_list = bx_res.json().get("data", {}).get("list", [])
+                for bx in bx_list:
+                    title = bx.get("title", "")
+                    bid = bx.get("id", "")
+                    link = f"https://bingx.com/en-us/support/articles/{bid}" if bid else "https://bingx.com"
+                    item_id = f"bingx_api_{bid or title}"
+                    if title and item_id not in processed_items:
+                        processed_items.add(item_id)
+                        if len(processed_items) > 2500:
+                            processed_items.pop()
+                        analyze_and_send(title, title, link, "BINGX")
+        except Exception as e:
+            print(f"⚠️ Ошибка BingX Direct API: {e}")
+
+        # 9. KuCoin API
+        try:
+            kc_res = requests.get("https://api.kucoin.com/api/v1/bulletins?currentPage=1&pageSize=10", timeout=10)
+            if kc_res.status_code == 200:
+                kc_items = kc_res.json().get("data", {}).get("items", [])
+                for k in kc_items:
+                    title = k.get("title", "")
+                    kid = k.get("code", "")
+                    link = f"https://www.kucoin.com/news/{kid}" if kid else "https://www.kucoin.com"
+                    item_id = f"kucoin_api_{kid or title}"
+                    if title and item_id not in processed_items:
+                        processed_items.add(item_id)
+                        if len(processed_items) > 2500:
+                            processed_items.pop()
+                        analyze_and_send(title, title, link, "KUCOIN")
+        except Exception as e:
+            print(f"⚠️ Ошибка KuCoin Direct API: {e}")
+
+        # 10. Kraken API
+        try:
+            kr_res = requests.get("https://support.kraken.com/api/v2/help_center/en-us/articles.json", timeout=10)
+            if kr_res.status_code == 200:
+                articles = kr_res.json().get("articles", [])
+                for a in articles[:10]:
+                    title = a.get("title", "")
+                    link = a.get("html_url", "https://support.kraken.com")
+                    item_id = f"kraken_api_{title}"
+                    if title and item_id not in processed_items:
+                        processed_items.add(item_id)
+                        if len(processed_items) > 2500:
+                            processed_items.pop()
+                        analyze_and_send(title, title, link, "KRAKEN")
+        except Exception as e:
+            print(f"⚠️ Ошибка Kraken Direct API: {e}")
+
+        # 11. WhiteBit API
+        try:
+            wb_res = requests.get("https://whitebit.com/api/v4/public/announcements", timeout=10)
+            if wb_res.status_code == 200:
+                wb_data = wb_res.json().get("result", [])
+                for w in wb_data[:10]:
+                    title = w.get("title", "")
+                    link = w.get("url", "https://whitebit.com")
+                    item_id = f"whitebit_api_{title}"
+                    if title and item_id not in processed_items:
+                        processed_items.add(item_id)
+                        if len(processed_items) > 2500:
+                            processed_items.pop()
+                        analyze_and_send(title, title, link, "WHITEBIT")
+        except Exception as e:
+            print(f"⚠️ Ошибка WhiteBit Direct API: {e}")
+
         time.sleep(300)
 
-# Поток 2: Мониторинг Web3 (каждые 12 минут)
+# Поток 2: Мониторинг Web3 OKX (интервал: 12 мин)
 def monitor_web3():
     print("🌐 Модуль мониторинга Web3 запущен (интервал: 12 мин)...")
     while True:
@@ -187,7 +363,7 @@ def monitor_web3():
                         link = ann.get("url", "https://www.okx.com/web3")
                         if title and title not in processed_items:
                             processed_items.add(title)
-                            if len(processed_items) > 1000:
+                            if len(processed_items) > 2500:
                                 processed_items.pop()
                             analyze_and_send(title, title, link, "OKX Web3 Boost")
         except Exception as e:
@@ -209,7 +385,7 @@ def monitor_web3():
                         
                         if title and item_id not in processed_items:
                             processed_items.add(item_id)
-                            if len(processed_items) > 1000:
+                            if len(processed_items) > 2500:
                                 processed_items.pop()
                             analyze_and_send(title, desc, link, "OKX Web3 Boost")
         except Exception as e:
@@ -217,25 +393,91 @@ def monitor_web3():
             
         time.sleep(720)
 
-# Поток 3: Фандинг (каждые 30 минут)
+# Поток 3: Сканер фандинга (интервал: 5 минут, порог: ±1%)
 def monitor_funding():
-    print("⚡ Модуль арбитража фандинга запущен (интервал: 30 мин)...")
+    print("⚡ Модуль арбитража фандинга запущен (интервал: 5 мин)...")
     while True:
         try:
-            pass
+            res = requests.get("https://fapi.binance.com/fapi/v1/premiumIndex", timeout=10)
+            if res.status_code == 200:
+                data = res.json()
+                for item in data:
+                    symbol = item.get("symbol", "")
+                    last_funding = float(item.get("lastFundingRate", 0)) * 100
+                    
+                    if abs(last_funding) >= 1.0:
+                        alert_id = f"funding_{symbol}_{round(last_funding, 2)}"
+                        if alert_id not in processed_arbitrage:
+                            processed_arbitrage.add(alert_id)
+                            if len(processed_arbitrage) > 500:
+                                processed_arbitrage.pop()
+                            
+                            direction = "🔥 Аномальный фандинг (Лонги платят шортам)" if last_funding > 0 else "❄️ Аномальный фандинг (Шорты платят лонгам)"
+                            msg = (
+                                f"⚡ **Арбитраж Фандинга (Binance)**\n\n"
+                                f"🪙 **Монета:** `{symbol}`\n"
+                                f"📊 **Ставка фандинга:** `{last_funding:.3f}%`\n"
+                                f"💡 **Тип:** {direction}\n"
+                                f"⏱ **Периодичность:** Каждые 8 часов"
+                            )
+                            bot.send_message(CHAT_ID, message_thread_id=EXCHANGE_CHATS["FUNDING"], text=msg, parse_mode="Markdown")
         except Exception as e:
-            print(f"❌ Ошибка в мониторинге фандинга: {e}")
-        time.sleep(1800)
+            print(f"❌ Ошибка в сканере фандинга: {e}")
+        time.sleep(300)
 
-# Поток 4: Спред (каждые 30 минут)
+# Поток 4: Сканер межбиржевого спреда (интервал: 5 минут, уровни: 3%, 5%, 7%, 10%)
 def monitor_spread():
-    print("🔀 Модуль мониторинга спреда запущен (интервал: 30 мин)...")
+    print("🔀 Модуль мониторинга спреда запущен (интервал: 5 мин)...")
     while True:
         try:
-            pass
+            binance_res = requests.get("https://api.binance.com/api/v3/ticker/price", timeout=10)
+            okx_res = requests.get("https://www.okx.com/api/v5/market/tickers?instType=SPOT", timeout=10)
+            
+            if binance_res.status_code == 200 and okx_res.status_code == 200:
+                binance_prices = {item['symbol']: float(item['price']) for item in binance_res.json()}
+                okx_data = okx_res.json().get('data', [])
+                okx_prices = {item['instId'].replace("-", ""): float(item['last']) for item in okx_data if "-" in item['instId']}
+                
+                common_symbols = set(binance_prices.keys()).intersection(set(okx_prices.keys()))
+                
+                for sym in common_symbols:
+                    p_binance = binance_prices[sym]
+                    p_okx = okx_prices[sym]
+                    
+                    if p_binance > 0 and p_okx > 0:
+                        spread = abs(p_binance - p_okx) / min(p_binance, p_okx) * 100
+                        
+                        if spread >= 3.0:
+                            if spread >= 10.0:
+                                level_tag = "🚀 СПРЕД ≥ 10% (ЭКСТРИМ)"
+                            elif spread >= 7.0:
+                                level_tag = "🔥 СПРЕД ≥ 7%"
+                            elif spread >= 5.0:
+                                level_tag = "⚡ СПРЕД ≥ 5%"
+                            else:
+                                level_tag = "📊 СПРЕД ≥ 3%"
+                                
+                            alert_id = f"spread_{sym}_{round(spread, 1)}"
+                            if alert_id not in processed_arbitrage:
+                                processed_arbitrage.add(alert_id)
+                                if len(processed_arbitrage) > 500:
+                                    processed_arbitrage.pop()
+                                
+                                cheaper = "Binance" if p_binance < p_okx else "OKX"
+                                expier = "OKX" if cheaper == "Binance" else "Binance"
+                                
+                                msg = (
+                                    f"🔀 **Межбиржевой спред: {level_tag}**\n\n"
+                                    f"🪙 **Монета:** `{sym}`\n"
+                                    f"📈 **Разница цен:** `{spread:.2f}%`\n"
+                                    f"🟢 **Дешевле на {cheaper}:** `{'%.6f' % min(p_binance, p_okx)}`\n"
+                                    f"🔴 **Дороже на {expier}:** `{'%.6f' % max(p_binance, p_okx)}`\n"
+                                    f"💡 **Направление:** Покупка на {cheaper} -> Перевод/Продажа на {expier}"
+                                )
+                                bot.send_message(CHAT_ID, message_thread_id=EXCHANGE_CHATS["SPREAD"], text=msg, parse_mode="Markdown")
         except Exception as e:
-            print(f"❌ Ошибка в мониторинге спреда: {e}")
-        time.sleep(1800)
+            print(f"❌ Ошибка в сканере спреда: {e}")
+        time.sleep(300)
 
 @bot.message_handler(func=lambda message: message.message_thread_id in RESTRICTED_TOPICS)
 def auto_delete_user_messages(message):
@@ -250,7 +492,7 @@ def send_welcome(message):
     if message.chat.type == "private" and message.from_user.id not in ADMIN_IDS:
         bot.reply_to(message, "⛔ Доступ ограничен.")
         return
-    bot.reply_to(message, "👋 **CryptoMonitor Bot запущен в штатном режиме 24/7!**")
+    bot.reply_to(message, "👋 **CryptoMonitor Bot со сквозными API и арбитражем запущен!**")
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
@@ -284,14 +526,13 @@ def handle_all_messages(message):
 if __name__ == "__main__":
     threading.Thread(target=run_dummy_server, daemon=True).start()
     
-    # 🛑 ВНИМАНИЕ: Принудительный тест убран! Теперь всё работает в штатном режиме:
-    # потоки запускаются с расписанием и не тянут старые новости при каждом перезапуске.
-    threading.Thread(target=monitor_rss, daemon=True).start()
+    # Запуск всех потоков
+    threading.Thread(target=monitor_news_hybrid, daemon=True).start()
     threading.Thread(target=monitor_web3, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()
     
-    print("🤖 CryptoMonitor Bot успешно запущен в штатном режиме 24/7!")
+    print("🤖 CryptoMonitor Bot запущен в полном боевом режиме 24/7!")
     
     while True:
         try:

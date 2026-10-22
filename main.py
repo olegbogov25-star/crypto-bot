@@ -104,7 +104,6 @@ RSS_FEEDS = {
     "BITGET": "https://www.bitget.com/support/rss"
 }
 
-# Множество прочитанных новостей (чистое при старте)
 processed_items = set()
 
 def is_noise(text):
@@ -133,7 +132,6 @@ def analyze_and_send(title, summary, link, exchange_name):
         )
         answer = completion.choices[0].message.content.strip()
         
-        # Если ИИ откинул новость или выплюнул SKIP — пропуск
         if "SKIP" in answer or len(answer) < 30:
             return
 
@@ -152,7 +150,7 @@ def analyze_and_send(title, summary, link, exchange_name):
     except Exception as e:
         print(f"❌ Ошибка ИИ-анализа для {exchange_name}: {e}")
 
-# Поток 1: Мониторинг RSS (интервал: 5 минут)
+# Поток 1: Мониторинг RSS (каждые 5 минут)
 def monitor_rss():
     print("🚀 Модуль мониторинга RSS запущен (интервал: 5 мин)...")
     while True:
@@ -174,11 +172,10 @@ def monitor_rss():
                 print(f"❌ Ошибка парсинга RSS {exchange}: {e}")
         time.sleep(300)
 
-# Поток 2: Сканирование обычных анонсов + Прямого Web3 Wallet API OKX (интервал: 12 минут)
+# Поток 2: Мониторинг Web3 (каждые 12 минут)
 def monitor_web3():
     print("🌐 Модуль мониторинга Web3 запущен (интервал: 12 мин)...")
     while True:
-        # 1. Запрос к разделу анонсов OKX
         try:
             okx_ann_url = "https://www.okx.com/api/v5/support/announcements?page=1"
             res = requests.get(okx_ann_url, timeout=10)
@@ -196,7 +193,6 @@ def monitor_web3():
         except Exception as e:
             print(f"⚠️ Ошибка OKX Ann API: {e}")
 
-        # 2. Прямой опрос Web3 Wallet Activity OKX (X Launch / Boost)
         try:
             okx_web3_url = "https://www.okx.com/priapi/v1/ip/web3/wallet/activity/list?page=1&limit=10"
             headers = {"User-Agent": "Mozilla/5.0"}
@@ -221,7 +217,7 @@ def monitor_web3():
             
         time.sleep(720)
 
-# Поток 3: Фандинг (интервал: 30 минут)
+# Поток 3: Фандинг (каждые 30 минут)
 def monitor_funding():
     print("⚡ Модуль арбитража фандинга запущен (интервал: 30 мин)...")
     while True:
@@ -231,7 +227,7 @@ def monitor_funding():
             print(f"❌ Ошибка в мониторинге фандинга: {e}")
         time.sleep(1800)
 
-# Поток 4: Спред (интервал: 30 минут)
+# Поток 4: Спред (каждые 30 минут)
 def monitor_spread():
     print("🔀 Модуль мониторинга спреда запущен (интервал: 30 мин)...")
     while True:
@@ -254,7 +250,7 @@ def send_welcome(message):
     if message.chat.type == "private" and message.from_user.id not in ADMIN_IDS:
         bot.reply_to(message, "⛔ Доступ ограничен.")
         return
-    bot.reply_to(message, "👋 **CryptoMonitor Bot запущен в идеальном режиме без флуда и дублей!**")
+    bot.reply_to(message, "👋 **CryptoMonitor Bot запущен в штатном режиме 24/7!**")
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
@@ -288,16 +284,14 @@ def handle_all_messages(message):
 if __name__ == "__main__":
     threading.Thread(target=run_dummy_server, daemon=True).start()
     
-    # ПРИНУДИТЕЛЬНЫЙ МГНОВЕННЫЙ ЗАПУСК СКАНИРОВАНИЯ WEB3 И RSS ПРИ СТАРТЕ:
-    print("🧪 Мгновенное принудительное сканирование Web3 и RSS при старте...")
-    threading.Thread(target=monitor_web3, daemon=True).start()
+    # 🛑 ВНИМАНИЕ: Принудительный тест убран! Теперь всё работает в штатном режиме:
+    # потоки запускаются с расписанием и не тянут старые новости при каждом перезапуске.
     threading.Thread(target=monitor_rss, daemon=True).start()
-    
-    # Запуск остальных потоков по расписанию
+    threading.Thread(target=monitor_web3, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()
     
-    print("🤖 CryptoMonitor Bot успешно запущен!")
+    print("🤖 CryptoMonitor Bot успешно запущен в штатном режиме 24/7!")
     
     while True:
         try:

@@ -14,6 +14,10 @@ class DummyHealthCheckHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"Bot is active!")
 
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
+
 def run_dummy_server():
     port = int(os.environ.get("PORT", 8080))
     server = HTTPServer(("0.0.0.0", port), DummyHealthCheckHandler)
@@ -53,7 +57,6 @@ client = OpenAI(
 
 MODEL_NAME = "openai/gpt-4o-mini"
 
-# Фильтр технического шума, маржи и займов
 EXCLUDED_KEYWORDS = [
     "deposit", "withdrawal", "wallet maintenance", "system upgrade",
     "scheduled maintenance", "delisting", "resume deposit", "resume withdrawal",
@@ -74,7 +77,7 @@ SYSTEM_PROMPT = """
 
 Составляй чёткий, структурированный отчёт на русском языке strictly по шаблону:
 
-📌 **Биржа / Источник:** [Укажи биржу и раздел, например Binance Web3 / OKX Boost]
+📌 **Биржа / Источник:** [Укажи биржу и раздел, например OKX Web3 Boost / Binance Web3]
 🏷 **Тип события / Теги:** [#Listing, #NewListing, #InitialListing, #PreMarket, #IPO, #Launchpad, #Launchpool, #Megadrop, #Alpha, #CandyDrop, #CandyBomb, #Startup, #Kickstarter, #AirDrop, #Web3Airdrop, #Web3Quest, #Quest, #Galaxy, #Arcade, #Boost, #XLaunch, #Liquidity, #Yield, #Campaign, #Promotion, #Activity, #Event, #TradingCompetition, #LearnAndEarn, #FlashEarn, #Prediction, #Voucher, #Bonus, #VIP, #Futures, #Staking, #Earn, #PoolX, #GemsPool, #ByStarter, #HoldAndEarn, #CryptoBox, #TrialFund, #WOTD, #TradeBoost, #Code, #RewardCenter]
 
 💰 **Токен / Проект:** [Название и тикер]
@@ -128,7 +131,6 @@ def analyze_and_send(title, summary, link, exchange_name):
         )
         answer = completion.choices[0].message.content.strip()
         
-        # Защита от спама: если ИИ решил пропустить событие, просто выходим
         if "SKIP" in answer or len(answer) < 30:
             return
 
@@ -147,24 +149,14 @@ def analyze_and_send(title, summary, link, exchange_name):
     except Exception as e:
         print(f"❌ Ошибка ИИ-анализа для {exchange_name}: {e}")
 
-# Поток 1: Мониторинг стандартных RSS (каждые 5 минут)
+# Поток 1: Мониторинг RSS
 def monitor_rss():
     print("🚀 Модуль мониторинга RSS запущен (интервал: 5 мин)...")
-    for exchange, url in RSS_FEEDS.items():
-        try:
-            feed = feedparser.parse(url)
-            for entry in feed.entries[:5]:
-                item_id = entry.get("link", "") or entry.get("title", "")
-                if item_id:
-                    processed_items.add(item_id)
-        except Exception as e:
-            print(f"⚠️ Ошибка инициализации RSS {exchange}: {e}")
-
     while True:
         for exchange, url in RSS_FEEDS.items():
             try:
                 feed = feedparser.parse(url)
-                for entry in feed.entries[:3]:
+                for entry in feed.entries[:5]:
                     link = entry.get("link", "")
                     title = entry.get("title", "")
                     summary = entry.get("summary", title)
@@ -179,49 +171,59 @@ def monitor_rss():
                 print(f"❌ Ошибка парсинга RSS {exchange}: {e}")
         time.sleep(300)
 
-# Поток 2: Мониторинг Web3 (каждые 12 минут, с защитой от дублей)
+# Поток 2: Настоящий опрос Web3 Wallet & Boost OKX
 def monitor_web3():
     print("🌐 Модуль мониторинга Web3 запущен (интервал: 12 мин)...")
     while True:
+        # 1. Запрос к разделу анонсов OKX
         try:
-            okx_api_url = "https://www.okx.com/api/v5/support/announcements?page=1"
-            res = requests.get(okx_api_url, timeout=10)
+            okx_ann_url = "https://www.okx.com/api/v5/support/announcements?page=1"
+            res = requests.get(okx_ann_url, timeout=10)
             if res.status_code == 200:
                 data = res.json()
                 if data.get("code") == "0" and "data" in data:
-                    for ann in data["data"][0].get("details", [])[:5]:
+                    for ann in data["data"][0].get("details", [])[:10]:
                         title = ann.get("title", "")
                         link = ann.get("url", "https://www.okx.com/web3")
-                        
-                        # Фильтрация по уникальному названию анонса
                         if title and title not in processed_items:
                             processed_items.add(title)
-                            if len(processed_items) > 1000:
-                                processed_items.pop()
                             analyze_and_send(title, title, link, "OKX Web3 Boost")
         except Exception as e:
-            print(f"⚠️ Ошибка подгрузки Web3 API OKX: {e}")
+            print(f"⚠️ Ошибка OKX Ann API: {e}")
+
+        # 2. Прямой опрос Web3 Wallet Campaigns OKX (X Launch / Boost)
+        try:
+            okx_web3_url = "https://www.okx.com/priapi/v1/ip/web3/wallet/activity/list?page=1&limit=10"
+            headers = {"User-Agent": "Mozilla/5.0"}
+            res_web3 = requests.get(okx_web3_url, headers=headers, timeout=10)
+            if res_web3.status_code == 200:
+                web3_data = res_web3.json()
+                if web3_data.get("code") == 0 and "data" in web3_data:
+                    activities = web3_data.get("data", {}).get("list", [])
+                    for act in activities[:5]:
+                        title = act.get("title") or act.get("projectName", "")
+                        desc = act.get("description", title)
+                        link = "https://www.okx.com/web3/rewards"
+                        item_id = f"web3_{title}"
+                        
+                        if title and item_id not in processed_items:
+                            processed_items.add(item_id)
+                            analyze_and_send(title, desc, link, "OKX Web3 Boost")
+        except Exception as e:
+            print(f"⚠️ Ошибка OKX Web3 Direct API: {e}")
             
         time.sleep(720)
 
-# Поток 3: Фандинг (каждые 30 минут)
+# Поток 3: Фандинг
 def monitor_funding():
     print("⚡ Модуль арбитража фандинга запущен (интервал: 30 мин)...")
     while True:
-        try:
-            pass
-        except Exception as e:
-            print(f"❌ Ошибка в мониторинге фандинга: {e}")
         time.sleep(1800)
 
-# Поток 4: Спред (каждые 30 минут)
+# Поток 4: Спред
 def monitor_spread():
     print("🔀 Модуль мониторинга спреда запущен (интервал: 30 мин)...")
     while True:
-        try:
-            pass
-        except Exception as e:
-            print(f"❌ Ошибка в мониторинге спреда: {e}")
         time.sleep(1800)
 
 @bot.message_handler(func=lambda message: message.message_thread_id in RESTRICTED_TOPICS)
@@ -237,7 +239,7 @@ def send_welcome(message):
     if message.chat.type == "private" and message.from_user.id not in ADMIN_IDS:
         bot.reply_to(message, "⛔ Доступ ограничен.")
         return
-    bot.reply_to(message, "👋 **CryptoMonitor Bot запущен в идеальном режиме без флуда и дублей!**")
+    bot.reply_to(message, "👋 **CryptoMonitor Bot запущен с прямым Web3 Wallet API!**")
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
@@ -271,13 +273,12 @@ def handle_all_messages(message):
 if __name__ == "__main__":
     threading.Thread(target=run_dummy_server, daemon=True).start()
     
-    # Запуск всех независимых потоков
     threading.Thread(target=monitor_rss, daemon=True).start()
     threading.Thread(target=monitor_web3, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()
     
-    print("🤖 CryptoMonitor Bot успешно запущен!")
+    print("🤖 CryptoMonitor Bot успешно запущен с прямым парсером Web3 Wallet!")
     
     while True:
         try:

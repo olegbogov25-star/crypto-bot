@@ -43,7 +43,7 @@ EXCHANGE_CHATS = {
     "KRAKEN": 73,
     "WHITEBIT": 72,
     "ORBIT": 0,       # Мультибиржевой поток
-    "FUNDING": 76,    # Ветка для фандинга (±1%)
+    "FUNDING": 76,    # Ветка для фандинга (±0.5%)
     "SPREAD": 77,     # Ветка для спреда (от 3%+)
 }
 
@@ -393,9 +393,9 @@ def monitor_web3():
             
         time.sleep(720)
 
-# Поток 3: Сканер фандинга (±1%)
+# Поток 3: Сканер фандинга (±0.5%)
 def monitor_funding():
-    print("⚡ Модуль арбитража фандинга запущен...")
+    print("⚡ Модуль арбитража фандинга запущен (порог ±0.5%)...")
     while True:
         try:
             res = requests.get("https://fapi.binance.com/fapi/v1/premiumIndex", timeout=10)
@@ -405,7 +405,7 @@ def monitor_funding():
                     symbol = item.get("symbol", "")
                     last_funding = float(item.get("lastFundingRate", 0)) * 100
                     
-                    if abs(last_funding) >= 1.0:
+                    if abs(last_funding) >= 0.5:
                         alert_id = f"funding_{symbol}_{round(last_funding, 2)}"
                         if alert_id not in processed_arbitrage:
                             processed_arbitrage.add(alert_id)

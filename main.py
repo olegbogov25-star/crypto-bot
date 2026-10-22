@@ -9,7 +9,7 @@ from flask import Flask
 # ==================== CONFIGURATION ====================
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-CHAT_ID = "-1008839509486"
+CHAT_ID = "-1004451728851"  # 👈 Исправлен на твой актуальный ID супергруппы
 ADMIN_IDS = [1043209905]
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
@@ -284,7 +284,6 @@ def monitor_spread():
                 if min_p <= 0: continue
                 spread = ((max_p - min_p) / min_p) * 100
                 
-                # 🛠 Временно снизили порог до 0.5% для проверки
                 if spread >= 0.5:
                     current_scanned_syms.add(sym)
                     
@@ -428,7 +427,6 @@ def monitor_funding():
                 if not ex_rates:
                     continue
                 
-                # 🛠 Временно снизили порог до 0.05% для проверки
                 has_high_funding = any(abs(rate) >= 0.05 for rate in ex_rates.values())
                 
                 if has_high_funding:
@@ -483,4 +481,3 @@ if __name__ == "__main__":
     
     while True:
         time.sleep(3600)
-# test_run_fix

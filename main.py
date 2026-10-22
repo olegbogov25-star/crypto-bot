@@ -27,8 +27,8 @@ TOPICS = {
     "WHITEBIT": 72, 
     "KRAKEN": 73,   
     "GATE": 67,     
-    "FUNDING": 76,  
-    "SPREAD": 77    
+    "FUNDING": 76,  # 👈 Правильный ID топика фандинга
+    "SPREAD": 77    # 👈 Правильный ID топика спредов
 }
 
 processed_ids = set()
@@ -136,9 +136,12 @@ def send_to_topic(topic_name, text, reply_to_message_id=None):
                 disable_web_page_preview=True,
                 reply_to_message_id=reply_to_message_id
             )
+            print(f"SUCCESS: Sent message to {topic_name} (ID: {thread_id}), Message ID: {res.message_id}")
             return res.message_id
         except Exception as e:
-            print(f"Send Error ({topic_name}): {e}")
+            print(f"❌ Send Error ({topic_name}) with thread_id {thread_id}: {e}")
+    else:
+        print(f"❌ Send Error ({topic_name}): Missing CHAT_ID ({CHAT_ID}) or thread_id ({thread_id})")
     return None
 
 def process_item(item_id, raw_text, default_topic):
@@ -281,7 +284,8 @@ def monitor_spread():
                 if min_p <= 0: continue
                 spread = ((max_p - min_p) / min_p) * 100
                 
-                if spread >= 3.0:
+                # 🛠 Временно снизили порог до 0.5% для проверки
+                if spread >= 0.5:
                     current_scanned_syms.add(sym)
                     
                     if sym not in active_spreads:
@@ -292,7 +296,7 @@ def monitor_spread():
                         elif spread >= 5.0:
                             badge = "⚡ **STRONG SPREAD (>= 5%)**"
                         else:
-                            badge = "🚨 **SPREAD (>= 3%)**"
+                            badge = "🚨 **SPREAD (>= 0.5%)**"
 
                         min_link = get_exchange_link(min_ex, sym)
                         max_link = get_exchange_link(max_ex, sym)
@@ -326,7 +330,7 @@ def monitor_spread():
                         curr_max = max(ex_data.values())
                         if curr_min > 0:
                             curr_spread = ((curr_max - curr_min) / curr_min) * 100
-                            if curr_spread < 1.5:
+                            if curr_spread < 0.2:
                                 expired_syms.append(sym)
 
             for sym in expired_syms:
@@ -424,7 +428,8 @@ def monitor_funding():
                 if not ex_rates:
                     continue
                 
-                has_high_funding = any(abs(rate) >= 0.5 for rate in ex_rates.values())
+                # 🛠 Временно снизили порог до 0.05% для проверки
+                has_high_funding = any(abs(rate) >= 0.05 for rate in ex_rates.values())
                 
                 if has_high_funding:
                     rates_str = "_".join([f"{ex}:{rate:.2f}" for ex, rate in sorted(ex_rates.items())])
@@ -437,7 +442,7 @@ def monitor_funding():
                         overview = "\n".join(overview_list)
 
                         msg = (
-                            f"🔥 **HIGH FUNDING ALERT (>= ±0.5%)**\n"
+                            f"🔥 **HIGH FUNDING ALERT (>= ±0.05%)**\n"
                             f"🪙 **#{symbol}**\n\n"
                             f"📊 **All Exchanges Rates:**\n{overview}"
                         )

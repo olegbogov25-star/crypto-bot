@@ -424,7 +424,6 @@ def monitor_funding():
                 if not ex_rates:
                     continue
                 
-                # Проверяем, есть ли хотя бы на одной бирже ставка >= 0.5% или <= -0.5%
                 has_high_funding = any(abs(rate) >= 0.5 for rate in ex_rates.values())
                 
                 if has_high_funding:
@@ -472,7 +471,7 @@ def start_cmd(message):
     if message.chat.type == "private" and message.from_user.id not in ADMIN_IDS:
         bot.reply_to(message, "⛔ Доступ ограничен.")
         return
-    bot.reply_to(message, "👋 **Bot запущен! Мониторинг спредов (от 3%) и высокого фандинга (от ±0.5%) с улучшенным сопоставлением тикеров активен.**", parse_mode="Markdown")
+    bot.reply_to(message, "👋 **Bot запущен! Мониторинг спредов (от 3%) и высокого фандинга (от ±0.5%) активен.**", parse_mode="Markdown")
 
 # ==================== MAIN EXECUTION ====================
 if __name__ == "__main__":
@@ -481,4 +480,11 @@ if __name__ == "__main__":
     threading.Thread(target=monitor_funding, daemon=True).start()
     threading.Thread(target=monitor_news, daemon=True).start()
     
-    bot.infinity_polling()
+    # Защищенный цикл поллинга с авто-переподключением при 409 Conflict
+    while True:
+        try:
+            print("Starting bot polling...")
+            bot.infinity_polling(timeout=60, long_polling_timeout=60)
+        except Exception as e:
+            print(f"Polling error / 409 fix: {e}")
+            time.sleep(10)

@@ -18,17 +18,17 @@ app = Flask(__name__)
 # Точная карта топиков со всеми реальными ID из твоих скриншотов
 TOPICS = {
     "NEWS": 2, 
-    "MEXC": 68,     #[cite: 14]
-    "BYBIT": 4,     #[cite: 12]
-    "BINANCE": 3,   #[cite: 15]
-    "BITGET": 69,   #[cite: 21]
-    "BINGX": 70,    #[cite: 10]
-    "KUCOIN": 71,   #[cite: 13]
-    "WHITEBIT": 72, #[cite: 17]
-    "KRAKEN": 73,   #[cite: 18]
-    "GATE": 67,     #[cite: 16]
-    "FUNDING": 76,  #[cite: 19]
-    "SPREAD": 77    #[cite: 20]
+    "MEXC": 68,     #
+    "BYBIT": 4,     #
+    "BINANCE": 3,   #
+    "BITGET": 69,   #
+    "BINGX": 70,    #
+    "KUCOIN": 71,   #
+    "WHITEBIT": 72, #
+    "KRAKEN": 73,   #
+    "GATE": 67,     #
+    "FUNDING": 76,  #
+    "SPREAD": 77    #
 }
 
 processed_ids = set()
@@ -474,8 +474,7 @@ def start_cmd(message):
 
 # ==================== MAIN EXECUTION ====================
 if __name__ == "__main__":
-    send_to_topic("SPREAD", "🟢 Бот запущен: мониторинг спредов (45с), фандинга от ±0.5% (5м) активен!")
-    
+    # Фоновые потоки запущены без ошибочных стартовых отправок в топики
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()

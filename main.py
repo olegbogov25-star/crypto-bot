@@ -114,11 +114,18 @@ def analyze_text(text):
         print(f"AI Error: {e}")
         return text
 
-def send_to_topic(topic_name, text):
+def send_to_topic(topic_name, text, reply_to_message_id=None):
     thread_id = TOPICS.get(topic_name)
     if thread_id and CHAT_ID:
         try:
-            res = bot.send_message(chat_id=CHAT_ID, message_thread_id=thread_id, text=text, parse_mode="Markdown", disable_web_page_preview=True)
+            res = bot.send_message(
+                chat_id=CHAT_ID, 
+                message_thread_id=thread_id, 
+                text=text, 
+                parse_mode="Markdown", 
+                disable_web_page_preview=True,
+                reply_to_message_id=reply_to_message_id
+            )
             return res.message_id
         except Exception as e:
             print(f"Send Error ({topic_name}): {e}")
@@ -133,7 +140,6 @@ def process_item(item_id, raw_text, default_topic):
     if "SKIP" in ai_result.upper():
         return
     
-    # Автоматическая маршрутизация Web3, Альфа, X Launch, Megadrop и Square новостей в выделенный топик
     target_topic = default_topic
     web3_tags = [
         "#OKX_Web3", "#Binance_Web3", "#Bybit_Web3", "#Web3", "#Alpha", "#AlphaBox", 
@@ -235,7 +241,7 @@ def fetch_futures_prices():
 
     return prices
 
-# ==================== SPREAD MONITOR (FAST SIGNALS, NO AI) ====================
+# ==================== SPREAD MONITOR (GRADUATION 3%, 5%, 7%, 10% + REPLY ALIGN) ====================
 def monitor_spread():
     while True:
         try:
@@ -258,6 +264,15 @@ def monitor_spread():
                     current_scanned_syms.add(sym)
                     
                     if sym not in active_spreads:
+                        if spread >= 10.0:
+                            badge = "🔥🔥🔥 **MEGA SPREAD (>= 10%)**"
+                        elif spread >= 7.0:
+                            badge = "🔥 **HIGH SPREAD (>= 7%)**"
+                        elif spread >= 5.0:
+                            badge = "⚡ **STRONG SPREAD (>= 5%)**"
+                        else:
+                            badge = "🚨 **SPREAD (>= 3%)**"
+
                         min_link = get_exchange_link(min_ex, sym)
                         max_link = get_exchange_link(max_ex, sym)
                         
@@ -265,7 +280,8 @@ def monitor_spread():
                         overview = "\n".join(overview_list)
                         
                         msg_text = (
-                            f"🚨 **#{sym} | Spread: {spread:.2f}%**\n\n"
+                            f"{badge}\n"
+                            f"🪙 **#{sym} | Spread: `{spread:.2f}%`**\n\n"
                             f"🟢 **Long ({min_link}):** `${min_p}`\n"
                             f"🔴 **Short ({max_link}):** `${max_p}`\n\n"
                             f"📝 **All Exchanges Overview:**\n{overview}"
@@ -300,104 +316,127 @@ def monitor_spread():
                     secs = duration % 60
                     time_str = f"{mins}:{secs:02d}"
                     
-                    post_link = get_message_link(data["msg_id"])
-                    aligned_msg = f"[{sym}]({post_link}) aligned in {time_str}"
-                    send_to_topic("SPREAD", aligned_msg)
+                    # Публикуем сообщение о сходимости ответом (reply) на оригинальный пост в ветке
+                    aligned_msg = f"✅ `[{sym}]` prices aligned in `{time_str}`"
+                    send_to_topic("SPREAD", aligned_msg, reply_to_message_id=data["msg_id"])
 
         except Exception as e:
             print(f"Futures Spread Monitor Error: {e}")
         
-        # Безопасный интервал 45 секунд для спредов
         time.sleep(45)
 
-# ==================== FUNDING MONITOR (FAST SIGNALS, NO AI) ====================
+# ==================== FUNDING MONITOR (EXCHANGE PAIRS & HEDGING FROM ±0.5%) ====================
 def monitor_funding():
     while True:
         try:
+            all_funding = {} # {symbol: {exchange: rate}}
+
+            def collect_rate(exchange, symbol, rate):
+                if symbol.endswith('USDT'):
+                    all_funding.setdefault(symbol, {})[exchange] = rate
+
+            # Собираем ставки со всех доступных бирж
             try:
                 for item in requests.get("https://fapi.binance.com/fapi/v1/premiumIndex", timeout=5).json():
-                    check_and_send_funding("Binance", item['symbol'], float(item['lastFundingRate']) * 100)
+                    collect_rate("Binance", item['symbol'], float(item['lastFundingRate']) * 100)
             except Exception: pass
 
             try:
                 for item in requests.get("https://api.bybit.com/v5/market/tickers?category=linear", timeout=5).json().get('result', {}).get('list', []):
                     if item.get('fundingRate'):
-                        check_and_send_funding("Bybit", item['symbol'], float(item['fundingRate']) * 100)
+                        collect_rate("Bybit", item['symbol'], float(item['fundingRate']) * 100)
             except Exception: pass
 
             try:
                 for item in requests.get("https://www.okx.com/api/v5/public/funding-rate-all", timeout=5).json().get('data', []):
                     sym = item['instId'].replace('-USDT-SWAP', 'USDT').replace('-', '')
-                    check_and_send_funding("OKX", sym, float(item['fundingRate']) * 100)
+                    collect_rate("OKX", sym, float(item['fundingRate']) * 100)
             except Exception: pass
 
             try:
                 for item in requests.get("https://api.gateio.ws/api/v4/futures/usdt/tickers", timeout=5).json():
                     if 'funding_rate' in item:
-                        check_and_send_funding("Gate", item['contract'].replace('_', ''), float(item['funding_rate']) * 100)
+                        collect_rate("Gate", item['contract'].replace('_', ''), float(item['funding_rate']) * 100)
             except Exception: pass
 
             try:
                 for item in requests.get("https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES", timeout=5).json().get('data', []):
                     if item.get('fundingRate'):
-                        check_and_send_funding("Bitget", item['symbol'].replace('_UMCBL', ''), float(item['fundingRate']) * 100)
+                        collect_rate("Bitget", item['symbol'].replace('_UMCBL', ''), float(item['fundingRate']) * 100)
             except Exception: pass
 
             try:
                 for item in requests.get("https://contract.mexc.com/api/v1/contract/ticker", timeout=5).json().get('data', []):
                     if 'fundingRate' in item:
-                        check_and_send_funding("MEXC", item['symbol'].replace('_', ''), float(item['fundingRate']) * 100)
+                        collect_rate("MEXC", item['symbol'].replace('_', ''), float(item['fundingRate']) * 100)
             except Exception: pass
 
             try:
                 for item in requests.get("https://open-api.bingx.com/openApi/swap/v2/quote/premiumIndex", timeout=5).json().get('data', []):
                     if 'lastFundingRate' in item:
-                        check_and_send_funding("BingX", item['symbol'].replace('-', ''), float(item['lastFundingRate']) * 100)
+                        collect_rate("BingX", item['symbol'].replace('-', ''), float(item['lastFundingRate']) * 100)
             except Exception: pass
 
             try:
                 for item in requests.get("https://api-futures.kucoin.com/api/v1/contracts/active", timeout=5).json().get('data', []):
                     if 'fundingFeeRate' in item:
-                        check_and_send_funding("KuCoin", item['symbol'].replace('USDTM', 'USDT'), float(item['fundingFeeRate']) * 100)
+                        collect_rate("KuCoin", item['symbol'].replace('USDTM', 'USDT'), float(item['fundingFeeRate']) * 100)
             except Exception: pass
 
             try:
                 for item in requests.get("https://whitebit.com/api/v4/public/futures", timeout=5).json().get('result', []):
                     if 'funding_rate' in item:
-                        check_and_send_funding("WhiteBit", item['ticker'].replace('_', ''), float(item['funding_rate']) * 100)
+                        collect_rate("WhiteBit", item['ticker'].replace('_', ''), float(item['funding_rate']) * 100)
             except Exception: pass
 
             try:
                 for item in requests.get("https://futures.kraken.com/derivatives/api/v3/tickers", timeout=5).json().get('tickers', []):
                     if 'fundingRate' in item:
-                        check_and_send_funding("Kraken", item['symbol'].replace('PF_', '').replace('USD', 'USDT'), float(item['fundingRate']) * 100)
+                        collect_rate("Kraken", item['symbol'].replace('PF_', '').replace('USD', 'USDT'), float(item['fundingRate']) * 100)
             except Exception: pass
 
             try:
                 for item in requests.get("https://api.ourbit.com/api/v1/futures/market/tickers", timeout=5).json().get('data', []):
                     if 'fundingRate' in item:
-                        check_and_send_funding("Ourbit", item['symbol'], float(item['fundingRate']) * 100)
+                        collect_rate("Ourbit", item['symbol'], float(item['fundingRate']) * 100)
             except Exception: pass
+
+            # Анализируем ставки и ищем возможности для вилкования (от ±0.5% и выше)
+            for symbol, ex_rates in all_funding.items():
+                if not ex_rates:
+                    continue
+                
+                # Находим максимальную и минимальную ставку среди всех бирж для данной монеты
+                max_ex = max(ex_rates, key=ex_rates.get)
+                min_ex = min(ex_rates, key=ex_rates.get)
+                max_rate = ex_rates[max_ex]
+                min_rate = ex_rates[min_ex]
+
+                # Условие вилки: если одна из крайних ставок уходит по модулю >= 0.5%
+                if abs(max_rate) >= 0.5 or abs(min_rate) >= 0.5:
+                    sig_id = f"FUND_PAIR_{symbol}_{max_ex}_{max_rate:.2f}_{min_ex}_{min_rate:.2f}"
+                    if sig_id not in processed_arbitrage:
+                        processed_arbitrage.add(sig_id)
+                        
+                        max_link = get_exchange_link(max_ex, symbol)
+                        min_link = get_exchange_link(min_ex, symbol)
+                        
+                        overview_list = [f"🔹 {get_exchange_link(ex, symbol)}: `{r:+.2f}%`" for ex, r in ex_rates.items()]
+                        overview = "\n".join(overview_list)
+
+                        msg = (
+                            f"🔥 **FUNDING HEDGE OPPORTUNITY**\n"
+                            f"🪙 **#{symbol}**\n\n"
+                            f"🔴 **Max Rate ({max_link}):** `{max_rate:+.2f}%`\n"
+                            f"🟢 **Min/Opposite Rate ({min_link}):** `{min_rate:+.2f}%`\n\n"
+                            f"📊 **All Exchanges Rates:**\n{overview}"
+                        )
+                        send_to_topic("FUNDING", msg)
 
         except Exception as e:
             print(f"Funding Monitor Error: {e}")
             
-        # Оптимальный интервал 5 минут для фандинга
         time.sleep(300)
-
-def check_and_send_funding(exchange, symbol, rate):
-    if abs(rate) >= 0.5:
-        sig_id = f"FUND_{exchange}_{symbol}_{rate:.2f}"
-        if sig_id not in processed_arbitrage:
-            processed_arbitrage.add(sig_id)
-            ex_link = get_exchange_link(exchange, symbol)
-            msg = (
-                f"🔥 **HIGH FUNDING RATE >= ±0.5%**\n\n"
-                f"🏦 **Биржа:** {ex_link}\n"
-                f"🪙 **Монета:** #{symbol}\n"
-                f"📊 **Ставка фандинга:** `{rate:+.2f}%`"
-            )
-            send_to_topic("FUNDING", msg)
 
 # ==================== NEWS & RSS MONITORS ====================
 def monitor_news():
@@ -414,7 +453,6 @@ def monitor_news():
             except Exception as e:
                 print(f"RSS Error ({url}): {e}")
         
-        # Безопасный интервал 10 минут для новостей, Web3 и экосистемных порталов
         time.sleep(600)
 
 # ==================== TELEGRAM HANDLERS ====================
@@ -423,11 +461,11 @@ def start_cmd(message):
     if message.chat.type == "private" and message.from_user.id not in ADMIN_IDS:
         bot.reply_to(message, "⛔ Доступ ограничен.")
         return
-    bot.reply_to(message, "👋 **Bot запущен! Все Web3-модули, X Launch, Megadrop, Binance Square, стейкинг и безопасные тайминги активны.**", parse_mode="Markdown")
+    bot.reply_to(message, "👋 **Bot запущен! Спреды (3-10%+ с трекингом в реплаях), парные фандинг-вилки (от ±0.5%), Web3 и Square активны.**", parse_mode="Markdown")
 
 # ==================== MAIN EXECUTION ====================
 if __name__ == "__main__":
-    send_to_topic("SPREAD", "🟢 Бот запущен: мониторинг спредов (45с), фандинга (5м), Web3, экосистем и Square (10м) активен!")
+    send_to_topic("SPREAD", "🟢 Бот запущен: мониторинг спредов (45с), фандинг-вилок от ±0.5% (5м), Web3 и Square (10м) активен!")
     
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()

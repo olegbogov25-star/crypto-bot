@@ -29,7 +29,7 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "ВАШ_ТОКЕН_БОТА_О
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "ВАШ_КЛЮЧ_OPENROUTER")
 
 CHAT_ID = "-1004451728851"
-ADMIN_IDS = [123456789]  # Ваш Telegram ID
+ADMIN_IDS = [1043209905]  # Твой реальный Telegram ID
 
 EXCHANGE_CHATS = {
     "BINANCE": 3,

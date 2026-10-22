@@ -3,8 +3,23 @@ import time
 import threading
 import requests
 import feedparser
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from openai import OpenAI
 import telebot
+
+# ==================== ФЕЙКОВЫЙ СЕРВЕР ДЛЯ RENDER ====================
+class DummyHealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is active!")
+
+def run_dummy_server():
+    """Запуск легкого веб-сервера, чтобы Render не ругался на отсутствие портов"""
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), DummyHealthCheckHandler)
+    server.serve_forever()
+# ===================================================================
 
 # ==================== НАСТРОЙКИ ====================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "ВАШ_ТОКЕН_БОТА_ОТ_BOTFATHER")
@@ -16,7 +31,7 @@ CHAT_ID = "-1004451728851"
 # 🔴 ВПИШИ СЮДА СВОЙ TELEGRAM ID (число без кавычек, например: 987654321)
 ADMIN_IDS = [123456789]  # Узнать свой ID можно в боте @userinfobot
 
-# 📌 Актуализированные ID веток супергруппы:
+# 📌 Актуализированные ID веток супергруппы (10 бирж):
 EXCHANGE_CHATS = {
     "BINANCE": 3,
     "BYBIT": 4,
@@ -120,7 +135,7 @@ def analyze_and_send(title, summary, link, exchange_name):
             btn_app = telebot.types.InlineKeyboardButton(f"📱 Открыть акцию в {exchange_name}", url=link)
             markup.add(btn_app)
         
-        # Отправляем сообщение в обычном режиме с нормальными уведомлениями
+        # Отправляем сообщение со звуком
         bot.send_message(
             chat_id=CHAT_ID,
             message_thread_id=thread_id,
@@ -278,14 +293,17 @@ def handle_all_messages(message):
 
 
 if __name__ == "__main__":
-    # Запуск всех модулей без приветственного спама
+    # 1. Запуск микро-сервера для Render (убирает сообщение про отсутствующие порты)
+    threading.Thread(target=run_dummy_server, daemon=True).start()
+
+    # 2. Запуск рабочих модулей мониторинга
     threading.Thread(target=monitor_rss, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()
     
     print("🤖 CryptoMonitor Bot запущен со всеми ветками бирж!")
     
-    # Защищенный цикл бесконечного подбора сообщений
+    # 3. Защищенный цикл бесконечного подбора сообщений
     while True:
         try:
             bot.infinity_polling(timeout=20, long_polling_timeout=10, skip_pending=True)

@@ -29,7 +29,7 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "ВАШ_ТОКЕН_БОТА_О
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "ВАШ_КЛЮЧ_OPENROUTER")
 
 CHAT_ID = "-1004451728851"
-ADMIN_IDS = [1043209905]  # Твой реальный Telegram ID
+ADMIN_IDS = [1043209905]  # Твой административный ID
 
 EXCHANGE_CHATS = {
     "BINANCE": 3,
@@ -42,9 +42,9 @@ EXCHANGE_CHATS = {
     "KUCOIN": 71,
     "KRAKEN": 73,
     "WHITEBIT": 72,
-    "ORBIT": 0,       # Мультибиржевой / Арбитражный поток
-    "FUNDING": 76,    # Ветка для вилок фандинга (±1%)
-    "SPREAD": 77,     # Ветка для межбиржевого спреда (от 3%, 5%, 7%, 10%)
+    "ORBIT": 0,       # Мультибиржевой поток
+    "FUNDING": 76,    # Ветка для фандинга (±1%)
+    "SPREAD": 77,     # Ветка для спреда (от 3%+)
 }
 
 RESTRICTED_TOPICS = set(v for v in EXCHANGE_CHATS.values() if v != 0)
@@ -148,9 +148,9 @@ def analyze_and_send(title, summary, link, exchange_name):
     except Exception as e:
         print(f"❌ Ошибка ИИ-анализа для {exchange_name}: {e}")
 
-# Поток 1: Сквозной гибридный мониторинг новостей (RSS + Прямые API ВСЕХ бирж каждые 5 мин)
+# Поток 1: Гибридный мониторинг новостей (RSS + Прямые API бирж)
 def monitor_news_hybrid():
-    print("🚀 Тотальный гибридный модуль мониторинга новостей (RSS + API всех бирж) запущен...")
+    print("🚀 Тотальный гибридный модуль мониторинга новостей запущен...")
     while True:
         # 1. RSS
         for exchange, url in RSS_FEEDS.items():
@@ -348,9 +348,9 @@ def monitor_news_hybrid():
 
         time.sleep(300)
 
-# Поток 2: Мониторинг Web3 OKX (интервал: 12 мин)
+# Поток 2: Мониторинг Web3 OKX
 def monitor_web3():
-    print("🌐 Модуль мониторинга Web3 запущен (интервал: 12 мин)...")
+    print("🌐 Модуль мониторинга Web3 запущен...")
     while True:
         try:
             okx_ann_url = "https://www.okx.com/api/v5/support/announcements?page=1"
@@ -393,9 +393,9 @@ def monitor_web3():
             
         time.sleep(720)
 
-# Поток 3: Сканер фандинга (интервал: 5 минут, порог: ±1%)
+# Поток 3: Сканер фандинга (±1%)
 def monitor_funding():
-    print("⚡ Модуль арбитража фандинга запущен (интервал: 5 мин)...")
+    print("⚡ Модуль арбитража фандинга запущен...")
     while True:
         try:
             res = requests.get("https://fapi.binance.com/fapi/v1/premiumIndex", timeout=10)
@@ -425,9 +425,9 @@ def monitor_funding():
             print(f"❌ Ошибка в сканере фандинга: {e}")
         time.sleep(300)
 
-# Поток 4: Сканер межбиржевого спреда (интервал: 5 минут, уровни: 3%, 5%, 7%, 10%)
+# Поток 4: Сканер межбиржевого спреда (от 3%+)
 def monitor_spread():
-    print("🔀 Модуль мониторинга спреда запущен (интервал: 5 мин)...")
+    print("🔀 Модуль мониторинга спреда запущен...")
     while True:
         try:
             binance_res = requests.get("https://api.binance.com/api/v3/ticker/price", timeout=10)
@@ -479,60 +479,23 @@ def monitor_spread():
             print(f"❌ Ошибка в сканере спреда: {e}")
         time.sleep(300)
 
-@bot.message_handler(func=lambda message: message.message_thread_id in RESTRICTED_TOPICS)
-def auto_delete_user_messages(message):
-    if not message.from_user.is_bot:
-        try:
-            bot.delete_message(chat_id=message.chat.id, message_id=message.message_id)
-        except Exception:
-            pass
-
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     if message.chat.type == "private" and message.from_user.id not in ADMIN_IDS:
         bot.reply_to(message, "⛔ Доступ ограничен.")
         return
-    bot.reply_to(message, "👋 **CryptoMonitor Bot со сквозными API и арбитражем запущен!**")
-
-@bot.message_handler(func=lambda message: True)
-def handle_all_messages(message):
-    if message.chat.type == "private" and message.from_user.id not in ADMIN_IDS:
-        bot.reply_to(message, "⛔ Доступ ограничен.")
-        return
-
-    if message.chat.type in ["group", "supergroup"] and message.message_thread_id in RESTRICTED_TOPICS:
-        return
-
-    user_text = message.text
-    sent_msg = bot.reply_to(message, "🔍 Анализирую запрос...")
-
-    try:
-        completion = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_text}
-            ],
-            temperature=0.2,
-        )
-        answer = completion.choices[0].message.content
-        bot.edit_message_text(chat_id=message.chat.id, message_id=sent_msg.message_id, text=answer, parse_mode="Markdown")
-    except Exception as e:
-        try:
-            bot.edit_message_text(chat_id=message.chat.id, message_id=sent_msg.message_id, text=f"❌ Ошибка:\n{str(e)}")
-        except Exception:
-            pass
+    bot.reply_to(message, "👋 **CryptoMonitor Bot запущен в автономном режиме!**")
 
 if __name__ == "__main__":
     threading.Thread(target=run_dummy_server, daemon=True).start()
     
-    # Запуск всех потоков
+    # Запуск фоновых задач мониторинга
     threading.Thread(target=monitor_news_hybrid, daemon=True).start()
     threading.Thread(target=monitor_web3, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()
     
-    print("🤖 CryptoMonitor Bot запущен в полном боевом режиме 24/7!")
+    print("🤖 CryptoMonitor Bot полностью запущен и автономен!")
     
     while True:
         try:

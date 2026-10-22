@@ -60,27 +60,27 @@ def get_message_link(message_id):
     thread_id = TOPICS.get("SPREAD", 24)
     return f"https://t.me/c/{clean_chat_id}/{message_id}?thread={thread_id}"
 
-# ==================== AI ANALYSIS FOR PROMOTIONS / RSS ====================
+# ==================== AI ANALYSIS & FULL TAG / COMMISSION CALCULATOR ====================
 def analyze_text(text):
     if not OPENROUTER_API_KEY:
         return text
     prompt = f"""
-Ты — профессиональный аналитик крипто-биржевых промо-акций. Проанализируй текст официального анонса и сформируй детальный структурированный отчет:
+Ты — главный крипто-аналитик и эксперт по абузу биржевых промо-акций. Проанализируй текст официального анонса и сформируй детальный структурированный отчет:
 
 1. 📌 **Биржа / Источник:** Название биржи.
 2. 🏷 **Тип события / Теги:** Присвой ВСЕ подпадающие теги из списка:
-   - Биржи: #Binance #Bybit #OKX #Bitget #MEXC #BingX #KuCoin #WhiteBit #Kraken #Gate #Ourbit
-   - Активности: #Promotion #RewardCenter #TradingTournament #Challenge #Launchpool #Launchpad #Airdrop #DepositBonus #Listing #NewListing #Earn #Savings #VoteToList #FeeRebate #Voucher
+   - Биржевые теги: #Binance #Bybit #OKX #Bitget #MEXC #BingX #KuCoin #WhiteBit #Kraken #Gate #Ourbit
+   - Активности и категории: #Promotion #RewardCenter #TradingTournament #Challenge #Launchpool #Launchpad #Airdrop #DepositBonus #Listing #NewListing #Earn #Savings #VoteToList #FeeRebate #Voucher #IPO #PreMarket #IDO #IEO
 
 3. 🪙 **Токен / Проект:** Участвующие монеты.
 4. 📅 **Даты проведения:** Точный период проведения.
 5. 📋 **Краткое описание:** Суть события и призовой фонд.
 6. ⚡ **Пошаговая инструкция:** Что нужно сделать.
-7. 🎁 **Награды / Призовой фонд:** Все официальные награды (Mystery Box, ваучеры, пул USDT, токены).
+7. 🎁 **Награды / Призовой фонд:** Все официальные награды (содержимое Mystery Box, ваучеры SOL/USDT, пул токенов).
 8. 💡 **Детальный расчет комиссий и профита (для акций с объемами/депозитами):**
    - Распиши каждый уровень объема/депозита ($100, $1,000, $5,000, $20,000 и т.д.).
    - Посчитай двойную комиссию на фьючерсах/споте (Taker ~0.05% x 2, Maker ~0.02% x 2).
-   - Сопоставь комиссию с официальной наградой и выдай вердикт: какой уровень объемa наиболее выгоден!
+   - Сопоставь комиссию с официальной наградой для каждого уровня и выдай четкий вердикт: какой уровень объемa наиболее выгоден!
 
 - Если это служебное объявление без наград (ввод/вывод, техобслуживание, делистинг) — ответь строго одним словом: SKIP.
 
@@ -121,7 +121,7 @@ def process_item(item_id, raw_text, default_topic):
     
     send_to_topic(default_topic, ai_result)
 
-# ==================== FUTURES PRICES FETCHING ====================
+# ==================== FUTURES PRICES FETCHING (11 EXCHANGES) ====================
 def fetch_futures_prices():
     prices = {}
     try:
@@ -255,7 +255,7 @@ def monitor_spread():
                                 "start_time": time.time()
                             }
             
-            # Проверяем соходимость
+            # Проверяем соходимость спредов
             expired_syms = []
             for sym in list(active_spreads.keys()):
                 if sym not in current_scanned_syms or sym not in prices:
@@ -396,11 +396,11 @@ def start_cmd(message):
     if message.chat.type == "private" and message.from_user.id not in ADMIN_IDS:
         bot.reply_to(message, "⛔ Доступ ограничен.")
         return
-    bot.reply_to(message, "👋 **Bot запущен! Разделение быстрого мониторинга и ИИ-анализа промо-акций готово.**", parse_mode="Markdown")
+    bot.reply_to(message, "👋 **Bot запущен! Все модули, теги и ИИ-анализ наград активны.**", parse_mode="Markdown")
 
 # ==================== MAIN EXECUTION ====================
 if __name__ == "__main__":
-    send_to_topic("SPREAD", "🟢 Бот запущен: раздельная работа быстрых сигналов и ИИ-анализа акций включена!")
+    send_to_topic("SPREAD", "🟢 Бот запущен: мониторинг спредов, фандинга и полный аналитический модуль активны!")
     
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()

@@ -15,7 +15,6 @@ class DummyHealthCheckHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"Bot is active!")
 
 def run_dummy_server():
-    """Запуск легкого веб-сервера, чтобы Render не ругался на отсутствие портов"""
     port = int(os.environ.get("PORT", 8080))
     server = HTTPServer(("0.0.0.0", port), DummyHealthCheckHandler)
     server.serve_forever()
@@ -25,13 +24,9 @@ def run_dummy_server():
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "ВАШ_ТОКЕН_БОТА_ОТ_BOTFATHER")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "ВАШ_КЛЮЧ_OPENROUTER")
 
-# ID вашей целевой супергруппы ANTIGOI
 CHAT_ID = "-1004451728851"
+ADMIN_IDS = [123456789]  # Ваш Telegram ID
 
-# 🔴 ВПИШИ СЮДА СВОЙ TELEGRAM ID (число без кавычек)
-ADMIN_IDS = [123456789]  
-
-# 📌 Актуализированные ID веток супергруппы (10 бирж + Orbit + Фандинг + Спред):
 EXCHANGE_CHATS = {
     "BINANCE": 3,
     "BYBIT": 4,
@@ -49,8 +44,6 @@ EXCHANGE_CHATS = {
 }
 
 RESTRICTED_TOPICS = set(v for v in EXCHANGE_CHATS.values() if v != 0)
-# ===================================================
-
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 client = OpenAI(
@@ -60,7 +53,7 @@ client = OpenAI(
 
 MODEL_NAME = "openai/gpt-4o-mini"
 
-# Усовершенствованный фильтр технического шума, маржи и займов
+# Фильтр технического шума, маржи и займов
 EXCLUDED_KEYWORDS = [
     "deposit", "withdrawal", "wallet maintenance", "system upgrade",
     "scheduled maintenance", "delisting", "resume deposit", "resume withdrawal",
@@ -68,25 +61,24 @@ EXCLUDED_KEYWORDS = [
     "margin trading", "isolated margin", "cross margin", "loan service", "savings"
 ]
 
-# Обновленный системный промпт с защитой от сухих листингов и фокусом на Web3 Boost / X Launch / Раздачи
 SYSTEM_PROMPT = """
-Ты — специализированный криптоаналитик для автоматического отслеживания и разбора доходных событий: акций, промо-кампаний, аирдропов, Web3-квестов, кампаний Bybit Galaxy, бустов (Boost, X Launch), бесплатных раздач, фьючерсных турниров, бонусов за депозит, фарминга (PoolX, GemsPool) и Launchpad/Launchpool/Megadrop/Alpha от всех ключевых бирж.
+Ты — специализированный криптоаналитик для автоматического отслеживания и разбора доходных событий: акций, промо-кампаний, аирдропов, Web3-квестов, кампаний Bybit Galaxy/Arcade, Binance Web3 Airdrops/Megadrop, OKX Web3 Boost (X Launch, X Liquidity), бустов, бесплатных раздач, фьючерсных турниров, бонусов за депозит, фарминга (PoolX, GemsPool) и Launchpad/Launchpool/Megadrop/Alpha от всех ключевых бирж.
 
 ⚠️ ИГНОРИРУЙ и НЕ СОСТАВЛЯЙ отчеты по:
 1. Техническим новостям (ввод/вывод, залоги, маржа, техобслуживание, займы).
-2. СУХИМ ЛИСТИНГАМ — если токен просто добавляется на спот/фьючерсы/маржу и при этом НЕТ никакой раздачи, призового пула, аирдропа, пула бустов (X Launch) или промо-акции!
+2. СУХИМ ЛИСТИНГАМ — если токен просто добавляется на спот/фьючерсы/маржу и при этом НЕТ никакой раздачи, призового пула, аирдропа, пула бустов (X Launch, Web3 Wallet Quest) или промо-акции!
 
 ✅ СОСТАВЛЯЙ ОТЧЕТ ТОЛЬКО ЕСЛИ:
-Событие содержит ДОХОДНУЮ СОСТАВЛЯЮЩУЮ (аирдроп, фарминг, награды за депозит/торговлю, квесты, бонусы, X Launch, Boost, Launchpool/Megadrop/Alpha/CandyBomb).
+Событие содержит ДОХОДНУЮ СОСТАВЛЯЮЩУЮ (аирдроп, фарминг, награды за депозит/торговлю, Web3-квесты, бонусы, X Launch, Boost, Launchpool/Megadrop/Alpha/CandyBomb).
 
 Составляй чёткий, структурированный отчёт на русском языке strictly по шаблону:
 
-📌 **Биржа / Источник:** [Укажи биржу]
+📌 **Биржа / Источник:** [Укажи биржу и раздел, например Binance Web3 / OKX Boost]
 🏷 **Тип события / Теги:** [#Listing, #NewListing, #InitialListing, #PreMarket, #IPO, #Launchpad, #Launchpool, #Megadrop, #Alpha, #CandyDrop, #CandyBomb, #Startup, #Kickstarter, #AirDrop, #Web3Airdrop, #Web3Quest, #Quest, #Galaxy, #Arcade, #Boost, #XLaunch, #Liquidity, #Yield, #Campaign, #Promotion, #Activity, #Event, #TradingCompetition, #LearnAndEarn, #FlashEarn, #Prediction, #Voucher, #Bonus, #VIP, #Futures, #Staking, #Earn, #PoolX, #GemsPool, #ByStarter, #HoldAndEarn, #CryptoBox, #TrialFund, #WOTD, #TradeBoost, #Code, #RewardCenter]
 
 💰 **Токен / Проект:** [Название и тикер]
 📅 **Даты / Время проведения:** [Период]
-📋 **Краткое описание:** [Суть анонса, буста или промо-акции]
+📋 **Краткое описание:** [Суть анонса, буста, Web3-квеста или промо-акции]
 
 ⚡ **Что нужно сделать (Инструкция / Пошагово):**
 - [Шаг 1]
@@ -94,7 +86,7 @@ SYSTEM_PROMPT = """
 - [Шаг 3]
 
 🎁 **Награды / Призовой фонд:** [Пулы, APY, бонусы, аирдроп]
-⚠️ **Важные условия / Ограничения и риски:** [Риски, KYC]
+⚠️ **Важные условия / Ограничения и риски:** [Риски, KYC, Сеть/Кошелек]
 🔗 **Ссылка на источник/акцию:** [Ссылка]
 📱 **Переход в приложение:** [Инструкция]
 """
@@ -114,7 +106,7 @@ def is_noise(text):
     return any(keyword in text_lower for keyword in EXCLUDED_KEYWORDS)
 
 def analyze_and_send(title, summary, link, exchange_name):
-    exchange_key = exchange_name.upper()
+    exchange_key = exchange_name.upper().split()[0]
     if exchange_key not in EXCHANGE_CHATS or EXCHANGE_CHATS[exchange_key] == 0:
         return
     
@@ -137,7 +129,7 @@ def analyze_and_send(title, summary, link, exchange_name):
         
         markup = telebot.types.InlineKeyboardMarkup()
         if link:
-            btn_app = telebot.types.InlineKeyboardButton(f"📱 Открыть акцию в {exchange_name}", url=link)
+            btn_app = telebot.types.InlineKeyboardButton(f"📱 Открыть в {exchange_name}", url=link)
             markup.add(btn_app)
         
         bot.send_message(
@@ -148,10 +140,11 @@ def analyze_and_send(title, summary, link, exchange_name):
             reply_markup=markup
         )
     except Exception as e:
-        print(f"❌ Ошибка ИИ-анализа RSS для {exchange_key}: {e}")
+        print(f"❌ Ошибка ИИ-анализа для {exchange_name}: {e}")
 
+# Поток 1: Мониторинг стандартных RSS (каждые 5 минут)
 def monitor_rss():
-    print("🚀 Модуль автомониторинга RSS запущен...")
+    print("🚀 Модуль мониторинга RSS запущен (интервал: 5 мин)...")
     for exchange, url in RSS_FEEDS.items():
         try:
             feed = feedparser.parse(url)
@@ -160,7 +153,7 @@ def monitor_rss():
                 if link:
                     processed_links.add(link)
         except Exception as e:
-            print(f"⚠️ Ошибка подгрузки RSS {exchange}: {e}")
+            print(f"⚠️ Ошибка инициализации RSS {exchange}: {e}")
 
     while True:
         for exchange, url in RSS_FEEDS.items():
@@ -177,34 +170,50 @@ def monitor_rss():
                             processed_links.pop()
                         analyze_and_send(title, summary, link, exchange)
             except Exception as e:
-                print(f"❌ Ошибка парсинга {exchange}: {e}")
-        time.sleep(300)
+                print(f"❌ Ошибка парсинга RSS {exchange}: {e}")
+        time.sleep(300) # 5 минут
 
-def monitor_funding():
-    """Сканер вилок фандинга (поиск противоположных ставок ≥ ±1.0% по 11 биржам с расчетом плеч и объемов)"""
-    print("🚀 Модуль арбитража фандинга запущен...")
+# Поток 2: Отдельный безопасный мониторинг Web3 (каждые 12 минут)
+def monitor_web3():
+    print("🌐 Модуль мониторинга Web3 запущен (интервал: 12 мин)...")
     while True:
         try:
-            # Логика вилкования по 11 биржам (включая Orbit)
+            okx_api_url = "https://www.okx.com/api/v5/support/announcements?page=1"
+            res = requests.get(okx_api_url, timeout=10)
+            if res.status_code == 200:
+                data = res.json()
+                if data.get("code") == "0" and "data" in data:
+                    for ann in data["data"][0].get("details", [])[:5]:
+                        title = ann.get("title", "")
+                        link = ann.get("url", "https://www.okx.com/web3")
+                        if link and link not in processed_links:
+                            processed_links.add(link)
+                            analyze_and_send(title, title, link, "OKX Web3 Boost")
+        except Exception as e:
+            print(f"⚠️ Ошибка подгрузки Web3 API OKX: {e}")
+            
+        time.sleep(720) # 12 минут — абсолютно безопасно от блокировок
+
+# Поток 3: Фандинг (каждые 30 минут)
+def monitor_funding():
+    print("⚡ Модуль арбитража фандинга запущен (интервал: 30 мин)...")
+    while True:
+        try:
             pass
         except Exception as e:
             print(f"❌ Ошибка в мониторинге фандинга: {e}")
-            
         time.sleep(1800)
 
+# Поток 4: Спред (каждые 30 минут)
 def monitor_spread():
-    """Сканер спреда цен (независимый поиск разницы цен ≥ 3% по 11 биржам с расчетом плеч и объемов)"""
-    print("🚀 Модуль мониторинга спреда запущен...")
+    print("🔀 Модуль мониторинга спреда запущен (интервал: 30 мин)...")
     while True:
         try:
-            # Логика межбиржевого спреда цен
             pass
         except Exception as e:
             print(f"❌ Ошибка в мониторинге спреда: {e}")
-            
         time.sleep(1800)
 
-# 1. Автоудаление пользовательских сообщений в защищенных топиках
 @bot.message_handler(func=lambda message: message.message_thread_id in RESTRICTED_TOPICS)
 def auto_delete_user_messages(message):
     if not message.from_user.is_bot:
@@ -213,15 +222,13 @@ def auto_delete_user_messages(message):
         except Exception:
             pass
 
-# 2. Команды /start и /help
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     if message.chat.type == "private" and message.from_user.id not in ADMIN_IDS:
         bot.reply_to(message, "⛔ Доступ ограничен.")
         return
-    bot.reply_to(message, "👋 **CryptoMonitor Bot полностью обновлен и работает в штатном режиме!**")
+    bot.reply_to(message, "👋 **CryptoMonitor Bot запущен с раздельными безопасными таймерами!**")
 
-# 3. Обработка ручных запросов
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
     if message.chat.type == "private" and message.from_user.id not in ADMIN_IDS:
@@ -253,11 +260,14 @@ def handle_all_messages(message):
 
 if __name__ == "__main__":
     threading.Thread(target=run_dummy_server, daemon=True).start()
+    
+    # Запуск всех независимых потоков с правильными интервалами
     threading.Thread(target=monitor_rss, daemon=True).start()
+    threading.Thread(target=monitor_web3, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()
     
-    print("🤖 CryptoMonitor Bot успешно запущен!")
+    print("🤖 CryptoMonitor Bot успешно запущен с индивидуальными интервалами!")
     
     while True:
         try:

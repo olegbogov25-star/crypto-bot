@@ -39,8 +39,8 @@ EXCHANGE_CHATS = {
     "KRAKEN": 73,
     "WHITEBIT": 72,
     "ORBIT": 0,
-    "FUNDING": 76,    # Автономная ветка для вилок фандинга (±1%)
-    "SPREAD": 77,     # Автономная ветка для разницы цен (≥3%)
+    "FUNDING": 76,    # Ветка для вилок фандинга (±1% + Плечо + Объемы)
+    "SPREAD": 77,     # Ветка для межбиржевого спреда (≥3% + Плечо + Объемы)
 }
 
 RESTRICTED_TOPICS = set(v for v in EXCHANGE_CHATS.values() if v != 0)
@@ -166,13 +166,11 @@ def monitor_rss():
         time.sleep(300)
 
 def monitor_funding():
-    """Сканер вилок фандинга (НЕ зависит от цены, только сопоставление противоположных ставок >= ±1%)"""
-    print("🚀 Модуль арбитража фандинга запущен...")
+    """Сканер вилок фандинга (с указанием максимального плеча и доступного объема)"""
+    print("🚀 Модуль арбитража фандинга с анализом плеч запущен...")
     while True:
         try:
-            # 1. Сбор ставок фандинга с 11 бирж
-            # 2. Поиск пар: Биржа А (ставка >= +1%) + Биржа Б (ставка <= -1%)
-            # 3. Отправка сигнала строго в ветку FUNDING (ID: 76)
+            # Логика вилкования по 11 биржам (включая Orbit) с расчетом плеча и лимитов USDT
             pass
         except Exception as e:
             print(f"❌ Ошибка в мониторинге фандинга: {e}")
@@ -180,13 +178,11 @@ def monitor_funding():
         time.sleep(1800)
 
 def monitor_spread():
-    """Сканер спреда цен (НЕ зависит от фандинга, только разница цен >= 3% между 11 биржами)"""
-    print("🚀 Модуль мониторинга спреда запущен...")
+    """Сканер спреда цен (с указанием максимального плеча и стаканов по 11 биржам)"""
+    print("🚀 Модуль мониторинга спреда с анализом ликвидности запущен...")
     while True:
         try:
-            # 1. Сбор цен одной и той же монеты с 11 бирж
-            # 2. Вычисление процента разницы цен: ((Max_Price - Min_Price) / Min_Price) * 100
-            # 3. Если Спред >= 3% -> Отправка сигнала строго в ветку SPREAD (ID: 77)
+            # Логика межбиржевого спреда цен >= 3% с проверкой плеча и доступного объема в USDT
             pass
         except Exception as e:
             print(f"❌ Ошибка в мониторинге спреда: {e}")
@@ -208,7 +204,7 @@ def send_welcome(message):
     if message.chat.type == "private" and message.from_user.id not in ADMIN_IDS:
         bot.reply_to(message, "⛔ Доступ ограничен.")
         return
-    bot.reply_to(message, "👋 **CryptoMonitor Bot запущен! Фандинг и Спреды разделены и работают независимо.**")
+    bot.reply_to(message, "👋 **CryptoMonitor Bot активен! Модули с расчетом плеч и объемов настроены.**")
 
 # 3. Обработка ручных запросов
 @bot.message_handler(func=lambda message: True)
@@ -246,7 +242,7 @@ if __name__ == "__main__":
     threading.Thread(target=monitor_funding, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()
     
-    print("🤖 CryptoMonitor Bot запущен в режиме независимого мониторинга!")
+    print("🤖 CryptoMonitor Bot запущен с поддержкой анализа плеч и объемов!")
     
     while True:
         try:

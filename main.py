@@ -9,13 +9,13 @@ from flask import Flask
 # ==================== CONFIGURATION ====================
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-CHAT_ID = "-1004451728851"  # 👈 Исправлен на твой актуальный ID супергруппы
+CHAT_ID = "-1004451728851"  # Актуальный ID супергруппы
 ADMIN_IDS = [1043209905]
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 app = Flask(__name__)
 
-# Точная карта топиков со всеми реальными ID из твоего канала
+# Точная карта топиков со всеми реальными ID
 TOPICS = {
     "NEWS": 2, 
     "MEXC": 68,     
@@ -27,8 +27,8 @@ TOPICS = {
     "WHITEBIT": 72, 
     "KRAKEN": 73,   
     "GATE": 67,     
-    "FUNDING": 76,  # 👈 Правильный ID топика фандинга
-    "SPREAD": 77    # 👈 Правильный ID топика спредов
+    "FUNDING": 76,  # ID топика фандинга
+    "SPREAD": 77    # ID топика спредов
 }
 
 processed_ids = set()
@@ -265,7 +265,7 @@ def fetch_futures_prices():
 
     return prices
 
-# ==================== SPREAD MONITOR ====================
+# ==================== SPREAD MONITOR (>= 3.0%) ====================
 def monitor_spread():
     while True:
         try:
@@ -284,7 +284,8 @@ def monitor_spread():
                 if min_p <= 0: continue
                 spread = ((max_p - min_p) / min_p) * 100
                 
-                if spread >= 0.5:
+                # Боевой фильтр спреда: от 3.0%
+                if spread >= 3.0:
                     current_scanned_syms.add(sym)
                     
                     if sym not in active_spreads:
@@ -295,7 +296,7 @@ def monitor_spread():
                         elif spread >= 5.0:
                             badge = "⚡ **STRONG SPREAD (>= 5%)**"
                         else:
-                            badge = "🚨 **SPREAD (>= 0.5%)**"
+                            badge = "🚨 **SPREAD (>= 3%)**"
 
                         min_link = get_exchange_link(min_ex, sym)
                         max_link = get_exchange_link(max_ex, sym)
@@ -329,7 +330,7 @@ def monitor_spread():
                         curr_max = max(ex_data.values())
                         if curr_min > 0:
                             curr_spread = ((curr_max - curr_min) / curr_min) * 100
-                            if curr_spread < 0.2:
+                            if curr_spread < 1.0:
                                 expired_syms.append(sym)
 
             for sym in expired_syms:
@@ -348,7 +349,7 @@ def monitor_spread():
         
         time.sleep(45)
 
-# ==================== FUNDING MONITOR (HIGH FUNDING ALERT) ====================
+# ==================== FUNDING MONITOR (>= ±0.5%) ====================
 def monitor_funding():
     while True:
         try:
@@ -427,7 +428,8 @@ def monitor_funding():
                 if not ex_rates:
                     continue
                 
-                has_high_funding = any(abs(rate) >= 0.05 for rate in ex_rates.values())
+                # Боевой фильтр фандинга: от ±0.5%
+                has_high_funding = any(abs(rate) >= 0.5 for rate in ex_rates.values())
                 
                 if has_high_funding:
                     rates_str = "_".join([f"{ex}:{rate:.2f}" for ex, rate in sorted(ex_rates.items())])
@@ -440,7 +442,7 @@ def monitor_funding():
                         overview = "\n".join(overview_list)
 
                         msg = (
-                            f"🔥 **HIGH FUNDING ALERT (>= ±0.05%)**\n"
+                            f"🔥 **HIGH FUNDING ALERT (>= ±0.5%)**\n"
                             f"🪙 **#{symbol}**\n\n"
                             f"📊 **All Exchanges Rates:**\n{overview}"
                         )
@@ -473,7 +475,7 @@ if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     
     # 🚨 ТЕСТОВОЕ СООБЩЕНИЕ ПРИ СТАРТЕ 🚨
-    send_to_topic("SPREAD", "🚀 **Бот успешно запущен и начал сканирование 11 бирж!**")
+    send_to_topic("SPREAD", "🚀 **Бот успешно запущен с боевыми фильтрами (Spread >= 3%, Funding >= ±0.5%)!**")
     
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()

@@ -27,8 +27,8 @@ TOPICS = {
     "WHITEBIT": 72, 
     "KRAKEN": 73,   
     "GATE": 67,     
-    "FUNDING": 76,  # 👈 Правильный ID топика фандинга
-    "SPREAD": 77    # 👈 Правильный ID топика спредов
+    "FUNDING": 76,  
+    "SPREAD": 77    
 }
 
 processed_ids = set()
@@ -262,7 +262,7 @@ def fetch_futures_prices():
 
     return prices
 
-# ==================== SPREAD MONITOR (TEST MODE: >= 0.1%) ====================
+# ==================== SPREAD MONITOR ====================
 def monitor_spread():
     while True:
         try:
@@ -281,12 +281,18 @@ def monitor_spread():
                 if min_p <= 0: continue
                 spread = ((max_p - min_p) / min_p) * 100
                 
-                # 👇 ВРЕМЕННЫЙ ТЕСТОВЫЙ ПОРОГ (0.1% вместо 3.0%)
-                if spread >= 0.1:
+                if spread >= 3.0:
                     current_scanned_syms.add(sym)
                     
                     if sym not in active_spreads:
-                        badge = "🚨 **TEST SPREAD (>= 0.1%)**"
+                        if spread >= 10.0:
+                            badge = "🔥🔥🔥 **MEGA SPREAD (>= 10%)**"
+                        elif spread >= 7.0:
+                            badge = "🔥 **HIGH SPREAD (>= 7%)**"
+                        elif spread >= 5.0:
+                            badge = "⚡ **STRONG SPREAD (>= 5%)**"
+                        else:
+                            badge = "🚨 **SPREAD (>= 3%)**"
 
                         min_link = get_exchange_link(min_ex, sym)
                         max_link = get_exchange_link(max_ex, sym)
@@ -320,7 +326,7 @@ def monitor_spread():
                         curr_max = max(ex_data.values())
                         if curr_min > 0:
                             curr_spread = ((curr_max - curr_min) / curr_min) * 100
-                            if curr_spread < 0.05:
+                            if curr_spread < 1.5:
                                 expired_syms.append(sym)
 
             for sym in expired_syms:
@@ -339,7 +345,7 @@ def monitor_spread():
         
         time.sleep(45)
 
-# ==================== FUNDING MONITOR (TEST MODE: >= ±0.01%) ====================
+# ==================== FUNDING MONITOR (HIGH FUNDING ALERT) ====================
 def monitor_funding():
     while True:
         try:
@@ -418,8 +424,7 @@ def monitor_funding():
                 if not ex_rates:
                     continue
                 
-                # 👇 ВРЕМЕННЫЙ ТЕСТОВЫЙ ПОРОГ (0.01% вместо 0.5%)
-                has_high_funding = any(abs(rate) >= 0.01 for rate in ex_rates.values())
+                has_high_funding = any(abs(rate) >= 0.5 for rate in ex_rates.values())
                 
                 if has_high_funding:
                     rates_str = "_".join([f"{ex}:{rate:.2f}" for ex, rate in sorted(ex_rates.items())])
@@ -432,7 +437,7 @@ def monitor_funding():
                         overview = "\n".join(overview_list)
 
                         msg = (
-                            f"🔥 **TEST FUNDING ALERT (>= ±0.01%)**\n"
+                            f"🔥 **HIGH FUNDING ALERT (>= ±0.5%)**\n"
                             f"🪙 **#{symbol}**\n\n"
                             f"📊 **All Exchanges Rates:**\n{overview}"
                         )
@@ -463,6 +468,10 @@ def monitor_news():
 # ==================== MAIN EXECUTION ====================
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
+    
+    # 🚨 ТЕСТОВОЕ СООБЩЕНИЕ ПРИ СТАРТЕ 🚨
+    send_to_topic("SPREAD", "🚀 **Бот успешно запущен и начал сканирование 11 бирж!**")
+    
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()
     threading.Thread(target=monitor_news, daemon=True).start()

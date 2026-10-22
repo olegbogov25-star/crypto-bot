@@ -74,29 +74,25 @@ def normalize_symbol(raw_sym):
             sym += 'USDT'
     return sym
 
-# ==================== ADVANCED AI & PROMO ANALYZER (42 ТЕГА) ====================
+# ==================== ADVANCED AI & PROMO ANALYZER ====================
 def analyze_text(text):
     if not OPENROUTER_API_KEY:
         return text
     prompt = f"""
-Ты — главный крипто-аналитик и эксперт по абузу биржевых промо-акций, Web3-экосистем, лаунчпулов, пулов ликвидности и контентных программ. Проанализируй текст официального анонса из RSS-ленты и сформируй детальный структурированный отчет:
+Ты — главный крипто-аналитик. Проанализируй текст официального анонса из RSS-ленты и сформируй структурированный отчет.
 
-1. 📌 **Источник / Платформа:** Название биржи (Binance, Bybit, OKX, Bitget, MEXC и т.д.).
-2. 🏷 **Тип события / Теги:** Присвой ВСЕ подпадающие теги из расширенного списка (всего 42 тега):
-   - Web3 и Экосистемы: #OKX_Web3 #Binance_Web3 #Bybit_Web3 #Web3 #DApp #Quest #Task #XLiquidity
-   - Разделы: #XLaunch #XTrade #TokenSplash #Megadrop #ByVotes #BinancePay
-   - Контент: #BinanceSquare #Square #WriteToEarn #CreatorPad
-   - Биржи: #Binance #Bybit #OKX #Bitget #MEXC #BingX #KuCoin #WhiteBit #Kraken #Gate #Ourbit
-   - Активности: #Promotion #RewardCenter #Alpha #AlphaBox #MysteryBox #TradingTournament #Challenge #Boost #Booster #Launchpool #Launchpad #Airdrop #DepositBonus #Listing #NewListing #Earn #Savings #Staking #SimpleEarn #Flexible #Locked #VoteToList #FeeRebate #Voucher #BetVoucher #MarginVoucher #Margin #IPO #PreMarket #IDO #IEO #VIP
+СТРОГОЕ ПРАВИЛО ФИЛЬТРАЦИИ:
+Если новость про суды, штрафы, регуляторов, делистинг, техобслуживание, юридические вопросы, лицензии, Binance Square / посты блогеров или НЕ содержит практических наград/профита для пользователей — ответь строго одним словом: SKIP.
 
-3. 🪙 **Токен / Проект:** Участвующие монеты или активы.
-4. 📅 **Даты проведения:** Период проведения.
-5. 📋 **Краткое описание:** Суть акции, буста, турнира, лаунчпула или квеста.
-6. ⚡ **Пошаговая инструкция:** Четкие действия для участия.
-7. 🎁 **Награды / Призовой фонд:** Официальные награды.
-8. 💡 **Детальный расчет комиссий, затрат на газ и профита:** Посчитай затраты и выдай математический вердикт для разных уровней депозитов ($100, $1,000, $5,000, $20,000+).
-
-- Если это служебное объявление без наград (ввод/вывод, техобслуживание, делистинг) — ответь строго одним словом: SKIP.
+Если новость содержит акции, промо, аирдропы, листинги, кампании, лаунчпады — выдай отчет по следующей форме:
+1. 📌 **Источник / Платформа:** Название биржи.
+2. 🏷 **Тип события / Теги:** Выбери подходящие теги (#OKX_Web3 #Binance_Web3 #Bybit_Web3 #Web3 #XLaunch #XTrade #TokenSplash #Megadrop #Binance #Bybit #OKX #Bitget #MEXC #BingX #KuCoin #WhiteBit #Kraken #Gate #Ourbit #Promotion #Launchpool #Launchpad #Airdrop #Listing и др.).
+3. 🪙 **Токен / Проект.**
+4. 📅 **Даты проведения.**
+5. 📋 **Краткое описание.**
+6. ⚡ **Пошаговая инструкция.**
+7. 🎁 **Награды / Призовой фонд.**
+8. 💡 **Расчет профита для $100, $1K, $5K, $20K+.**
 
 Текст для анализа:
 {text}
@@ -336,6 +332,7 @@ def monitor_spread():
                 if min_p <= 0: continue
                 spread = ((max_p - min_p) / min_p) * 100
                 
+                # Фильтр спредов строго от 7% до 30%
                 if spread >= 7.0 and spread <= 30.0:
                     current_scanned_syms.add(sym)
                     
@@ -353,20 +350,21 @@ def monitor_spread():
                         max_pos_usdt = int(min(vol_min, vol_max, 50000))
                         if max_pos_usdt < 100: max_pos_usdt = 100
 
-                        # Авто-маркировка с указанием конкретной проблемной биржи
+                        # Проверка делистинга (>25%) и пустого стакана (<10k)
                         risk_tag = ""
                         low_liq_exs = [ex for ex, v in sym_vols.items() if v < 10000 and ex in ex_data]
                         
-                        if low_liq_exs:
+                        if spread > 25.0:
+                            risk_tag = "\n⚠️ **RISK: Аномальный спред / Риск делистинга!**\n"
+                        elif low_liq_exs:
                             bad_exs_str = ", ".join(low_liq_exs)
-                            risk_tag = f"\n⚠️ **RISK: Низкая ликвидность ({bad_exs_str})**\n"
-                        elif spread > 25.0:
-                            risk_tag = "\n⚠️ **WARNING: Аномальный спред (Возможный делистинг или баг оракула!)**\n"
+                            risk_tag = f"\n⚠️ **RISK: Низкая ликвидность / Пустой стакан ({bad_exs_str})**\n"
 
                         sym_funds = fundings.get(sym, {})
                         min_fund = sym_funds.get(min_ex, 0.0)
                         max_fund = sym_funds.get(max_ex, 0.0)
 
+                        # Сортировка бирж: топовые биржи по ликвидности идут первыми в списке
                         sorted_exs = sorted(ex_data.keys(), key=lambda ex: sym_vols.get(ex, 0), reverse=True)
                         
                         overview_list = []
@@ -504,7 +502,7 @@ def monitor_news():
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     
-    send_to_topic("SPREAD", "🚀 **Бот запущен: теперь плашка риска показывает название конкретной неликвидной биржи!**")
+    send_to_topic("SPREAD", "🚀 **Бот запущен и работает в штатном режиме!**")
     
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()

@@ -43,7 +43,7 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# ==================== LINK GENERATORS ====================
+# ==================== LINK GENERATORS (С нативным открытием приложений) ====================
 def get_exchange_url(exchange, symbol):
     base_sym = symbol.replace('USDT', '')
     links = {
@@ -62,6 +62,7 @@ def get_exchange_url(exchange, symbol):
     return links.get(exchange, "https://google.com")
 
 def get_exchange_app_url(exchange, symbol):
+    # Гарантируем возврат ссылки биржи для кнопок, чтобы iOS открывала приложение
     return get_exchange_url(exchange, symbol)
 
 def get_exchange_link(exchange, symbol):
@@ -81,7 +82,7 @@ def normalize_symbol(raw_sym):
             sym += 'USDT'
     return sym
 
-# ==================== ADVANCED AI & PROMO CALCULATOR ====================
+# ==================== ADVANCED AI & PROMO CALCULATOR (42 ТЕГА) ====================
 def analyze_text(text):
     if not OPENROUTER_API_KEY:
         return text
@@ -89,7 +90,7 @@ def analyze_text(text):
 Ты — главный крипто-аналитик и эксперт по абузу биржевых промо-акций, Web3-экосистем, лаунчпулов, пулов ликвидности и контентных программ. Проанализируй текст официального анонса и сформируй детальный структурированный отчет:
 
 1. 📌 **Источник / Платформа:** Название биржи (Binance, Bybit, OKX, Bitget, MEXC и т.д.).
-2. 🏷 **Тип события / Теги:** Присвой ВСЕ подпадающие теги из расширенного списка:
+2. 🏷 **Тип события / Теги:** Присвой ВСЕ подпадающие теги из расширенного списка (всего 42 тега):
    - Web3 и Экосистемы: #OKX_Web3 #Binance_Web3 #Bybit_Web3 #Web3 #DApp #Quest #Task #XLiquidity
    - Разделы: #XLaunch #XTrade #TokenSplash #Megadrop #ByVotes #BinancePay
    - Контент: #BinanceSquare #Square #WriteToEarn #CreatorPad
@@ -158,7 +159,7 @@ def process_item(item_id, raw_text, default_topic):
             
     send_to_topic(target_topic, ai_result)
 
-# ==================== FUTURES PRICES FETCHING (Без Kraken и WhiteBit) ====================
+# ==================== FUTURES PRICES FETCHING ====================
 def fetch_futures_prices():
     prices = {}
     try:
@@ -228,7 +229,7 @@ def fetch_futures_prices():
 
     return prices
 
-# ==================== SPREAD MONITOR (>= 3.0% до 50%) ====================
+# ==================== SPREAD MONITOR ====================
 def monitor_spread():
     while True:
         try:
@@ -285,12 +286,38 @@ def monitor_spread():
                                 "msg_id": msg_id,
                                 "start_time": time.time()
                             }
+            
+            expired_syms = []
+            for sym in list(active_spreads.keys()):
+                if sym not in current_scanned_syms or sym not in prices:
+                    expired_syms.append(sym)
+                else:
+                    ex_data = prices[sym]
+                    if len(ex_data) >= 2:
+                        curr_min = min(ex_data.values())
+                        curr_max = max(ex_data.values())
+                        if curr_min > 0:
+                            curr_spread = ((curr_max - curr_min) / curr_min) * 100
+                            if curr_spread < 1.0:
+                                expired_syms.append(sym)
+
+            for sym in expired_syms:
+                data = active_spreads.pop(sym, None)
+                if data:
+                    duration = int(time.time() - data["start_time"])
+                    mins = duration // 60
+                    secs = duration % 60
+                    time_str = f"{mins}:{secs:02d}"
+                    
+                    aligned_msg = f"✅ `[{sym}]` prices aligned in `{time_str}`"
+                    send_to_topic("SPREAD", aligned_msg, reply_to_message_id=data["msg_id"])
+
         except Exception as e:
             print(f"Spread Monitor Error: {e}")
         
         time.sleep(45)
 
-# ==================== FUNDING MONITOR (>= ±1.0% + МЕЖБИРЖЕВОЙ СПРЕД ФАНДИНГА) ====================
+# ==================== FUNDING MONITOR ====================
 def monitor_funding():
     while True:
         try:
@@ -351,15 +378,13 @@ def monitor_funding():
                 if len(ex_rates) < 2:
                     continue
                 
-                # Ищем минимальную и максимальную ставку фандинга среди бирж для этой монеты
                 min_ex = min(ex_rates, key=ex_rates.get)
                 max_ex = max(ex_rates, key=ex_rates.get)
                 min_rate = ex_rates[min_ex]
                 max_rate = ex_rates[max_ex]
                 
-                funding_spread = max_rate - min_rate  # Межбанковский спред фандинга
+                funding_spread = max_rate - min_rate
                 
-                # Условие сработки: либо любая ставка >= 1% / <= -1%, либо межбанковский спред фандинга >= 1.0%
                 has_high_absolute = any(abs(rate) >= 1.0 for rate in ex_rates.values())
                 has_funding_spread = funding_spread >= 1.0
                 
@@ -412,7 +437,7 @@ def monitor_news():
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     
-    send_to_topic("SPREAD", "🚀 **Бот запущен с обновленным фандингом (от ±1% и межбанковским спредом фандинга)!**")
+    send_to_topic("SPREAD", "🚀 **Бот запущен с нативными ссылками приложений, авто-закрытием спредов и фандингом от ±1%!**")
     
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()

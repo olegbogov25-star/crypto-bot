@@ -62,10 +62,19 @@ def analyze_text(text):
     if not OPENROUTER_API_KEY: return text
     prompt = f"""
 Ты — крипто-аналитик. Проанализируй анонс из RSS и выдай отчет:
+
+ВАЖНОЕ ПРАВИЛО: Если новость про суды, штрафы, регуляторов, делистинг, техобслуживание, юридические вопросы, лицензии или НЕ содержит практических наград/профита для пользователей — ответь строго одним словом: SKIP.
+
+Если новость содержит акции, промо, аирдропы, листинги, кампании, лаунчпады — выдай отчет:
 1. 📌 Источник: Биржа/платформа.
-2. 🏷 Теги (выбери из 42 тегов: #OKX_Web3 #Binance_Web3 #Bybit_Web3 #Web3 #XLaunch #XTrade #TokenSplash #Megadrop #BinanceSquare #Binance #Bybit #OKX #Bitget #MEXC #BingX #KuCoin #WhiteBit #Kraken #Gate #Ourbit #Promotion #Launchpool #Launchpad #Airdrop #Listing и др.).
-3. 🪙 Токен. 4. Даты. 5. Описание. 6. Инструкция. 7. Награды. 8. Расчет профита для $100, $1K, $5K, $20K+.
-Если служебное без наград (делистинг, техобслуживание) — SKIP.
+2. 🏷 Теги (выбери из тегов: #OKX_Web3 #Binance_Web3 #Bybit_Web3 #Web3 #XLaunch #XTrade #TokenSplash #Megadrop #Binance #Bybit #OKX #Bitget #MEXC #BingX #KuCoin #WhiteBit #Kraken #Gate #Ourbit #Promotion #Launchpool #Launchpad #Airdrop #Listing и др.).
+3. 🪙 Токен. 
+4. Даты. 
+5. Описание. 
+6. Инструкция. 
+7. Награды. 
+8. Расчет профита для $100, $1K, $5K, $20K+.
+
 Текст: {text}
 """
     try:
@@ -228,12 +237,12 @@ def monitor_spread():
                         if low_liq_exs:
                             risk_tag = f"\n⚠️ **RISK: Низкая ликвидность ({', '.join(low_liq_exs)})**\n"
                         elif spread > 25.0:
-                            risk_tag = "\n⚠️ **WARNING: Аномальный спред (Делистинг / баг оракула!)**\n"
+                            risk_tag = "\n⚠️ **WARNING: Аномальный спред (Возможный делистинг или баг оракула!)**\n"
                         
                         sym_funds = fundings.get(sym, {})
-                        overview = "\n".join([f"🔹 [{ex}](https://google.com): `${p}` ({format_volume(sym_vols.get(ex, 0))})" for ex in sorted(ex_data.keys(), key=lambda x: sym_vols.get(x, 0), reverse=True)])
+                        overview = "\n".join([f"🔹 [{ex}]({get_exchange_url(ex, sym)}): `${p}` ({format_volume(sym_vols.get(ex, 0))})" for ex in sorted(ex_data.keys(), key=lambda x: sym_vols.get(x, 0), reverse=True)])
                         
-                        msg_id = send_to_topic("SPREAD", f"{badge}\n🪙 **#{sym} | Spread: `{spread:.2f}%`**{risk_tag}\n🟢 **Long ({min_ex}):** `${min_p}` (Funding: `{sym_funds.get(min_ex, 0.0):+.2f}%`)\n🔴 **Short ({max_ex}):** `${max_p}` (Funding: `{sym_funds.get(max_ex, 0.0):+.2f}%`)\n\n💰 **Объем:** `~${max_pos_usdt:,} USDT`\n\n📝 **Overview (24h):**\n{overview}")
+                        msg_id = send_to_topic("SPREAD", f"{badge}\n🪙 **#{sym} | Spread: `{spread:.2f}%`**{risk_tag}\n🟢 **Long ({min_ex}):** `${min_p}` (Funding: `{sym_funds.get(min_ex, 0.0):+.2f}%`)\n🔴 **Short ({max_ex}):** `${max_p}` (Funding: `{sym_funds.get(max_ex, 0.0):+.2f}%`)\n\n💰 **Доступный объем позиции:** `~${max_pos_usdt:,} USDT`\n\n📝 **Overview (24h):**\n{overview}")
                         if msg_id: active_spreads[sym] = {"msg_id": msg_id, "start_time": time.time()}
             
             for sym in list(active_spreads.keys()):
@@ -253,11 +262,16 @@ def monitor_funding():
                 if len(ex_rates) < 2: continue
                 min_rate, max_rate = min(ex_rates.values()), max(ex_rates.values())
                 if max_rate - min_rate >= 1.0 or any(abs(r) >= 1.0 for r in ex_rates.values()):
-                    sig_id = f"FUND_{symbol}"
+                    rates_str = "_".join([f"{ex}:{rate:.2f}" for ex, rate in sorted(ex_rates.items())])
+                    sig_id = f"FUND_SPREAD_{symbol}_{rates_str}"
                     if sig_id not in processed_arbitrage:
                         processed_arbitrage.add(sig_id)
-                        overview = "\n".join([f"🔹 [{ex}]: `{r:+.2f}%` (⏱ {format_countdown(funding_times.get(symbol, {}).get(ex, 0))})" for ex, r in sorted(ex_rates.items(), key=lambda x: x[1], reverse=True)])
-                        send_to_topic("FUNDING", f"🔥 **FUNDING ARBITRAGE**\n🪙 **#{symbol}** (Spread: `{max_rate - min_rate:.2f}%`)\n\n📊 **Rates & Timers:**\n{overview}")
+                        sym_vols = volumes_cache.get(symbol, {})
+                        max_pos_usdt = int(min(sym_vols.get(min(ex_rates, key=ex_rates.get), 50000) * 0.01, sym_vols.get(max(ex_rates, key=ex_rates.get), 50000) * 0.01, 50000))
+                        if max_pos_usdt < 100: max_pos_usdt = 100
+                        
+                        overview = "\n".join([f"🔹 [{ex}]({get_exchange_url(ex, symbol)}): `{r:+.2f}%` (⏱ {format_countdown(funding_times.get(symbol, {}).get(ex, 0))})" for ex, r in sorted(ex_rates.items(), key=lambda x: x[1], reverse=True)])
+                        send_to_topic("FUNDING", f"🔥 **FUNDING ARBITRAGE / HIGH RATE (>= ±1.0%)**\n🪙 **#{symbol}** (Spread: `{max_rate - min_rate:.2f}%`)\n\n💰 **Доступный объем позиции:** `~${max_pos_usdt:,} USDT`\n\n📊 **All Exchanges Rates & Timers:**\n{overview}")
         except Exception: pass
         time.sleep(300)
 

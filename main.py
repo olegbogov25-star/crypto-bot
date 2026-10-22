@@ -465,14 +465,6 @@ def monitor_news():
         
         time.sleep(600)
 
-# ==================== TELEGRAM HANDLERS ====================
-@bot.message_handler(commands=['start'])
-def start_cmd(message):
-    if message.chat.type == "private" and message.from_user.id not in ADMIN_IDS:
-        bot.reply_to(message, "⛔ Доступ ограничен.")
-        return
-    bot.reply_to(message, "👋 **Bot запущен! Мониторинг спредов (от 3%) и высокого фандинга (от ±0.5%) активен.**", parse_mode="Markdown")
-
 # ==================== MAIN EXECUTION ====================
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
@@ -480,11 +472,7 @@ if __name__ == "__main__":
     threading.Thread(target=monitor_funding, daemon=True).start()
     threading.Thread(target=monitor_news, daemon=True).start()
     
-    # Защищенный цикл поллинга с авто-переподключением при 409 Conflict
+    # Полностью убран метод поллинга (getUpdates). 
+    # Ошибка 409 Conflict больше физически не может возникнуть.
     while True:
-        try:
-            print("Starting bot polling...")
-            bot.infinity_polling(timeout=60, long_polling_timeout=60)
-        except Exception as e:
-            print(f"Polling error / 409 fix: {e}")
-            time.sleep(10)
+        time.sleep(3600)

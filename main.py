@@ -1,6 +1,8 @@
 import os
 import time
 import threading
+import datetime
+import pytz
 import requests
 import feedparser
 import telebot
@@ -32,8 +34,16 @@ TOPICS = {
 }
 
 processed_ids = set()
-active_spreads = {}   # {sym: {"msg_id": int, "start_time": float, "last_text": str}}
-active_fundings = {}  # {symbol: {"msg_id": int, "last_rates_str": str}}
+active_spreads = {}   # {sym: {"msg_id": int, "start_time": float, "last_text": str, "min_ex": str, "max_ex": str, "min_p": float, "max_p": float}}
+active_fundings = {}  # {symbol: {"msg_id": int, "last_rates_str": str, "last_text": str}}
+
+KYIV_TZ = pytz.timezone("Europe/Kyiv")
+
+def get_kyiv_time():
+    return datetime.datetime.now(KYIV_TZ).strftime("%H:%M:%S")
+
+def get_kyiv_date_time():
+    return datetime.datetime.now(KYIV_TZ).strftime("%H:%M")
 
 # ==================== HEALTHCHECK SERVER ====================
 @app.route('/')
@@ -83,14 +93,14 @@ def analyze_text(text):
 Ты — жесткий фильтр и аналитик крипто-анонсов. Твоя задача — отсечь 100% информационного шума.
 
 ОБЯЗАТЕЛЬНОЕ ПРАВИЛО: Ответь строго одним словом "SKIP", если:
-1. В анонсе НЕТ конкретного гарантированного призового фонда (в $, USDT или токенах) или четкой системы наград (Launchpool, Launchpad, Megadrop, Airdrop, Staking/Earn).
-2. Новость про обычный листинг/добавление новых пар (Spot/Futures/Convert/bStocks) БЕЗ промо-кампании с призовыми.
-3. Новость про токенизированные акции (bStocks, JPMorgan, Blackberry, Apple и т.д.), традиционные ETF или залоговые активы.
-4. Новость про суды, штрафы, регуляторов, делистинг, техническое обслуживание, Binance Square, посты блогеров.
+1. В анонсе НЕТ конкретного гарантированного призового фонда (в $, USDT или токенах) или четкой системы наград (Launchpool, Launchpad, Megadrop, Airdrop, Staking/Earn). Если призовой фонд или награды не указаны (например, только нулевая комиссия), отвечайте "SKIP".
+2. Новость про обычный листинг/добавление новых пар БЕЗ промо-кампании с призовыми.
+3. Новость про токенизированные акции, традиционные ETF или залоговые активы.
+4. Новость про суды, штрафы, регуляторов, делистинг, техническое обслуживание.
 
 ЕСЛИ ЭТО РЕАЛЬНЫЙ LAUNCHPOOL, MEGADROP, AIRDROP ИЛИ АКЦИЯ С ПРИЗОВЫМ ФОНДОМ — сформируй отчет строго по форме:
 1. 📌 **Источник / Платформа:** Название биржи.
-2. 🏷 **Тип события / Теги:** Выбери подходящие теги (#OKX_Web3 #Binance_Web3 #Bybit_Web3 #Web3 #XLaunch #XTrade #TokenSplash #Megadrop #Binance #Bybit #OKX #Bitget #MEXC #BingX #KuCoin #WhiteBit #Kraken #Gate #Ourbit #Promotion #Launchpool #Launchpad #Airdrop #Listing и др.).
+2. 🏷 **Тип события / Теги:** (#OKX_Web3 #Binance_Web3 #Bybit_Web3 #Web3 #Launchpool #Launchpad #Airdrop #TokenSplash #Promotion и др.).
 3. 🪙 **Токен / Проект.**
 4. 📅 **Даты проведения.**
 5. 📋 **Краткое описание.**
@@ -341,21 +351,21 @@ def format_countdown(target_timestamp):
     minutes = int((diff % 3600) // 60)
     return f"{hours}ч {minutes:02d}м"
 
-# ==================== SPREAD MONITOR (7% - 30% + ФИЛЬТР ЛИКВИДНОСТИ >= $50K) ====================
+# ==================== SPREAD MONITOR ====================
 def monitor_spread():
     while True:
         try:
             prices, volumes, fundings, _ = fetch_futures_data()
             current_scanned_syms = set()
-            curr_time_str = time.strftime("%H:%M:%S")
+            curr_time_str = get_kyiv_time()
 
             for sym, ex_data in prices.items():
                 sym_vols = volumes.get(sym, {})
                 
-                # ЖЕСТКИЙ ФИЛЬТР ЛИКВИДНОСТИ: берем только биржи, где суточный объем >= $50,000
+                # Мягкий фильтр ликвидности: берем все биржи с ненулевым объемом
                 valid_ex_data = {
                     ex: p for ex, p in ex_data.items() 
-                    if sym_vols.get(ex, 0) >= 50000
+                    if sym_vols.get(ex, 0) > 0
                 }
 
                 if len(valid_ex_data) < 2:
@@ -385,13 +395,13 @@ def monitor_spread():
                     if max_pos_usdt < 100: max_pos_usdt = 100
 
                     risk_tag = ""
-                    low_liq_exs = [ex for ex, v in sym_vols.items() if v < 100000 and ex in valid_ex_data]
+                    low_liq_exs = [ex for ex, v in sym_vols.items() if v < 10000 and ex in valid_ex_data]
                     
                     if spread > 25.0:
                         risk_tag = "\n⚠️ **RISK: Аномальный спред / Риск делистинга!**\n"
                     elif low_liq_exs:
                         bad_exs_str = ", ".join(low_liq_exs)
-                        risk_tag = f"\n⚠️ **RISK: Низкая ликвидность ({bad_exs_str})**\n"
+                        risk_tag = f"\n⚠️ **RISK: Низкая ликвидность / Мертвый стакан ({bad_exs_str})**\n"
 
                     sym_funds = fundings.get(sym, {})
                     min_fund = sym_funds.get(min_ex, 0.0)
@@ -417,11 +427,15 @@ def monitor_spread():
                         f"🔴 **Short ({max_ex}):** `${max_p}` (Funding: `{max_fund:+.2f}%`)\n\n"
                         f"💰 **Доступный объем позиции:** `~${max_pos_usdt:,} USDT`\n\n"
                         f"📝 **All Exchanges Overview (по ликвидности):**\n{overview}\n\n"
-                        f"🔄 _Обновлено: {curr_time_str}_"
+                        f"🔄 _Обновлено: {curr_time_str} (Киев)_"
                     )
                     
                     if sym in active_spreads:
                         fund_info = active_spreads[sym]
+                        fund_info["min_ex"] = min_ex
+                        fund_info["max_ex"] = max_ex
+                        fund_info["min_p"] = min_p
+                        fund_info["max_p"] = max_p
                         if fund_info["last_text"] != msg_text:
                             success = edit_topic_message("SPREAD", fund_info["msg_id"], msg_text)
                             if success:
@@ -432,7 +446,11 @@ def monitor_spread():
                             active_spreads[sym] = {
                                 "msg_id": msg_id,
                                 "start_time": time.time(),
-                                "last_text": msg_text
+                                "last_text": msg_text,
+                                "min_ex": min_ex,
+                                "max_ex": max_ex,
+                                "min_p": min_p,
+                                "max_p": max_p
                             }
             
             expired_syms = []
@@ -442,7 +460,7 @@ def monitor_spread():
                 else:
                     ex_data = prices[sym]
                     sym_vols = volumes.get(sym, {})
-                    valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 50000}
+                    valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) > 0}
                     if len(valid_ex_data) >= 2:
                         curr_min = min(valid_ex_data.values())
                         curr_max = max(valid_ex_data.values())
@@ -459,8 +477,11 @@ def monitor_spread():
                     secs = duration % 60
                     time_str = f"{mins}:{secs:02d}"
                     
-                    aligned_msg = data["last_text"] + f"\n\n✅ **Спред сошелся в {time_str} (Финальный спред: `{final_spread:.2f}%`)**"
-                    edit_topic_message("SPREAD", data["msg_id"], aligned_msg)
+                    aligned_msg = (
+                        f"✅ `[{sym}]` prices aligned in `{time_str}` (spread: `{final_spread:.2f}%`)\n"
+                        f"📌 **Финальные цены:** `{data['min_ex']}`: `${data['min_p']}` | `{data['max_ex']}`: `${data['max_p']}`"
+                    )
+                    send_to_topic("SPREAD", aligned_msg, reply_to_message_id=data["msg_id"])
 
         except Exception as e:
             print(f"Spread Monitor Error: {e}")
@@ -473,7 +494,7 @@ def monitor_funding():
         try:
             _, volumes_cache, all_funding, funding_times = fetch_futures_data()
             current_active_symbols = set()
-            curr_time_str = time.strftime("%H:%M:%S")
+            curr_time_str = get_kyiv_time()
 
             for symbol, ex_rates in all_funding.items():
                 if len(ex_rates) < 2:
@@ -513,7 +534,7 @@ def monitor_funding():
                         f"🪙 **#{symbol}** (Spread: `{funding_spread:.2f}%`)\n\n"
                         f"💰 **Доступный объем позиции:** `~${max_pos_usdt:,} USDT`\n\n"
                         f"📊 **All Exchanges Rates & Timers:**\n{overview}\n\n"
-                        f"🔄 _Данные обновлены в {curr_time_str}_"
+                        f"🔄 _Данные обновлены в {curr_time_str} (Киев)_"
                     )
 
                     if symbol in active_fundings:
@@ -540,7 +561,7 @@ def monitor_funding():
             for symbol in normalized_syms:
                 data = active_fundings.pop(symbol, None)
                 if data:
-                    norm_msg = data["last_text"] + f"\n\n✅ **Фандинг вернулся в норму в {time.strftime('%H:%M')}**"
+                    norm_msg = data["last_text"] + f"\n\n✅ **Фандинг вернулся в норму в {get_kyiv_date_time()} (Киев)**"
                     edit_topic_message("FUNDING", data["msg_id"], norm_msg)
 
         except Exception as e:
@@ -731,7 +752,7 @@ def monitor_news():
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     
-    send_to_topic("SPREAD", "🚀 **Бот запущен с разовой проверкой за 24 часа и фильтром ликвидности спредов!**")
+    send_to_topic("SPREAD", "🚀 **Бот запущен с киевским временем и обновленным монитором спредов!**")
     
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()

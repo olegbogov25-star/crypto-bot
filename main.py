@@ -4,6 +4,7 @@ import threading
 import requests
 import feedparser
 import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from flask import Flask
 
 # ==================== CONFIGURATION ====================
@@ -110,7 +111,7 @@ def analyze_text(text):
         print(f"AI Error: {e}")
         return text
 
-def send_to_topic(topic_name, text, reply_to_message_id=None):
+def send_to_topic(topic_name, text, reply_to_message_id=None, reply_markup=None):
     thread_id = TOPICS.get(topic_name)
     if thread_id and CHAT_ID:
         try:
@@ -120,14 +121,15 @@ def send_to_topic(topic_name, text, reply_to_message_id=None):
                 text=text, 
                 parse_mode="Markdown", 
                 disable_web_page_preview=True,
-                reply_to_message_id=reply_to_message_id
+                reply_to_message_id=reply_to_message_id,
+                reply_markup=reply_markup
             )
             return res.message_id
         except Exception as e:
             print(f"❌ Send Error ({topic_name}): {e}")
     return None
 
-def process_item(item_id, raw_text, default_topic):
+def process_item(item_id, raw_text, link, default_topic):
     if item_id in processed_ids:
         return
     processed_ids.add(item_id)
@@ -139,12 +141,20 @@ def process_item(item_id, raw_text, default_topic):
     target_topic = default_topic
     upper_res = ai_result.upper()
     
+    detected_ex = "EXCHANGE"
     for ex_name in TOPICS.keys():
         if f"#{ex_name}" in upper_res or ex_name in upper_res:
             target_topic = ex_name
+            detected_ex = ex_name
             break
             
-    send_to_topic(target_topic, ai_result)
+    # Создаем инлайн-кнопку для перехода в приложение биржи / на акцию
+    markup = None
+    if link and link.startswith("http"):
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton(f"📱 Открыть в {detected_ex.upper()}", url=link))
+
+    send_to_topic(target_topic, ai_result, reply_markup=markup)
 
 # ==================== FUTURES DATA & LIQUIDITY FETCHING ====================
 def fetch_futures_data():
@@ -481,18 +491,24 @@ def monitor_funding():
             
         time.sleep(300)
 
-# ==================== NEWS & RSS MONITORS ====================
+# ==================== NEWS & RSS MONITORS (РАСШИРЕННЫЙ СПИСОК) ====================
 def monitor_news():
     feeds = [
         ("https://cointelegraph.com/rss", "NEWS"),
-        ("https://coindesk.com/arc/outboundfeeds/rss/", "NEWS")
+        ("https://coindesk.com/arc/outboundfeeds/rss/", "NEWS"),
+        ("https://decrypt.co/feed", "NEWS"),
+        ("https://bitcoinmagazine.com/.rss/full/", "NEWS")
     ]
     while True:
         for url, topic in feeds:
             try:
                 feed = feedparser.parse(url)
                 for entry in feed.entries[:3]:
-                    process_item(entry.id, f"{entry.title}\n{entry.link}", topic)
+                    link = entry.get('link', '')
+                    title = entry.get('title', '')
+                    summary = entry.get('summary', '')
+                    raw_text = f"{title}\n{summary}\n{link}"
+                    process_item(entry.id, raw_text, link, topic)
             except Exception as e:
                 print(f"RSS Error ({url}): {e}")
         

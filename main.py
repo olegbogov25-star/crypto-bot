@@ -341,7 +341,7 @@ def format_countdown(target_timestamp):
     minutes = int((diff % 3600) // 60)
     return f"{hours}ч {minutes:02d}м"
 
-# ==================== SPREAD MONITOR (7% - 30% + АВТО-ОБНОВЛЕНИЕ) ====================
+# ==================== SPREAD MONITOR (7% - 30% + ФИЛЬТР ЛИКВИДНОСТИ >= $50K) ====================
 def monitor_spread():
     while True:
         try:
@@ -352,10 +352,10 @@ def monitor_spread():
             for sym, ex_data in prices.items():
                 sym_vols = volumes.get(sym, {})
                 
-                # Мягкий фильтр ликвидности: берем все биржи, где объем больше 0 (исключаем мертвые снулые стаканы)
+                # ЖЕСТКИЙ ФИЛЬТР ЛИКВИДНОСТИ: берем только биржи, где суточный объем >= $50,000
                 valid_ex_data = {
                     ex: p for ex, p in ex_data.items() 
-                    if sym_vols.get(ex, 0) > 0
+                    if sym_vols.get(ex, 0) >= 50000
                 }
 
                 if len(valid_ex_data) < 2:
@@ -363,14 +363,12 @@ def monitor_spread():
                 
                 min_ex = min(valid_ex_data, key=valid_ex_data.get)
                 max_ex = max(valid_ex_data, key=valid_ex_data.get)
-                min_p = valid_ex_data[min_p_ex := min_ex] # синтаксис фиксации
                 min_p = valid_ex_data[min_ex]
                 max_p = valid_ex_data[max_ex]
                 
                 if min_p <= 0: continue
                 spread = ((max_p - min_p) / min_p) * 100
                 
-                # Строгий диапазон спредов от 7% до 30%
                 if 7.0 <= spread <= 30.0:
                     current_scanned_syms.add(sym)
                     
@@ -387,13 +385,13 @@ def monitor_spread():
                     if max_pos_usdt < 100: max_pos_usdt = 100
 
                     risk_tag = ""
-                    low_liq_exs = [ex for ex, v in sym_vols.items() if v < 10000 and ex in valid_ex_data]
+                    low_liq_exs = [ex for ex, v in sym_vols.items() if v < 100000 and ex in valid_ex_data]
                     
                     if spread > 25.0:
                         risk_tag = "\n⚠️ **RISK: Аномальный спред / Риск делистинга!**\n"
                     elif low_liq_exs:
                         bad_exs_str = ", ".join(low_liq_exs)
-                        risk_tag = f"\n⚠️ **RISK: Низкая ликвидность / Мертвый стакан ({bad_exs_str})**\n"
+                        risk_tag = f"\n⚠️ **RISK: Низкая ликвидность ({bad_exs_str})**\n"
 
                     sym_funds = fundings.get(sym, {})
                     min_fund = sym_funds.get(min_ex, 0.0)
@@ -423,14 +421,12 @@ def monitor_spread():
                     )
                     
                     if sym in active_spreads:
-                        # Обновляем существующее сообщение в реальном времени
                         fund_info = active_spreads[sym]
                         if fund_info["last_text"] != msg_text:
                             success = edit_topic_message("SPREAD", fund_info["msg_id"], msg_text)
                             if success:
                                 fund_info["last_text"] = msg_text
                     else:
-                        # Создаем новый активный спред
                         msg_id = send_to_topic("SPREAD", msg_text)
                         if msg_id:
                             active_spreads[sym] = {
@@ -439,7 +435,6 @@ def monitor_spread():
                                 "last_text": msg_text
                             }
             
-            # Проверка на сведение спредов (цена выровнялась < 1.0%)
             expired_syms = []
             for sym in list(active_spreads.keys()):
                 if sym not in current_scanned_syms or sym not in prices:
@@ -447,7 +442,7 @@ def monitor_spread():
                 else:
                     ex_data = prices[sym]
                     sym_vols = volumes.get(sym, {})
-                    valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) > 0}
+                    valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 50000}
                     if len(valid_ex_data) >= 2:
                         curr_min = min(valid_ex_data.values())
                         curr_max = max(valid_ex_data.values())
@@ -472,7 +467,7 @@ def monitor_spread():
         
         time.sleep(45)
 
-# ==================== FUNDING MONITOR (С АВТО-ОБНОВЛЕНИЕМ И ИСТОРИЕЙ) ====================
+# ==================== FUNDING MONITOR ====================
 def monitor_funding():
     while True:
         try:
@@ -537,7 +532,6 @@ def monitor_funding():
                                 "last_text": msg
                             }
 
-            # Проверка на нормализацию фандинга (когда ставки упали ниже порогов)
             normalized_syms = []
             for symbol in list(active_fundings.keys()):
                 if symbol not in current_active_symbols:
@@ -693,6 +687,21 @@ def monitor_news():
         ("https://decrypt.co/feed", "NEWS"),
         ("https://bitcoinmagazine.com/.rss/full/", "NEWS")
     ]
+    
+    # === ОДНОРАЗОВАЯ ПРОВЕРКА ПРОМО ЗА 24 ЧАСА ПРИ СТАРТЕ ===
+    print("🚀 Выполняется одноразовый сбор промо-акций за 24 часа...")
+    fetch_binance_promos()
+    fetch_bybit_promos()
+    fetch_okx_promos()
+    fetch_bitget_promos()
+    fetch_mexc_promos()
+    fetch_gate_promos()
+    fetch_kucoin_promos()
+    fetch_bingx_promos()
+    fetch_whitebit_promos()
+    print("✅ Одноразовый сбор завершен. Переход в штатный режим 24/7.")
+    # =================================================
+
     while True:
         fetch_binance_promos()
         fetch_bybit_promos()
@@ -722,7 +731,7 @@ def monitor_news():
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     
-    send_to_topic("SPREAD", "🚀 **Бот запущен и работает в штатном режиме (авто-обновление и история активны)!**")
+    send_to_topic("SPREAD", "🚀 **Бот запущен с разовой проверкой за 24 часа и фильтром ликвидности спредов!**")
     
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()

@@ -209,26 +209,13 @@ def process_item(item_id, raw_text, link, default_topic):
             detected_ex = ex_name
             break
             
-    # Официальные мобильные смарт-ссылки для гарантированного открытия приложений
-    APP_DEEPLINKS = {
-        "BINANCE": "https://www.binance.com/activity",
-        "BYBIT": "https://www.bybit.com/app/re-direct",
-        "BITGET": "https://www.bitget.com/events",
-        "MEXC": "https://www.mexc.com/landings",
-        "GATE": "https://www.gate.io/activities",
-        "OKX": "https://www.okx.com/campaigns",
-        "BINGX": "https://bingx.com/act",
-        "KUCOIN": "https://www.kucoin.com/landings",
-        "WHITEBIT": "https://whitebit.com/ru/referral",
-        "KRAKEN": "https://www.kraken.com"
-    }
+    ex_key = detected_ex.upper()
 
     markup = None
     if link and link.startswith("http"):
         markup = InlineKeyboardMarkup()
-        ex_key = detected_ex.upper()
-        app_url = APP_DEEPLINKS.get(ex_key, link)
-        app_button = InlineKeyboardButton(f"📱 Открыть в приложении {ex_key}", url=app_url)
+        # Используем оригинальную рабочую ссылку на пост/анонс во избежание 404 ошибок
+        app_button = InlineKeyboardButton(f"📱 Открыть в приложении {ex_key}", url=link)
         markup.add(app_button)
 
     send_to_topic(target_topic, ai_result, reply_markup=markup)

@@ -206,18 +206,18 @@ def process_item(item_id, raw_text, link, default_topic):
             detected_ex = ex_name
             break
             
-    # Универсальные шлюзы для мобильных приложений бирж во всех остальных папках
+    # Универсальные глубокие ссылки (Universal Links), которые перехватываются мобильными приложениями
     APP_DEEPLINKS = {
-        "BINANCE": "https://www.binance.com/en/download",
-        "BYBIT": "https://www.bybit.com/en/download",
-        "BITGET": "https://www.bitget.com/download",
-        "MEXC": "https://www.mexc.com/download",
-        "GATE": "https://www.gate.io/mobile",
-        "OKX": "https://www.okx.com/download",
-        "BINGX": "https://bingx.com/en-us/download/",
-        "KUCOIN": "https://www.kucoin.com/download",
-        "WHITEBIT": "https://whitebit.com",
-        "KRAKEN": "https://kraken.com"
+        "BINANCE": "https://www.binance.com/activity",
+        "BYBIT": "https://www.bybit.com/app/re-direct",
+        "BITGET": "https://www.bitget.com/events",
+        "MEXC": "https://www.mexc.com/landings",
+        "GATE": "https://www.gate.io/activities",
+        "OKX": "https://www.okx.com/campaigns",
+        "BINGX": "https://bingx.com/act",
+        "KUCOIN": "https://www.kucoin.com/landings",
+        "WHITEBIT": "https://whitebit.com/ru/referral",
+        "KRAKEN": "https://www.kraken.com"
     }
 
     markup = None

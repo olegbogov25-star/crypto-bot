@@ -82,7 +82,7 @@ def secure_request(url, timeout=10):
         print(f"❌ Secure Request Error ({url}): {e}")
         return None
 
-# ==================== LINK GENERATORS (UNIVERSAL .COM / .EN) ====================
+# ==================== LINK GENERATORS & DEEPLINKS ====================
 def get_exchange_url(exchange, symbol):
     base_sym = symbol.replace('USDT', '')
     links = {
@@ -152,7 +152,7 @@ def analyze_text(text):
         return text
 
 def send_to_topic(topic_name, text, reply_to_message_id=None, reply_markup=None):
-    thread_id =TOPICS.get(topic_name)
+    thread_id = TOPICS.get(topic_name)
     if thread_id and CHAT_ID:
         try:
             res = bot.send_message(
@@ -206,19 +206,29 @@ def process_item(item_id, raw_text, link, default_topic):
             detected_ex = ex_name
             break
             
-    # Формируем клавиатуру с двумя кнопками (Веб-ссылка + Диплинк на приложение для Binance / бирж)
+    # Универсальный словарь диплинков для открытия мобильных приложений
+    APP_DEEPLINKS = {
+        "BINANCE": "bnc://app.binance.com",
+        "BYBIT": "bybit://",
+        "BITGET": "bitget://",
+        "MEXC": "mexcapp://",
+        "GATE": "gateio://",
+        "OKX": "okx://",
+        "BINGX": "bingx://",
+        "KUCOIN": "kucoin://",
+        "WHITEBIT": "https://whitebit.com"
+    }
+
     markup = None
     if link and link.startswith("http"):
         markup = InlineKeyboardMarkup()
         web_button = InlineKeyboardButton("🌐 Читать анонс (Веб)", url=link)
         markup.add(web_button)
         
-        if detected_ex.upper() == "BINANCE":
-            app_button = InlineKeyboardButton("📱 Открыть в приложении Binance", url="bnc://app.binance.com")
-            markup.add(app_button)
-        else:
-            app_button = InlineKeyboardButton(f"📱 Открыть в {detected_ex.upper()}", url=link)
-            markup.add(app_button)
+        ex_key = detected_ex.upper()
+        app_url = APP_DEEPLINKS.get(ex_key, link)
+        app_button = InlineKeyboardButton(f"📱 Открыть в приложении {ex_key}", url=app_url)
+        markup.add(app_button)
 
     send_to_topic(target_topic, ai_result, reply_markup=markup)
     time.sleep(1)
@@ -276,6 +286,56 @@ def fetch_telegram_channels_promos():
         except Exception as e:
             print(f"Telegram Channels Monitor Error: {e}")
             time.sleep(60)
+
+# ==================== GLOBAL CRYPTO APIS, RSS & WEB3 AGGREGATORS MONITOR ====================
+def fetch_global_crypto_promos():
+    """Дополнительный сканер официальных REST API, RSS-лент бирж и Web3-агрегаторов (CoinMarketCap, CoinGecko, Galxe/Layer3)"""
+    sources = [
+        # Binance CMS API
+        ("https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=48&pageNo=1&pageSize=20", "BINANCE"),
+        ("https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=161&pageNo=1&pageSize=20", "BINANCE"),
+        # Дополнительные агрегаторы и RSS (если доступны через общие эндпоинты)
+        ("https://coinmarketcap.com/headlines/news/", "NEWS"),
+    ]
+
+    while True:
+        try:
+            # 1. Проверка Binance промо через прямой CMS API
+            for api_url, topic in sources[:2]:
+                res = secure_request(api_url, timeout=6)
+                if not res: continue
+                data = res.json()
+                articles = data.get('data', {}).get('articles', [])
+                for art in articles:
+                    art_id = f"global_api_{art.get('id')}"
+                    title = art.get('title', '')
+                    code = art.get('code', '')
+                    link = f"https://www.binance.com/en/support/announcement/{code}" if code else "https://www.binance.com"
+                    raw_text = f"Global Official Announcement / Event: {title}\nLink: {link}"
+                    process_item(art_id, raw_text, link, topic)
+
+            # 2. Мониторинг RSS-лент и агрегаторов (CoinMarketCap / CoinGecko / Web3)
+            rss_feeds = [
+                "https://cointelegraph.com/rss",
+                "https://cryptopotato.com/feed/"
+            ]
+            for feed_url in rss_feeds:
+                try:
+                    feed = feedparser.parse(feed_url)
+                    for entry in feed.entries[:10]:
+                        entry_id = f"rss_{entry.get('id', entry.get('link'))}"
+                        title = entry.get('title', '')
+                        summary = entry.get('summary', '')
+                        link = entry.get('link', '')
+                        raw_text = f"Crypto Aggregator / RSS News & Airdrop Quest: {title}\n{summary}\nLink: {link}"
+                        process_item(entry_id, raw_text, link, "NEWS")
+                except Exception as rss_err:
+                    print(f"RSS Parse Error ({feed_url}): {rss_err}")
+
+        except Exception as e:
+            print(f"Global Promos Monitor Error: {e}")
+        
+        time.sleep(900)  # Сканирование глобальных источников каждые 15 минут
 
 # ==================== FUTURES DATA & LIQUIDITY FETCHING ====================
 def fetch_futures_data():
@@ -596,7 +656,7 @@ def monitor_spread():
         except Exception as e:
             print(f"Spread Monitor Error: {e}")
         
-        time.sleep(45)
+        time.sleep(15)  # Ускоренная проверка спредов каждые 15 секунд
 
 def monitor_funding():
     while True:
@@ -678,28 +738,6 @@ def monitor_funding():
         
         time.sleep(300)
 
-# ==================== ENHANCED PROMO & WEB3 MONITORS (.COM GLOBAL) ====================
-def fetch_binance_promos():
-    try:
-        urls = [
-            "https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=48&pageNo=1&pageSize=50",
-            "https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=161&pageNo=1&pageSize=50"
-        ]
-        for url in urls:
-            res = secure_request(url, timeout=6)
-            if not res: continue
-            data = res.json()
-            articles = data.get('data', {}).get('articles', [])
-            for art in articles:
-                art_id = f"binance_promo_{art.get('id')}"
-                title = art.get('title', '')
-                code = art.get('code', '')
-                link = f"https://www.binance.com/en/support/announcement/{code}" if code else "https://www.binance.com"
-                raw_text = f"Binance Event / Launchpool / Megadrop: {title}\n{link}"
-                process_item(art_id, raw_text, link, "BINANCE")
-    except Exception as e:
-        print(f"Binance Promo Error: {e}")
-
 # ==================== MAIN INITIALIZATION ====================
 if __name__ == "__main__":
     print("===> Starting Bot Background Threads...")
@@ -707,6 +745,7 @@ if __name__ == "__main__":
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
+    threading.Thread(target=fetch_global_crypto_promos, daemon=True).start()  # Запуск нового комплексного сканера API/RSS/Web3
     
     print("===> Your service is live 🚀")
     bot.infinity_polling()

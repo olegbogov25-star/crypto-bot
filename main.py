@@ -152,7 +152,7 @@ def analyze_text(text):
         return text
 
 def send_to_topic(topic_name, text, reply_to_message_id=None, reply_markup=None):
-    thread_id = TOPICS.get(topic_name)
+    thread_id =TOPICS.get(topic_name)
     if thread_id and CHAT_ID:
         try:
             res = bot.send_message(
@@ -206,10 +206,19 @@ def process_item(item_id, raw_text, link, default_topic):
             detected_ex = ex_name
             break
             
+    # Формируем клавиатуру с двумя кнопками (Веб-ссылка + Диплинк на приложение для Binance / бирж)
     markup = None
     if link and link.startswith("http"):
         markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton(f"📱 Открыть в {detected_ex.upper()}", url=link))
+        web_button = InlineKeyboardButton("🌐 Читать анонс (Веб)", url=link)
+        markup.add(web_button)
+        
+        if detected_ex.upper() == "BINANCE":
+            app_button = InlineKeyboardButton("📱 Открыть в приложении Binance", url="bnc://app.binance.com")
+            markup.add(app_button)
+        else:
+            app_button = InlineKeyboardButton(f"📱 Открыть в {detected_ex.upper()}", url=link)
+            markup.add(app_button)
 
     send_to_topic(target_topic, ai_result, reply_markup=markup)
     time.sleep(1)
@@ -453,7 +462,7 @@ def monitor_spread():
                 min_ex = min(valid_ex_data, key=valid_ex_data.get)
                 max_ex = max(valid_ex_data, key=valid_ex_data.get)
                 min_p = valid_ex_data[min_ex]
-                max_p = valid_ex_data[max_p]
+                max_p = valid_ex_data[max_ex]
                 
                 if min_p <= 0: continue
                 spread = ((max_p - min_p) / min_p) * 100
@@ -461,7 +470,6 @@ def monitor_spread():
                 if 7.0 <= spread <= 30.0:
                     current_scanned_syms.add(sym)
 
-                    # Определяем текущий бейдж по актуальному спреду
                     if spread >= 15.0:
                         badge = "🔥🔥🔥 **MEGA SPREAD (>= 15%)**"
                     elif spread >= 10.0:
@@ -499,7 +507,6 @@ def monitor_spread():
                     
                     overview = "\n".join(overview_list)
 
-                    # Проверяем, есть ли уже активный сигнал по этому символу
                     if sym in active_spreads:
                         fund_info = active_spreads[sym]
                         fund_info["min_ex"] = min_ex
@@ -508,7 +515,6 @@ def monitor_spread():
                         fund_info["max_p"] = max_p
                         init_spread = fund_info["initial_spread"]
 
-                        # Формируем строку динамики спреда (Было / Стало)
                         spread_dynamic = f"📊 **Спред:** был `{init_spread:.2f}%` ➡️ стал `{spread:.2f}%`"
 
                         msg_text = (
@@ -528,7 +534,6 @@ def monitor_spread():
                             if success:
                                 fund_info["last_text"] = msg_text
                     else:
-                        # Первый запуск сигнала — фиксируем начальный спред
                         init_spread = spread
                         spread_dynamic = f"📊 **Спред:** `{spread:.2f}%` (Старт)"
 
@@ -695,137 +700,13 @@ def fetch_binance_promos():
     except Exception as e:
         print(f"Binance Promo Error: {e}")
 
-def fetch_binance_web3():
-    try:
-        url = "https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=410&pageNo=1&pageSize=50"
-        res = secure_request(url, timeout=6)
-        if not res: return
-        data = res.json()
-        articles = data.get('data', {}).get('articles', [])
-        for art in articles:
-            art_id = f"binance_web3_{art.get('id')}"
-            title = art.get('title', '')
-            code = art.get('code', '')
-            link = f"https://web3.binance.com/en/support/announcement/{code}" if code else "https://web3.binance.com"
-            raw_text = f"#Binance_Web3 Airdrop / Quest / Booster: {title}\n{link}"
-            process_item(art_id, raw_text, link, "BINANCE")
-    except Exception as e:
-        print(f"Binance Web3 Error: {e}")
-
-def fetch_bybit_promos():
-    try:
-        url = "https://api.bybit.com/v5/announcements/index?locale=en-US&limit=50"
-        res = secure_request(url, timeout=6)
-        if not res: return
-        data = res.json()
-        articles = data.get('result', {}).get('list', [])
-        for art in articles:
-            art_id = f"bybit_promo_{art.get('id')}"
-            title = art.get('title', '')
-            link = art.get('url', 'https://www.bybit.com')
-            description = art.get('description', '')
-            type_title = art.get('type', {}).get('title', 'Campaign')
-            raw_text = f"Bybit Event [{type_title}]: {title}\n{description}\n{link}"
-            process_item(art_id, raw_text, link, "BYBIT")
-    except Exception as e:
-        print(f"Bybit Promo Error: {e}")
-
-def fetch_okx_promos():
-    try:
-        urls = [
-            "https://www.okx.com/priapi/v5/support/news/bulletins?page=1&pageSize=50",
-            "https://www.okx.com/priapi/v5/support/news/bulletins?type=announcements&page=1&pageSize=50"
-        ]
-        for url in urls:
-            res = secure_request(url, timeout=6)
-            if not res: continue
-            data = res.json()
-            items = data.get('data', [])
-            articles = []
-            if isinstance(items, list) and len(items) > 0:
-                articles = items[0].get('details', [])
-            elif isinstance(items, dict):
-                articles = items.get('details', [])
-            
-            for art in articles[:50]:
-                art_id = f"okx_promo_{art.get('id')}"
-                title = art.get('title', '')
-                slug = art.get('slug', '')
-                link = f"https://www.okx.com/help/{slug}" if slug else "https://www.okx.com"
-                raw_text = f"OKX Event / Flash Earn / Jumpstart: {title}\n{link}"
-                process_item(art_id, raw_text, link, "OKX")
-    except Exception as e:
-        print(f"OKX Promo Error: {e}")
-
-def fetch_okx_web3():
-    try:
-        urls = [
-            "https://www.okx.com/priapi/v5/nft/market/activity/campaign-list?limit=50&page=1",
-            "https://www.okx.com/priapi/v5/support/news/bulletins?type=web3&page=1&pageSize=50"
-        ]
-        for u in urls:
-            res = secure_request(u, timeout=6)
-            if not res: continue
-            data = res.json()
-            items = data.get('data', [])
-            if isinstance(items, dict):
-                items = items.get('list', items.get('campaigns', []))
-            if isinstance(items, list):
-                for art in items:
-                    art_id = f"okx_web3_launch_{art.get('id', art.get('campaignId', art.get('name', '')))}"
-                    title = art.get('title', art.get('name', 'OKX Web3 X Launch / Earn'))
-                    link = art.get('url', 'https://web3.okx.com')
-                    raw_text = f"#OKX_Web3 X Launch / Earn / Airdrop: {title}\n{link}"
-                    process_item(art_id, raw_text, link, "OKX")
-    except Exception as e:
-        print(f"OKX Web3 Error: {e}")
-
-def fetch_bitget_promos():
-    try:
-        url = "https://api.bitget.com/api/v2/spot/public/announcements?language=en_US&pageSize=50"
-        res = secure_request(url, timeout=6)
-        if not res: return
-        data = res.json()
-        articles = data.get('data', [])
-        for art in articles[:50]:
-            art_id = f"bitget_promo_{art.get('annId')}"
-            title = art.get('annTitle', '')
-            link = art.get('annUrl', 'https://www.bitget.com')
-            ann_type = art.get('annType', 'Promotion')
-            raw_text = f"Bitget Event [{ann_type}]: {title}\n{link}"
-            process_item(art_id, raw_text, link, "BITGET")
-    except Exception as e:
-        print(f"Bitget Promo Error: {e}")
-
-# ==================== BACKGROUND RUNNER ====================
-def run_all_promos():
-    while True:
-        try:
-            fetch_binance_promos()
-            fetch_binance_web3()
-            fetch_bybit_promos()
-            fetch_okx_promos()
-            fetch_okx_web3()
-            fetch_bitget_promos()
-        except Exception as e:
-            print(f"Promos Loop Error: {e}")
-        time.sleep(1800)
-
+# ==================== MAIN INITIALIZATION ====================
 if __name__ == "__main__":
-    # Запуск HTTP сервера для Render healthcheck
+    print("===> Starting Bot Background Threads...")
     threading.Thread(target=run_flask, daemon=True).start()
-    
-    # Запуск мониторов спредов и фандинга
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()
-    
-    # Запуск мониторинга официальных промо-акций через API бирж
-    threading.Thread(target=run_all_promos, daemon=True).start()
-    
-    # Запуск мониторинга официальных Telegram-каналов со всеми украинскими и глобальными источниками
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     
-    print("🚀 Web3 & Promo Bot с динамическим обновлением спредов запущен!")
-    
-    while True:
-        time.sleep(3600)
+    print("===> Your service is live 🚀")
+    bot.infinity_polling()

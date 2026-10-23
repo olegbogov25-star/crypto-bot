@@ -30,6 +30,7 @@ TOPICS = {
     "WHITEBIT": 72, 
     "KRAKEN": 73,   
     "GATE": 67,     
+    "OKX": 2,       # При необходимости укажи точный ID топика OKX в супергруппе
     "FUNDING": 76,  
     "SPREAD": 77    
 }
@@ -155,7 +156,7 @@ def analyze_text(text):
         return text
 
 def send_to_topic(topic_name, text, reply_to_message_id=None, reply_markup=None):
-    thread_id = TOPICS.get(topic_name)
+    thread_id = TOPICS.get(topic_name, TOPICS.get("NEWS"))
     if thread_id and CHAT_ID:
         try:
             res = bot.send_message(
@@ -199,23 +200,15 @@ def process_item(item_id, raw_text, link, default_topic):
     if "SKIP" in ai_result.upper():
         return
     
-    target_topic = default_topic
-    upper_res = ai_result.upper()
-    
-    detected_ex = default_topic
-    for ex_name in TOPICS.keys():
-        if ex_name in upper_res or f"#{ex_name}" in upper_res:
-            target_topic = ex_name
-            detected_ex = ex_name
-            break
-            
-    ex_key = detected_ex.upper()
+    # Жесткая фиксация топика по источнику (исключает перепутывание бирж)
+    target_topic = default_topic.upper()
+    if target_topic not in TOPICS:
+        target_topic = "NEWS"
 
     markup = None
     if link and link.startswith("http"):
         markup = InlineKeyboardMarkup()
-        # Используем оригинальную рабочую ссылку на пост/анонс во избежание 404 ошибок
-        app_button = InlineKeyboardButton(f"📱 Открыть в приложении {ex_key}", url=link)
+        app_button = InlineKeyboardButton(f"📱 Открыть в приложении ({target_topic})", url=link)
         markup.add(app_button)
 
     send_to_topic(target_topic, ai_result, reply_markup=markup)
@@ -224,16 +217,16 @@ def process_item(item_id, raw_text, link, default_topic):
 # ==================== TELEGRAM CHANNELS PROMO MONITOR ====================
 def fetch_telegram_channels_promos():
     channels = {
-        "Binance": ["Binance_UA_official", "BinanceUkrainian", "BinanceAnnouncements"],
+        "BINANCE": ["Binance_UA_official", "BinanceUkrainian", "BinanceAnnouncements"],
         "OKX": ["okx_ru", "okx_campaign_announcement", "okxwalletannouncement", "OKX_Official"],
-        "Bybit": ["bybitukrainian", "bybitukrainiannews", "Bybit_CIS", "BybitAnnouncements"],
-        "Bitget": ["BitgetUA", "BitgetENOfficial"],
+        "BYBIT": ["bybitukrainian", "bybitukrainiannews", "Bybit_CIS", "BybitAnnouncements"],
+        "BITGET": ["BitgetUA", "BitgetENOfficial"],
         "MEXC": ["MEXCKraineOfficial", "MEXCofficialNews"],
-        "Gate": ["Gate_Ukrainian", "GateCom_EN"],
-        "Kraken": ["kraken_announcements"],
-        "BingX": ["BingXOfficial", "BingXAnnouncement"],
-        "KuCoin": ["Kucoin_Exchange", "Kucoin_News"],
-        "WhiteBit": ["whitebit_ua_news", "White_Bit"]
+        "GATE": ["Gate_Ukrainian", "GateCom_EN"],
+        "KRAKEN": ["kraken_announcements"],
+        "BINGX": ["BingXOfficial", "BingXAnnouncement"],
+        "KUCOIN": ["Kucoin_Exchange", "Kucoin_News"],
+        "WHITEBIT": ["whitebit_ua_news", "White_Bit"]
     }
     
     while True:
@@ -265,7 +258,7 @@ def fetch_telegram_channels_promos():
                             post_link = btn.get('href')
                         
                         full_payload = f"Telegram Channel [{exchange} / @{chan}]:\n{raw_text}\nLink: {post_link}"
-                        process_item(item_id, full_payload, post_link, exchange.upper())
+                        process_item(item_id, full_payload, post_link, exchange)
                         
             time.sleep(600)
         except Exception as e:

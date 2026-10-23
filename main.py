@@ -35,7 +35,7 @@ TOPICS = {
 }
 
 processed_ids = set()
-active_spreads = {}   # {sym: {"msg_id": int, "start_time": float, "last_text": str, "min_ex": str, "max_ex": str, "min_p": float, "max_p": float}}
+active_spreads = {}   # {sym: {"msg_id": int, "start_time": float, "last_text": str, "min_ex": str, "max_ex": str, "min_p": float, "max_p": float, "initial_spread": float}}
 active_fundings = {}  # {symbol: {"msg_id": int, "last_rates_str": str, "last_text": str}}
 
 KYIV_TZ = pytz.timezone("Europe/Kyiv")
@@ -453,14 +453,15 @@ def monitor_spread():
                 min_ex = min(valid_ex_data, key=valid_ex_data.get)
                 max_ex = max(valid_ex_data, key=valid_ex_data.get)
                 min_p = valid_ex_data[min_ex]
-                max_p = valid_ex_data[max_ex]
+                max_p = valid_ex_data[max_p]
                 
                 if min_p <= 0: continue
                 spread = ((max_p - min_p) / min_p) * 100
                 
                 if 7.0 <= spread <= 30.0:
                     current_scanned_syms.add(sym)
-                    
+
+                    # Определяем текущий бейдж по актуальному спреду
                     if spread >= 15.0:
                         badge = "🔥🔥🔥 **MEGA SPREAD (>= 15%)**"
                     elif spread >= 10.0:
@@ -497,29 +498,52 @@ def monitor_spread():
                         overview_list.append(f"🔹 [{ex}]({url}): `${p}` ({v_str})")
                     
                     overview = "\n".join(overview_list)
-                    
-                    msg_text = (
-                        f"{badge}\n"
-                        f"🪙 **#{sym} | Spread: `{spread:.2f}%`**"
-                        f"{risk_tag}\n"
-                        f"🟢 **Long ({min_ex}):** `${min_p}` (Funding: `{min_fund:+.2f}%`)\n"
-                        f"🔴 **Short ({max_ex}):** `${max_p}` (Funding: `{max_fund:+.2f}%`)\n\n"
-                        f"💰 **Доступный объем позиции:** `~${max_pos_usdt:,} USDT`\n\n"
-                        f"📝 **All Exchanges Overview (по ликвидности):**\n{overview}\n\n"
-                        f"🔄 _Обновлено: {curr_time_str} (Киев)_"
-                    )
-                    
+
+                    # Проверяем, есть ли уже активный сигнал по этому символу
                     if sym in active_spreads:
                         fund_info = active_spreads[sym]
                         fund_info["min_ex"] = min_ex
                         fund_info["max_ex"] = max_ex
                         fund_info["min_p"] = min_p
                         fund_info["max_p"] = max_p
+                        init_spread = fund_info["initial_spread"]
+
+                        # Формируем строку динамики спреда (Было / Стало)
+                        spread_dynamic = f"📊 **Спред:** был `{init_spread:.2f}%` ➡️ стал `{spread:.2f}%`"
+
+                        msg_text = (
+                            f"{badge}\n"
+                            f"🪙 **#{sym} | Spread: `{spread:.2f}%`**\n"
+                            f"{spread_dynamic}"
+                            f"{risk_tag}\n"
+                            f"🟢 **Long ({min_ex}):** `${min_p}` (Funding: `{min_fund:+.2f}%`)\n"
+                            f"🔴 **Short ({max_ex}):** `${max_p}` (Funding: `{max_fund:+.2f}%`)\n\n"
+                            f"💰 **Доступный объем позиции:** `~${max_pos_usdt:,} USDT`\n\n"
+                            f"📝 **All Exchanges Overview (по ликвидности):**\n{overview}\n\n"
+                            f"🔄 _Обновлено: {curr_time_str} (Киев)_"
+                        )
+
                         if fund_info["last_text"] != msg_text:
                             success = edit_topic_message("SPREAD", fund_info["msg_id"], msg_text)
                             if success:
                                 fund_info["last_text"] = msg_text
                     else:
+                        # Первый запуск сигнала — фиксируем начальный спред
+                        init_spread = spread
+                        spread_dynamic = f"📊 **Спред:** `{spread:.2f}%` (Старт)"
+
+                        msg_text = (
+                            f"{badge}\n"
+                            f"🪙 **#{sym} | Spread: `{spread:.2f}%`**\n"
+                            f"{spread_dynamic}"
+                            f"{risk_tag}\n"
+                            f"🟢 **Long ({min_ex}):** `${min_p}` (Funding: `{min_fund:+.2f}%`)\n"
+                            f"🔴 **Short ({max_ex}):** `${max_p}` (Funding: `{max_fund:+.2f}%`)\n\n"
+                            f"💰 **Доступный объем позиции:** `~${max_pos_usdt:,} USDT`\n\n"
+                            f"📝 **All Exchanges Overview (по ликвидности):**\n{overview}\n\n"
+                            f"🔄 _Обновлено: {curr_time_str} (Киев)_"
+                        )
+
                         msg_id = send_to_topic("SPREAD", msg_text)
                         if msg_id:
                             active_spreads[sym] = {
@@ -529,7 +553,8 @@ def monitor_spread():
                                 "min_ex": min_ex,
                                 "max_ex": max_ex,
                                 "min_p": min_p,
-                                "max_p": max_p
+                                "max_p": max_p,
+                                "initial_spread": init_spread
                             }
             
             expired_syms = []
@@ -555,9 +580,10 @@ def monitor_spread():
                     mins = duration // 60
                     secs = duration % 60
                     time_str = f"{mins}:{secs:02d}"
+                    init_s = data.get("initial_spread", 0.0)
                     
                     aligned_msg = (
-                        f"✅ `[{sym}]` prices aligned in `{time_str}` (spread: `{final_spread:.2f}%`)\n"
+                        f"✅ `[{sym}]` prices aligned in `{time_str}` (спред: с `{init_s:.2f}%` до `{final_spread:.2f}%`)\n"
                         f"📌 **Финальные цены:** `{data['min_ex']}`: `${data['min_p']}` | `{data['max_ex']}`: `${data['max_p']}`"
                     )
                     send_to_topic("SPREAD", aligned_msg, reply_to_message_id=data["msg_id"])
@@ -799,7 +825,7 @@ if __name__ == "__main__":
     # Запуск мониторинга официальных Telegram-каналов со всеми украинскими и глобальными источниками
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     
-    print("🚀 Web3 & Promo Bot со всеми региональными каналами и мягким фильтром запущен!")
+    print("🚀 Web3 & Promo Bot с динамическим обновлением спредов запущен!")
     
     while True:
         time.sleep(3600)

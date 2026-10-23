@@ -134,7 +134,7 @@ def analyze_text(text):
 6. ⚡ **Пошаговая инструкция (как участвовать, куда нажимать).**
 7. 🎁 **Награды / Призовой фонд.**
 8. 💡 **Финансовый расчет (Затраты и Профит):**
-   - 💸 **Обязательные затраты:** (Учти стоимость открытия боксов/билетов, комиссии за спотовый/фьючерсный объем сделок, сетевые комиссии за вывод/перевод, если они требуются по условиям).
+   - 💸 **Обязательные затраты:** (Учти стоимость открытия боксов/билетов, комиссии за спотовый/фьючерсный объем сделок, сетевые комиссии).
    - 💰 **Ожидаемый валовый доход:** (Сумма потенциальной награды).
    - 📈 **Чистый потенциальный профит:** (Доход минус затраты с учетом рисков).
 
@@ -209,18 +209,18 @@ def process_item(item_id, raw_text, link, default_topic):
             detected_ex = ex_name
             break
             
-    # Универсальные глубокие ссылки (Universal Links) для мобильных приложений бирж
+    # Смарт-ссылки для гарантированного открытия мобильных приложений бирж
     APP_DEEPLINKS = {
-        "BINANCE": "https://www.binance.com/activity",
-        "BYBIT": "https://www.bybit.com/app/re-direct",
-        "BITGET": "https://www.bitget.com/events",
-        "MEXC": "https://www.mexc.com/landings",
-        "GATE": "https://www.gate.io/activities",
-        "OKX": "https://www.okx.com/campaigns",
-        "BINGX": "https://bingx.com/act",
-        "KUCOIN": "https://www.kucoin.com/landings",
-        "WHITEBIT": "https://whitebit.com/ru/referral",
-        "KRAKEN": "https://www.kraken.com"
+        "BINANCE": "https://www.binance.com/ukr/download",
+        "BYBIT": "https://www.bybit.com/en/download",
+        "BITGET": "https://www.bitget.com/en/download",
+        "MEXC": "https://www.mexc.com/download",
+        "GATE": "https://www.gate.io/mobile",
+        "OKX": "https://www.okx.com/download",
+        "BINGX": "https://bingx.com/en-us/download/",
+        "KUCOIN": "https://www.kucoin.com/download",
+        "WHITEBIT": "https://whitebit.com/app",
+        "KRAKEN": "https://www.kraken.com/features/kraken-app"
     }
 
     markup = None

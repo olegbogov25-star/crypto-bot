@@ -214,7 +214,7 @@ def process_item(item_id, raw_text, link, default_topic):
     send_to_topic(target_topic, ai_result, reply_markup=markup)
     time.sleep(1)
 
-# ==================== FUTURES DATA & LIQUIDITY FETCHING (ВКЛЮЧАЯ OURBIT) ====================
+# ==================== FUTURES DATA & LIQUIDITY FETCHING ====================
 def fetch_futures_data():
     prices = {}
     volumes = {}
@@ -381,7 +381,7 @@ def format_countdown(target_timestamp):
     minutes = int((diff % 3600) // 60)
     return f"{hours}ч {minutes:02d}м"
 
-# ==================== SPREAD MONITOR ====================
+# ==================== SPREAD & FUNDING MONITORS ====================
 def monitor_spread():
     while True:
         try:
@@ -513,7 +513,6 @@ def monitor_spread():
         
         time.sleep(45)
 
-# ==================== FUNDING MONITOR ====================
 def monitor_funding():
     while True:
         try:
@@ -594,21 +593,25 @@ def monitor_funding():
             
         time.sleep(300)
 
-# ==================== PROMO & WEB3 MONITORS (ЗАЩИЩЕННЫЕ ЗАПРОСЫ + АГРЕГАТОРЫ) ====================
+# ==================== ENHANCED PROMO & WEB3 MONITORS (УСИЛЕННЫЙ СБОР) ====================
 def fetch_binance_promos():
     try:
-        url = "https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=48&pageNo=1&pageSize=50"
-        res = secure_request(url, timeout=6)
-        if not res: return
-        data = res.json()
-        articles = data.get('data', {}).get('articles', [])
-        for art in articles:
-            art_id = f"binance_promo_{art.get('id')}"
-            title = art.get('title', '')
-            code = art.get('code', '')
-            link = f"https://www.binance.com/ru-UA/support/announcement/{code}" if code else "https://www.binance.com"
-            raw_text = f"Binance Event / Launchpool / Megadrop: {title}\n{link}"
-            process_item(art_id, raw_text, link, "BINANCE")
+        urls = [
+            "https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=48&pageNo=1&pageSize=50",
+            "https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=161&pageNo=1&pageSize=50"
+        ]
+        for url in urls:
+            res = secure_request(url, timeout=6)
+            if not res: continue
+            data = res.json()
+            articles = data.get('data', {}).get('articles', [])
+            for art in articles:
+                art_id = f"binance_promo_{art.get('id')}"
+                title = art.get('title', '')
+                code = art.get('code', '')
+                link = f"https://www.binance.com/ru-UA/support/announcement/{code}" if code else "https://www.binance.com"
+                raw_text = f"Binance Event / Launchpool / Megadrop: {title}\n{link}"
+                process_item(art_id, raw_text, link, "BINANCE")
     except Exception as e:
         print(f"Binance Promo Error: {e}")
 
@@ -649,33 +652,48 @@ def fetch_bybit_promos():
 
 def fetch_okx_promos():
     try:
-        url = "https://www.okx.com/priapi/v5/support/news/bulletins?page=1&pageSize=50"
-        res = secure_request(url, timeout=6)
-        if not res: return
-        data = res.json()
-        articles = data.get('data', [{}])[0].get('details', [])
-        for art in articles[:50]:
-            art_id = f"okx_promo_{art.get('id')}"
-            title = art.get('title', '')
-            link = f"https://www.okx.com/ru/help/{art.get('slug', '')}" if art.get('slug') else "https://www.okx.com"
-            raw_text = f"OKX Event / Flash Earn / Jumpstart: {title}\n{link}"
-            process_item(art_id, raw_text, link, "OKX")
+        urls = [
+            "https://www.okx.com/priapi/v5/support/news/bulletins?page=1&pageSize=50",
+            "https://www.okx.com/priapi/v5/support/news/bulletins?type=announcements&page=1&pageSize=50"
+        ]
+        for url in urls:
+            res = secure_request(url, timeout=6)
+            if not res: continue
+            data = res.json()
+            items = data.get('data', [])
+            articles = []
+            if isinstance(items, list) and len(items) > 0:
+                articles = items[0].get('details', [])
+            elif isinstance(items, dict):
+                articles = items.get('details', [])
+            
+            for art in articles[:50]:
+                art_id = f"okx_promo_{art.get('id')}"
+                title = art.get('title', '')
+                slug = art.get('slug', '')
+                link = f"https://www.okx.com/ru/help/{slug}" if slug else "https://www.okx.com"
+                raw_text = f"OKX Event / Flash Earn / Jumpstart: {title}\n{link}"
+                process_item(art_id, raw_text, link, "OKX")
     except Exception as e:
         print(f"OKX Promo Error: {e}")
 
 def fetch_okx_web3():
     try:
-        url = "https://www.okx.com/priapi/v5/nft/market/activity/campaign-list?limit=50&page=1"
-        alt_url = "https://www.okx.com/priapi/v5/support/news/bulletins?type=web3&page=1&pageSize=50"
-        
-        for u in [url, alt_url]:
+        urls = [
+            "https://www.okx.com/priapi/v5/nft/market/activity/campaign-list?limit=50&page=1",
+            "https://www.okx.com/priapi/v5/support/news/bulletins?type=web3&page=1&pageSize=50",
+            "https://www.okx.com/priapi/v5/wallet/activity/campaign-list?limit=50&page=1"
+        ]
+        for u in urls:
             res = secure_request(u, timeout=6)
             if not res: continue
             data = res.json()
             items = data.get('data', [])
+            if isinstance(items, dict):
+                items = items.get('list', items.get('campaigns', []))
             if isinstance(items, list):
                 for art in items:
-                    art_id = f"okx_web3_launch_{art.get('id', art.get('campaignId', ''))}"
+                    art_id = f"okx_web3_launch_{art.get('id', art.get('campaignId', art.get('name', '')))}"
                     title = art.get('title', art.get('name', 'OKX Web3 X Launch / Earn'))
                     link = art.get('url', 'https://web3.okx.com')
                     raw_text = f"#OKX_Web3 X Launch / Earn / Airdrop: {title}\n{link}"
@@ -704,18 +722,21 @@ def fetch_mexc_promos():
     try:
         urls = [
             "https://www.mexc.com/api/common/announcement?page=1&pageSize=50",
-            "https://www.mexc.com/api/common/announcement?page=1&pageSize=50&category=activity"
+            "https://www.mexc.com/api/common/announcement?page=1&pageSize=50&category=activity",
+            "https://www.mexc.com/api/common/announcement?page=1&pageSize=50&category=1"
         ]
         for url in urls:
             res = secure_request(url, timeout=6)
             if not res: continue
             data = res.json()
             articles = data.get('data', {}).get('announcementList', [])
+            if not articles and isinstance(data.get('data'), list):
+                articles = data.get('data')
             for art in articles:
-                art_id = f"mexc_promo_{art.get('id')}"
+                art_id = f"mexc_promo_{art.get('id', art.get('articleId', ''))}"
                 title = art.get('title', '')
-                link = f"https://www.mexc.com/support/articles/{art.get('id')}" if art.get('id') else "https://www.mexc.com"
-                summary = art.get('summary', '')
+                link = f"https://www.mexc.com/support/articles/{art.get('id', art.get('articleId', ''))}" if (art.get('id') or art.get('articleId')) else "https://www.mexc.com"
+                summary = art.get('summary', art.get('content', ''))
                 raw_text = f"MEXC Event / Promotion / Kickstarter: {title}\n{summary}\n{link}"
                 process_item(art_id, raw_text, link, "MEXC")
     except Exception as e:
@@ -723,16 +744,23 @@ def fetch_mexc_promos():
 
 def fetch_gate_promos():
     try:
-        url = "https://api.gateio.ws/api/v4/support/announcements?limit=50"
-        res = secure_request(url, timeout=6)
-        if not res: return
-        items = res.json()
-        for art in items:
-            art_id = f"gate_promo_{art.get('id')}"
-            title = art.get('title', '')
-            link = art.get('url', 'https://www.gate.io')
-            raw_text = f"Gate.io Event / Promotion: {title}\n{link}"
-            process_item(art_id, raw_text, link, "GATE")
+        urls = [
+            "https://api.gateio.ws/api/v4/support/announcements?limit=50",
+            "https://api.gateio.ws/api/v4/ann/list_article?limit=50"
+        ]
+        for url in urls:
+            res = secure_request(url, timeout=6)
+            if not res: continue
+            items = res.json()
+            if isinstance(items, dict):
+                items = items.get('data', items.get('list', []))
+            if isinstance(items, list):
+                for art in items:
+                    art_id = f"gate_promo_{art.get('id', art.get('ann_id', ''))}"
+                    title = art.get('title', '')
+                    link = art.get('url', f"https://www.gate.io/article/{art.get('id', '')}")
+                    raw_text = f"Gate.io Event / Promotion: {title}\n{link}"
+                    process_item(art_id, raw_text, link, "GATE")
     except Exception as e:
         print(f"Gate Promo Error: {e}")
 
@@ -788,10 +816,10 @@ def fetch_kraken_promos():
     try:
         url = "https://blog.kraken.com/feed"
         feed = feedparser.parse(url)
-        for entry in feed.entries[:30]:
-            art_id = f"kraken_promo_{entry.get('id', entry.get('link'))}"
-            title = entry.get('title', '')
+        for entry in feed.entries[:15]:
             link = entry.get('link', 'https://www.kraken.com')
+            art_id = f"kraken_promo_{entry.get('id', link)}"
+            title = entry.get('title', '')
             summary = entry.get('summary', '')
             raw_text = f"Kraken Event / Promotion / Announcement: {title}\n{summary}\n{link}"
             process_item(art_id, raw_text, link, "KRAKEN")
@@ -799,10 +827,11 @@ def fetch_kraken_promos():
         print(f"Kraken Promo Error: {e}")
 
 def fetch_aggregators():
-    """Резервный сбор из крипто-агрегаторов и открытых лент"""
+    """Расширенный сбор из топ крипто-агрегаторов"""
     aggregator_feeds = [
         ("https://cryptorank.io/rss/ico", "NEWS"),
-        ("https://coinmarketcap.com/headlines/news/", "NEWS")
+        ("https://coinmarketcap.com/headlines/news/", "NEWS"),
+        ("https://www.coingape.com/feed/", "NEWS")
     ]
     for url, topic in aggregator_feeds:
         try:
@@ -811,8 +840,9 @@ def fetch_aggregators():
                 link = entry.get('link', '')
                 title = entry.get('title', '')
                 summary = entry.get('summary', '')
+                art_id = f"aggregator_{entry.get('id', link)}"
                 raw_text = f"Aggregator Airdrop / Promo: {title}\n{summary}\n{link}"
-                process_item(entry.id, raw_text, link, topic)
+                process_item(art_id, raw_text, link, topic)
                 time.sleep(0.5)
         except Exception as e:
             print(f"Aggregator RSS Error ({url}): {e}")
@@ -849,15 +879,12 @@ def monitor_news():
         ("https://cryptopanic.com/news/rss/", "NEWS"),
         ("https://cointelegraph.com/rss", "NEWS"),
         ("https://coindesk.com/arc/outboundfeeds/rss/", "NEWS"),
-        ("https://decrypt.co/feed", "NEWS"),
-        ("https://bitcoinmagazine.com/.rss/full/", "NEWS")
+        ("https://decrypt.co/feed", "NEWS")
     ]
     
-    # === ОДНОРАЗОВАЯ ПРОВЕРКА ПРОМО ЗА 24 ЧАСА ПРИ СТАРТЕ ===
-    print("🚀 Выполняется глубокий одноразовый сбор промо-акций (защищенные запросы)...")
+    print("🚀 Глубокий сбор промо-акций со всех бирж и агрегаторов запущен...")
     run_all_promos()
-    print("✅ Одноразовый глубокий сбор завершен. Переход в штатный режим 24/7.")
-    # =======================================================
+    print("✅ Первичный сбор завершен. Переход в штатный мониторинг 24/7.")
 
     while True:
         run_all_promos()
@@ -869,8 +896,9 @@ def monitor_news():
                     link = entry.get('link', '')
                     title = entry.get('title', '')
                     summary = entry.get('summary', '')
+                    art_id = f"news_{entry.get('id', link)}"
                     raw_text = f"{title}\n{summary}\n{link}"
-                    process_item(entry.id, raw_text, link, topic)
+                    process_item(art_id, raw_text, link, topic)
                     time.sleep(0.5)
             except Exception as e:
                 print(f"RSS Error ({url}): {e}")
@@ -881,7 +909,7 @@ def monitor_news():
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     
-    send_to_topic("SPREAD", "🚀 **Бот запущен: Защита от флуда активна, заголовки Cloudflare, агрегаторы и 10 бирж!**")
+    send_to_topic("SPREAD", "🚀 **Бот обновлен: Расширенный парсинг 11 бирж, Web3 OKX/Binance и защита активны!**")
     
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()

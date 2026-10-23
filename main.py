@@ -58,7 +58,7 @@ def run_flask():
 BROWSER_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
     "Accept-Encoding": "gzip, deflate, br",
     "Connection": "keep-alive",
     "Upgrade-Insecure-Requests": "1",
@@ -81,18 +81,18 @@ def secure_request(url, timeout=10):
         print(f"❌ Secure Request Error ({url}): {e}")
         return None
 
-# ==================== LINK GENERATORS ====================
+# ==================== LINK GENERATORS (UNIVERSAL .COM / .EN) ====================
 def get_exchange_url(exchange, symbol):
     base_sym = symbol.replace('USDT', '')
     links = {
-        "Binance": f"https://www.binance.com/ru-UA/futures/{base_sym}USDT",
+        "Binance": f"https://www.binance.com/en/futures/{base_sym}USDT",
         "Bybit": f"https://www.bybit.com/trade/usdt/{base_sym}USDT",
-        "OKX": f"https://www.okx.com/ru/trade-swap/{base_sym.lower()}-usdt-swap",
-        "Gate": f"https://www.gate.io/ru/futures/USDT/{base_sym}_USDT",
+        "OKX": f"https://www.okx.com/trade-swap/{base_sym.lower()}-usdt-swap",
+        "Gate": f"https://www.gate.io/futures/USDT/{base_sym}_USDT",
         "Bitget": f"https://www.bitget.com/futures/usdt/{base_sym}USDT",
         "MEXC": f"https://futures.mexc.com/exchange/{base_sym}_USDT",
-        "BingX": f"https://bingx.com/ru/futures/forward/{base_sym}USDT",
-        "KuCoin": f"https://www.kucoin.com/ru/futures/trade/{base_sym}USDTM",
+        "BingX": f"https://bingx.com/en/futures/forward/{base_sym}USDT",
+        "KuCoin": f"https://www.kucoin.com/futures/trade/{base_sym}USDTM",
         "WhiteBit": f"https://whitebit.com/trade/{base_sym}_USDT?type=futures",
         "Kraken": f"https://futures.kraken.com",
         "Ourbit": f"https://www.ourbit.com/futures/trade/{base_sym}_USDT"
@@ -593,7 +593,7 @@ def monitor_funding():
             
         time.sleep(300)
 
-# ==================== ENHANCED PROMO & WEB3 MONITORS (УСИЛЕННЫЙ СБОР) ====================
+# ==================== ENHANCED PROMO & WEB3 MONITORS (.COM GLOBAL) ====================
 def fetch_binance_promos():
     try:
         urls = [
@@ -609,7 +609,7 @@ def fetch_binance_promos():
                 art_id = f"binance_promo_{art.get('id')}"
                 title = art.get('title', '')
                 code = art.get('code', '')
-                link = f"https://www.binance.com/ru-UA/support/announcement/{code}" if code else "https://www.binance.com"
+                link = f"https://www.binance.com/en/support/announcement/{code}" if code else "https://www.binance.com"
                 raw_text = f"Binance Event / Launchpool / Megadrop: {title}\n{link}"
                 process_item(art_id, raw_text, link, "BINANCE")
     except Exception as e:
@@ -626,7 +626,7 @@ def fetch_binance_web3():
             art_id = f"binance_web3_{art.get('id')}"
             title = art.get('title', '')
             code = art.get('code', '')
-            link = f"https://web3.binance.com/ru-UA/support/announcement/{code}" if code else "https://web3.binance.com"
+            link = f"https://web3.binance.com/en/support/announcement/{code}" if code else "https://web3.binance.com"
             raw_text = f"#Binance_Web3 Airdrop / Quest / Booster: {title}\n{link}"
             process_item(art_id, raw_text, link, "BINANCE")
     except Exception as e:
@@ -642,7 +642,7 @@ def fetch_bybit_promos():
         for art in articles:
             art_id = f"bybit_promo_{art.get('id')}"
             title = art.get('title', '')
-            link = art.get('url', '')
+            link = art.get('url', 'https://www.bybit.com')
             description = art.get('description', '')
             type_title = art.get('type', {}).get('title', 'Campaign')
             raw_text = f"Bybit Event [{type_title}]: {title}\n{description}\n{link}"
@@ -671,7 +671,7 @@ def fetch_okx_promos():
                 art_id = f"okx_promo_{art.get('id')}"
                 title = art.get('title', '')
                 slug = art.get('slug', '')
-                link = f"https://www.okx.com/ru/help/{slug}" if slug else "https://www.okx.com"
+                link = f"https://www.okx.com/help/{slug}" if slug else "https://www.okx.com"
                 raw_text = f"OKX Event / Flash Earn / Jumpstart: {title}\n{link}"
                 process_item(art_id, raw_text, link, "OKX")
     except Exception as e:
@@ -681,8 +681,7 @@ def fetch_okx_web3():
     try:
         urls = [
             "https://www.okx.com/priapi/v5/nft/market/activity/campaign-list?limit=50&page=1",
-            "https://www.okx.com/priapi/v5/support/news/bulletins?type=web3&page=1&pageSize=50",
-            "https://www.okx.com/priapi/v5/wallet/activity/campaign-list?limit=50&page=1"
+            "https://www.okx.com/priapi/v5/support/news/bulletins?type=web3&page=1&pageSize=50"
         ]
         for u in urls:
             res = secure_request(u, timeout=6)
@@ -711,7 +710,7 @@ def fetch_bitget_promos():
         for art in articles[:50]:
             art_id = f"bitget_promo_{art.get('annId')}"
             title = art.get('annTitle', '')
-            link = art.get('annUrl', '')
+            link = art.get('annUrl', 'https://www.bitget.com')
             ann_type = art.get('annType', 'Promotion')
             raw_text = f"Bitget Event [{ann_type}]: {title}\n{link}"
             process_item(art_id, raw_text, link, "BITGET")
@@ -722,8 +721,7 @@ def fetch_mexc_promos():
     try:
         urls = [
             "https://www.mexc.com/api/common/announcement?page=1&pageSize=50",
-            "https://www.mexc.com/api/common/announcement?page=1&pageSize=50&category=activity",
-            "https://www.mexc.com/api/common/announcement?page=1&pageSize=50&category=1"
+            "https://www.mexc.com/api/common/announcement?page=1&pageSize=50&category=activity"
         ]
         for url in urls:
             res = secure_request(url, timeout=6)
@@ -735,7 +733,8 @@ def fetch_mexc_promos():
             for art in articles:
                 art_id = f"mexc_promo_{art.get('id', art.get('articleId', ''))}"
                 title = art.get('title', '')
-                link = f"https://www.mexc.com/support/articles/{art.get('id', art.get('articleId', ''))}" if (art.get('id') or art.get('articleId')) else "https://www.mexc.com"
+                aid = art.get('id', art.get('articleId', ''))
+                link = f"https://www.mexc.com/support/articles/{aid}" if aid else "https://www.mexc.com"
                 summary = art.get('summary', art.get('content', ''))
                 raw_text = f"MEXC Event / Promotion / Kickstarter: {title}\n{summary}\n{link}"
                 process_item(art_id, raw_text, link, "MEXC")
@@ -744,23 +743,19 @@ def fetch_mexc_promos():
 
 def fetch_gate_promos():
     try:
-        urls = [
-            "https://api.gateio.ws/api/v4/support/announcements?limit=50",
-            "https://api.gateio.ws/api/v4/ann/list_article?limit=50"
-        ]
-        for url in urls:
-            res = secure_request(url, timeout=6)
-            if not res: continue
-            items = res.json()
-            if isinstance(items, dict):
-                items = items.get('data', items.get('list', []))
-            if isinstance(items, list):
-                for art in items:
-                    art_id = f"gate_promo_{art.get('id', art.get('ann_id', ''))}"
-                    title = art.get('title', '')
-                    link = art.get('url', f"https://www.gate.io/article/{art.get('id', '')}")
-                    raw_text = f"Gate.io Event / Promotion: {title}\n{link}"
-                    process_item(art_id, raw_text, link, "GATE")
+        url = "https://api.gateio.ws/api/v4/support/announcements?limit=50"
+        res = secure_request(url, timeout=6)
+        if not res: return
+        items = res.json()
+        if isinstance(items, dict):
+            items = items.get('data', items.get('list', []))
+        if isinstance(items, list):
+            for art in items:
+                art_id = f"gate_promo_{art.get('id', '')}"
+                title = art.get('title', '')
+                link = art.get('url', f"https://www.gate.io/article/{art.get('id', '')}")
+                raw_text = f"Gate.io Event / Promotion: {title}\n{link}"
+                process_item(art_id, raw_text, link, "GATE")
     except Exception as e:
         print(f"Gate Promo Error: {e}")
 
@@ -774,7 +769,8 @@ def fetch_kucoin_promos():
         for art in articles:
             art_id = f"kucoin_promo_{art.get('cId')}"
             title = art.get('title', '')
-            link = f"https://www.kucoin.com/ru/news/{art.get('cName', '')}" if art.get('cName') else "https://www.kucoin.com"
+            cname = art.get('cName', '')
+            link = f"https://www.kucoin.com/news/{cname}" if cname else "https://www.kucoin.com"
             raw_text = f"KuCoin Event / Promotion: {title}\n{link}"
             process_item(art_id, raw_text, link, "KUCOIN")
     except Exception as e:
@@ -827,7 +823,7 @@ def fetch_kraken_promos():
         print(f"Kraken Promo Error: {e}")
 
 def fetch_aggregators():
-    """Расширенный сбор из топ крипто-агрегаторов"""
+    """Сбор из топ крипто-агрегаторов"""
     aggregator_feeds = [
         ("https://cryptorank.io/rss/ico", "NEWS"),
         ("https://coinmarketcap.com/headlines/news/", "NEWS"),
@@ -882,7 +878,7 @@ def monitor_news():
         ("https://decrypt.co/feed", "NEWS")
     ]
     
-    print("🚀 Глубокий сбор промо-акций со всех бирж и агрегаторов запущен...")
+    print("🚀 Глубокий сбор промо-акций со всех бирж запущен...")
     run_all_promos()
     print("✅ Первичный сбор завершен. Переход в штатный мониторинг 24/7.")
 
@@ -909,7 +905,7 @@ def monitor_news():
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     
-    send_to_topic("SPREAD", "🚀 **Бот обновлен: Расширенный парсинг 11 бирж, Web3 OKX/Binance и защита активны!**")
+    send_to_topic("SPREAD", "🚀 **Бот обновлен: Международные .com ссылки, расширенный сбор 11 бирж и защита активны!**")
     
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()

@@ -206,15 +206,16 @@ def process_item(item_id, raw_text, link, default_topic):
             detected_ex = ex_name
             break
             
+    # Универсальные шлюзы для мобильных приложений бирж во всех остальных папках
     APP_DEEPLINKS = {
-        "BINANCE": "bnc://app.binance.com",
-        "BYBIT": "bybit://",
-        "BITGET": "bitget://",
-        "MEXC": "mexcapp://",
-        "GATE": "gateio://",
-        "OKX": "okx://",
-        "BINGX": "bingx://",
-        "KUCOIN": "kucoin://",
+        "BINANCE": "https://www.binance.com/en/download",
+        "BYBIT": "https://www.bybit.com/en/download",
+        "BITGET": "https://www.bitget.com/download",
+        "MEXC": "https://www.mexc.com/download",
+        "GATE": "https://www.gate.io/mobile",
+        "OKX": "https://www.okx.com/download",
+        "BINGX": "https://bingx.com/en-us/download/",
+        "KUCOIN": "https://www.kucoin.com/download",
         "WHITEBIT": "https://whitebit.com",
         "KRAKEN": "https://kraken.com"
     }

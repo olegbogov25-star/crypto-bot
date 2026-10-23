@@ -675,10 +675,7 @@ def monitor_funding():
                         url = get_exchange_url(ex, symbol)
                         target_t = sym_times.get(ex, 0)
                         countdown_str = format_countdown(target_t)
-                        
-                        # Вывод без принудительного плюса для положительных значений
-                        rate_str = f"{r:.2f}%"
-                        overview_list.append(f"🔹 [{ex}]({url}): `{rate_str}` (⏱ {countdown_str})")
+                        overview_list.append(f"🔹 [{ex}]({url}): `{r:.2f}%` (⏱ {countdown_str})")
                     
                     overview = "\n".join(overview_list)
 
@@ -724,7 +721,13 @@ def monitor_funding():
 
 # ==================== MAIN INITIALIZATION ====================
 if __name__ == "__main__":
-    print("===> Starting Bot Background Threads...")
+    print("===> Clearing webhooks & starting bot...")
+    try:
+        bot.remove_webhook()
+        time.sleep(1)
+    except Exception as e:
+        print(f"Webhook remove warning: {e}")
+
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()
@@ -732,4 +735,4 @@ if __name__ == "__main__":
     threading.Thread(target=fetch_global_crypto_promos, daemon=True).start()
     
     print("===> Your service is live 🚀")
-    bot.infinity_polling()
+    bot.infinity_polling(skip_pending_flush=True)

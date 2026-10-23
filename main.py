@@ -6,6 +6,7 @@ import pytz
 import requests
 import feedparser
 import telebot
+from bs4 import BeautifulSoup
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from flask import Flask
 
@@ -22,8 +23,8 @@ TOPICS = {
     "NEWS": 2, 
     "MEXC": 68,     
     "BYBIT": 4,     
-    "BINANCE": 3,   
-    "BITGET": 69,   
+    "BINANCE": 3,    
+    "BITGET": 69,    
     "BINGX": 70,    
     "KUCOIN": 71,   
     "WHITEBIT": 72, 
@@ -117,7 +118,7 @@ def analyze_text(text):
     if not OPENROUTER_API_KEY:
         return text
     prompt = f"""
-Ты — жесткий фильтр и аналитик крипто-анонсов. Твоя задача — отсечь 100% информационного шума, но ОСТАВИТЬ все реальные промо-акции, кикстартеры, лаунчпулы, мегадропы, Web3-ивенты, X-Launch и ивенты с призами (включая розыгрыши гаджетов вроде iPhone, мерча или токенов).
+Ты — жесткий фильтр и аналитик крипто-анонсов. Твоя задача — отсечь 100% информационного шума, но ОСТАВИТЬ все реальные промо-акции, кикстартеры, лаунчпулы, мегадропы, Web3-ивенты, X-Launch и ивенты с призами (включая розыгрыши гаджетов вроде iPhone, мерча или токенов, а также локальные телеграм-квизы и мини-приложения / Mini Apps).
 
 ОБЯЗАТЕЛЬНОЕ ПРАВИЛО: Ответь строго одним словом "SKIP", если:
 1. Это обычный листинг/добавление новой торговой пары БЕЗ какой-либо промо-кампании, баунти или призового фонда.
@@ -125,7 +126,7 @@ def analyze_text(text):
 3. Новость про суды, штрафы, регуляторов, делистинг, техническое обслуживание.
 (Если есть намек на призы, розыгрыш, стейкинг с наградами, Web3 или промо — НЕ пропускай).
 
-ЕСЛИ ЭТО РЕАЛЬНАЯ АКЦИЯ, ИВЕНТ, LAUNCHPOOL, MEGADROP, WEB3 AIRDROP — сформируй отчет строго по форме:
+ЕСЛИ ЭТО РЕАЛЬНАЯ АКЦИЯ, ИВЕНТ, LAUNCHPOOL, MEGADROP, WEB3 AIRDROP, MINI-APP КВИЗ — сформируй отчет строго по форме:
 1. 📌 **Источник / Платформа:** Название биржи или Web3-кошелька.
 2. 🏷 **Тип события / Теги:** (#OKX_Web3 #Binance_Web3 #Bybit_Web3 #Web3 #Launchpool #Launchpad #Airdrop #TokenSplash #Promotion #Kickstarter #Kraken и др.).
 3. 🪙 **Токен / Проект.**
@@ -213,6 +214,55 @@ def process_item(item_id, raw_text, link, default_topic):
 
     send_to_topic(target_topic, ai_result, reply_markup=markup)
     time.sleep(1)
+
+# ==================== TELEGRAM CHANNELS PROMO MONITOR ====================
+def fetch_telegram_channels_promos():
+    """Мониторинг официальных Telegram-каналов бирж через публичные веб-превью t.me/s/"""
+    channels = {
+        "Binance": ["BinanceUkraine", "BinanceAnnouncements"],
+        "OKX": ["OKX_Official", "okx_cis"],
+        "Bybit": ["Bybit_CIS", "BybitAnnouncements"],
+        "Bitget": ["bitget_cis"]
+    }
+    
+    while True:
+        try:
+            for exchange, chan_list in channels.items():
+                for chan in chan_list:
+                    url = f"https://t.me/s/{chan}"
+                    res = secure_request(url, timeout=8)
+                    if not res:
+                        continue
+                    
+                    soup = BeautifulSoup(res.text, 'html.parser')
+                    messages = soup.find_all('div', class_='tgme_widget_message')
+                    
+                    for msg in messages[-15:]:  # Берем последние 15 постов
+                        msg_id_attr = msg.get('data-post', '')
+                        if not msg_id_attr:
+                            continue
+                        
+                        item_id = f"tg_chan_{msg_id_attr.replace('/', '_')}"
+                        
+                        text_div = msg.find('div', class_='tgme_widget_message_text')
+                        if not text_div:
+                            continue
+                        
+                        raw_text = text_div.get_text(separator='\n', strip=True)
+                        
+                        # Ищем ссылку на пост или кнопку внутри поста
+                        post_link = f"https://t.me/{msg_id_attr}"
+                        btn = msg.find('a', class_='tgme_widget_message_url')
+                        if btn and btn.get('href'):
+                            post_link = btn.get('href')
+                        
+                        full_payload = f"Telegram Channel [{exchange} / @{chan}]:\n{raw_text}\nLink: {post_link}"
+                        process_item(item_id, full_payload, post_link, exchange.upper())
+                        
+            time.sleep(600)  # Проверка каналов каждые 10 минут
+        except Exception as e:
+            print(f"Telegram Channels Monitor Error: {e}")
+            time.sleep(60)
 
 # ==================== FUTURES DATA & LIQUIDITY FETCHING ====================
 def fetch_futures_data():
@@ -590,7 +640,7 @@ def monitor_funding():
 
         except Exception as e:
             print(f"Funding Monitor Error: {e}")
-            
+        
         time.sleep(300)
 
 # ==================== ENHANCED PROMO & WEB3 MONITORS (.COM GLOBAL) ====================
@@ -717,199 +767,36 @@ def fetch_bitget_promos():
     except Exception as e:
         print(f"Bitget Promo Error: {e}")
 
-def fetch_mexc_promos():
-    try:
-        urls = [
-            "https://www.mexc.com/api/common/announcement?page=1&pageSize=50",
-            "https://www.mexc.com/api/common/announcement?page=1&pageSize=50&category=activity"
-        ]
-        for url in urls:
-            res = secure_request(url, timeout=6)
-            if not res: continue
-            data = res.json()
-            articles = data.get('data', {}).get('announcementList', [])
-            if not articles and isinstance(data.get('data'), list):
-                articles = data.get('data')
-            for art in articles:
-                art_id = f"mexc_promo_{art.get('id', art.get('articleId', ''))}"
-                title = art.get('title', '')
-                aid = art.get('id', art.get('articleId', ''))
-                link = f"https://www.mexc.com/support/articles/{aid}" if aid else "https://www.mexc.com"
-                summary = art.get('summary', art.get('content', ''))
-                raw_text = f"MEXC Event / Promotion / Kickstarter: {title}\n{summary}\n{link}"
-                process_item(art_id, raw_text, link, "MEXC")
-    except Exception as e:
-        print(f"MEXC Promo Error: {e}")
-
-def fetch_gate_promos():
-    try:
-        url = "https://api.gateio.ws/api/v4/support/announcements?limit=50"
-        res = secure_request(url, timeout=6)
-        if not res: return
-        items = res.json()
-        if isinstance(items, dict):
-            items = items.get('data', items.get('list', []))
-        if isinstance(items, list):
-            for art in items:
-                art_id = f"gate_promo_{art.get('id', '')}"
-                title = art.get('title', '')
-                link = art.get('url', f"https://www.gate.io/article/{art.get('id', '')}")
-                raw_text = f"Gate.io Event / Promotion: {title}\n{link}"
-                process_item(art_id, raw_text, link, "GATE")
-    except Exception as e:
-        print(f"Gate Promo Error: {e}")
-
-def fetch_kucoin_promos():
-    try:
-        url = "https://api.kucoin.com/api/v1/bulletins?currentPage=1&pageSize=50"
-        res = secure_request(url, timeout=6)
-        if not res: return
-        data = res.json()
-        articles = data.get('data', {}).get('items', [])
-        for art in articles:
-            art_id = f"kucoin_promo_{art.get('cId')}"
-            title = art.get('title', '')
-            cname = art.get('cName', '')
-            link = f"https://www.kucoin.com/news/{cname}" if cname else "https://www.kucoin.com"
-            raw_text = f"KuCoin Event / Promotion: {title}\n{link}"
-            process_item(art_id, raw_text, link, "KUCOIN")
-    except Exception as e:
-        print(f"KuCoin Promo Error: {e}")
-
-def fetch_bingx_promos():
-    try:
-        url = "https://open-api.bingx.com/openApi/common/v1/announcements?limit=50"
-        res = secure_request(url, timeout=6)
-        if not res: return
-        data = res.json()
-        articles = data.get('data', [])
-        for art in articles:
-            art_id = f"bingx_promo_{art.get('id')}"
-            title = art.get('title', '')
-            link = art.get('url', 'https://bingx.com')
-            raw_text = f"BingX Event / Promotion: {title}\n{link}"
-            process_item(art_id, raw_text, link, "BINGX")
-    except Exception as e:
-        print(f"BingX Promo Error: {e}")
-
-def fetch_whitebit_promos():
-    try:
-        url = "https://whitebit.com/api/v4/public/announcements?limit=50"
-        res = secure_request(url, timeout=6)
-        if not res: return
-        data = res.json()
-        articles = data.get('result', [])
-        for art in articles:
-            art_id = f"whitebit_promo_{art.get('id')}"
-            title = art.get('title', '')
-            link = art.get('url', 'https://whitebit.com')
-            raw_text = f"WhiteBit Event / Promotion: {title}\n{link}"
-            process_item(art_id, raw_text, link, "WHITEBIT")
-    except Exception as e:
-        print(f"WhiteBit Promo Error: {e}")
-
-def fetch_kraken_promos():
-    try:
-        url = "https://blog.kraken.com/feed"
-        feed = feedparser.parse(url)
-        for entry in feed.entries[:15]:
-            link = entry.get('link', 'https://www.kraken.com')
-            art_id = f"kraken_promo_{entry.get('id', link)}"
-            title = entry.get('title', '')
-            summary = entry.get('summary', '')
-            raw_text = f"Kraken Event / Promotion / Announcement: {title}\n{summary}\n{link}"
-            process_item(art_id, raw_text, link, "KRAKEN")
-    except Exception as e:
-        print(f"Kraken Promo Error: {e}")
-
-def fetch_aggregators():
-    """Сбор из топ крипто-агрегаторов"""
-    aggregator_feeds = [
-        ("https://cryptorank.io/rss/ico", "NEWS"),
-        ("https://coinmarketcap.com/headlines/news/", "NEWS"),
-        ("https://www.coingape.com/feed/", "NEWS")
-    ]
-    for url, topic in aggregator_feeds:
-        try:
-            feed = feedparser.parse(url)
-            for entry in feed.entries[:5]:
-                link = entry.get('link', '')
-                title = entry.get('title', '')
-                summary = entry.get('summary', '')
-                art_id = f"aggregator_{entry.get('id', link)}"
-                raw_text = f"Aggregator Airdrop / Promo: {title}\n{summary}\n{link}"
-                process_item(art_id, raw_text, link, topic)
-                time.sleep(0.5)
-        except Exception as e:
-            print(f"Aggregator RSS Error ({url}): {e}")
-
+# ==================== BACKGROUND RUNNER ====================
 def run_all_promos():
-    fetch_binance_promos()
-    time.sleep(1)
-    fetch_binance_web3()
-    time.sleep(1)
-    fetch_bybit_promos()
-    time.sleep(1)
-    fetch_okx_promos()
-    time.sleep(1)
-    fetch_okx_web3()
-    time.sleep(1)
-    fetch_bitget_promos()
-    time.sleep(1)
-    fetch_mexc_promos()
-    time.sleep(1)
-    fetch_gate_promos()
-    time.sleep(1)
-    fetch_kucoin_promos()
-    time.sleep(1)
-    fetch_bingx_promos()
-    time.sleep(1)
-    fetch_whitebit_promos()
-    time.sleep(1)
-    fetch_kraken_promos()
-    time.sleep(1)
-    fetch_aggregators()
-
-def monitor_news():
-    feeds = [
-        ("https://cryptopanic.com/news/rss/", "NEWS"),
-        ("https://cointelegraph.com/rss", "NEWS"),
-        ("https://coindesk.com/arc/outboundfeeds/rss/", "NEWS"),
-        ("https://decrypt.co/feed", "NEWS")
-    ]
-    
-    print("🚀 Глубокий сбор промо-акций со всех бирж запущен...")
-    run_all_promos()
-    print("✅ Первичный сбор завершен. Переход в штатный мониторинг 24/7.")
-
     while True:
-        run_all_promos()
+        try:
+            fetch_binance_promos()
+            fetch_binance_web3()
+            fetch_bybit_promos()
+            fetch_okx_promos()
+            fetch_okx_web3()
+            fetch_bitget_promos()
+        except Exception as e:
+            print(f"Promos Loop Error: {e}")
+        time.sleep(1800) # Проверка официальных API каждые 30 минут
 
-        for url, topic in feeds:
-            try:
-                feed = feedparser.parse(url)
-                for entry in feed.entries[:3]:
-                    link = entry.get('link', '')
-                    title = entry.get('title', '')
-                    summary = entry.get('summary', '')
-                    art_id = f"news_{entry.get('id', link)}"
-                    raw_text = f"{title}\n{summary}\n{link}"
-                    process_item(art_id, raw_text, link, topic)
-                    time.sleep(0.5)
-            except Exception as e:
-                print(f"RSS Error ({url}): {e}")
-        
-        time.sleep(300)
-
-# ==================== MAIN EXECUTION ====================
 if __name__ == "__main__":
+    # Запуск HTTP сервера для Render healthcheck
     threading.Thread(target=run_flask, daemon=True).start()
     
-    send_to_topic("SPREAD", "🚀 **Бот обновлен: Международные .com ссылки, расширенный сбор 11 бирж и защита активны!**")
-    
+    # Запуск мониторов спредов и фандинга
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()
-    threading.Thread(target=monitor_news, daemon=True).start()
     
+    # Запуск мониторинга официальных промо-акций через API бирж
+    threading.Thread(target=run_all_promos, daemon=True).start()
+    
+    # Запуск нового мониторинга официальных Telegram-каналов (для ловли локальных квизов, мини-аппов и дропов)
+    threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
+    
+    print("🚀 Web3 & Promo Bot с поддержкой Telegram-каналов успешно запущен!")
+    
+    # Бесконечный цикл для поддержания работы бота
     while True:
         time.sleep(3600)

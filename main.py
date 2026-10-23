@@ -491,15 +491,82 @@ def monitor_funding():
             
         time.sleep(300)
 
-# ==================== NEWS & RSS MONITORS (РАСШИРЕННЫЙ СПИСОК) ====================
+# ==================== NEWS & PROMO DIRECT API MONITORS (ALL TAGS) ====================
+def fetch_bybit_promos():
+    try:
+        url = "https://api.bybit.com/v5/announcements/index?locale=en-US&limit=10"
+        res = requests.get(url, timeout=5).json()
+        articles = res.get('result', {}).get('list', [])
+        for art in articles:
+            art_id = f"bybit_promo_{art.get('id')}"
+            title = art.get('title', '')
+            link = art.get('url', '')
+            description = art.get('description', '')
+            type_title = art.get('type', {}).get('title', 'Campaign')
+            raw_text = f"Bybit Event [{type_title}]: {title}\n{description}\n{link}"
+            process_item(art_id, raw_text, link, "BYBIT")
+    except Exception as e:
+        print(f"Bybit Promo Error: {e}")
+
+def fetch_bitget_promos():
+    try:
+        url = "https://api.bitget.com/api/v2/spot/public/announcements?language=en_US"
+        res = requests.get(url, timeout=5).json()
+        articles = res.get('data', [])
+        for art in articles[:10]:
+            art_id = f"bitget_promo_{art.get('annId')}"
+            title = art.get('annTitle', '')
+            link = art.get('annUrl', '')
+            ann_type = art.get('annType', 'Promotion')
+            raw_text = f"Bitget Event [{ann_type}]: {title}\n{link}"
+            process_item(art_id, raw_text, link, "BITGET")
+    except Exception as e:
+        print(f"Bitget Promo Error: {e}")
+
+def fetch_okx_promos():
+    try:
+        url = "https://www.okx.com/priapi/v5/support/news/bulletins?page=1&pageSize=10"
+        res = requests.get(url, timeout=5).json()
+        articles = res.get('data', [{}])[0].get('details', [])
+        for art in articles[:10]:
+            art_id = f"okx_promo_{art.get('id')}"
+            title = art.get('title', '')
+            link = f"https://www.okx.com/help/{art.get('slug', '')}" if art.get('slug') else "https://www.okx.com"
+            raw_text = f"OKX Event / Flash Earn / Jumpstart: {title}\n{link}"
+            process_item(art_id, raw_text, link, "OKX")
+    except Exception as e:
+        print(f"OKX Promo Error: {e}")
+
+def fetch_binance_promos():
+    try:
+        url = "https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=48&pageNo=1&pageSize=10"
+        res = requests.get(url, timeout=5).json()
+        articles = res.get('data', {}).get('articles', [])
+        for art in articles:
+            art_id = f"binance_promo_{art.get('id')}"
+            title = art.get('title', '')
+            code = art.get('code', '')
+            link = f"https://www.binance.com/en/support/announcement/{code}" if code else "https://www.binance.com"
+            raw_text = f"Binance Event / Launchpool / Megadrop: {title}\n{link}"
+            process_item(art_id, raw_text, link, "BINANCE")
+    except Exception as e:
+        print(f"Binance Promo Error: {e}")
+
 def monitor_news():
     feeds = [
+        ("https://cryptopanic.com/news/rss/", "NEWS"),
         ("https://cointelegraph.com/rss", "NEWS"),
         ("https://coindesk.com/arc/outboundfeeds/rss/", "NEWS"),
         ("https://decrypt.co/feed", "NEWS"),
         ("https://bitcoinmagazine.com/.rss/full/", "NEWS")
     ]
     while True:
+        # Прямые запросы к разделам Earn/Launchpool/Promos бирж
+        fetch_bybit_promos()
+        fetch_bitget_promos()
+        fetch_okx_promos()
+        fetch_binance_promos()
+
         for url, topic in feeds:
             try:
                 feed = feedparser.parse(url)
@@ -512,7 +579,7 @@ def monitor_news():
             except Exception as e:
                 print(f"RSS Error ({url}): {e}")
         
-        time.sleep(600)
+        time.sleep(300)
 
 # ==================== MAIN EXECUTION ====================
 if __name__ == "__main__":

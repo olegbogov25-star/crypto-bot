@@ -90,17 +90,17 @@ def analyze_text(text):
     if not OPENROUTER_API_KEY:
         return text
     prompt = f"""
-Ты — жесткий фильтр и аналитик крипто-анонсов. Твоя задача — отсечь 100% информационного шума.
+Ты — жесткий фильтр и аналитик крипто-анонсов. Твоя задача — отсечь 100% информационного шума, но ОСТАВИТЬ все реальные промо-акции, кикстартеры, лаунчпулы, эйрдропы и ивенты с призами (включая розыгрыши гаджетов вроде iPhone, мерча или токенов).
 
 ОБЯЗАТЕЛЬНОЕ ПРАВИЛО: Ответь строго одним словом "SKIP", если:
-1. В анонсе НЕТ конкретного гарантированного призового фонда (в $, USDT или токенах) или четкой системы наград (Launchpool, Launchpad, Megadrop, Airdrop, Staking/Earn). Если призовой фонд или награды не указаны (например, только нулевая комиссия), отвечайте "SKIP".
-2. Новость про обычный листинг/добавление новых пар БЕЗ промо-кампании с призовыми.
-3. Новость про токенизированные акции, традиционные ETF или залоговые активы.
-4. Новость про суды, штрафы, регуляторов, делистинг, техническое обслуживание.
+1. Это обычный листинг/добавление новой торговой пары БЕЗ какой-либо промо-кампании, баунти или призового фонда.
+2. Новость про токенизированные акции, традиционные ETF или залоговые активы.
+3. Новость про суды, штрафы, регуляторов, делистинг, техническое обслуживание.
+(Если есть намек на призы, розыгрыш, стейкинг с наградами или промо — НЕ пропускай).
 
-ЕСЛИ ЭТО РЕАЛЬНЫЙ LAUNCHPOOL, MEGADROP, AIRDROP ИЛИ АКЦИЯ С ПРИЗОВЫМ ФОНДОМ — сформируй отчет строго по форме:
+ЕСЛИ ЭТО РЕАЛЬНАЯ АКЦИЯ, ИВЕНТ, LAUNCHPOOL, MEGADROP ИЛИ AIRDROP — сформируй отчет строго по форме:
 1. 📌 **Источник / Платформа:** Название биржи.
-2. 🏷 **Тип события / Теги:** (#OKX_Web3 #Binance_Web3 #Bybit_Web3 #Web3 #Launchpool #Launchpad #Airdrop #TokenSplash #Promotion и др.).
+2. 🏷 **Тип события / Теги:** (#OKX_Web3 #Binance_Web3 #Bybit_Web3 #Web3 #Launchpool #Launchpad #Airdrop #TokenSplash #Promotion #Kickstarter и др.).
 3. 🪙 **Токен / Проект.**
 4. 📅 **Даты проведения.**
 5. 📋 **Краткое описание.**
@@ -361,12 +361,7 @@ def monitor_spread():
 
             for sym, ex_data in prices.items():
                 sym_vols = volumes.get(sym, {})
-                
-                # Мягкий фильтр ликвидности: берем все биржи с ненулевым объемом
-                valid_ex_data = {
-                    ex: p for ex, p in ex_data.items() 
-                    if sym_vols.get(ex, 0) > 0
-                }
+                valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) > 0}
 
                 if len(valid_ex_data) < 2:
                     continue
@@ -569,10 +564,10 @@ def monitor_funding():
             
         time.sleep(300)
 
-# ==================== ALL EXCHANGES PROMO & ANNOUNCEMENT MONITORS ====================
+# ==================== ALL EXCHANGES PROMO & ANNOUNCEMENT MONITORS (ГЛУБОКИЙ ОХВАТ 30+) ====================
 def fetch_binance_promos():
     try:
-        url = "https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=48&pageNo=1&pageSize=10"
+        url = "https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=48&pageNo=1&pageSize=30"
         res = requests.get(url, timeout=5).json()
         articles = res.get('data', {}).get('articles', [])
         for art in articles:
@@ -587,7 +582,7 @@ def fetch_binance_promos():
 
 def fetch_bybit_promos():
     try:
-        url = "https://api.bybit.com/v5/announcements/index?locale=en-US&limit=10"
+        url = "https://api.bybit.com/v5/announcements/index?locale=en-US&limit=30"
         res = requests.get(url, timeout=5).json()
         articles = res.get('result', {}).get('list', [])
         for art in articles:
@@ -603,10 +598,10 @@ def fetch_bybit_promos():
 
 def fetch_okx_promos():
     try:
-        url = "https://www.okx.com/priapi/v5/support/news/bulletins?page=1&pageSize=10"
+        url = "https://www.okx.com/priapi/v5/support/news/bulletins?page=1&pageSize=30"
         res = requests.get(url, timeout=5).json()
         articles = res.get('data', [{}])[0].get('details', [])
-        for art in articles[:10]:
+        for art in articles[:30]:
             art_id = f"okx_promo_{art.get('id')}"
             title = art.get('title', '')
             link = f"https://www.okx.com/help/{art.get('slug', '')}" if art.get('slug') else "https://www.okx.com"
@@ -617,10 +612,10 @@ def fetch_okx_promos():
 
 def fetch_bitget_promos():
     try:
-        url = "https://api.bitget.com/api/v2/spot/public/announcements?language=en_US"
+        url = "https://api.bitget.com/api/v2/spot/public/announcements?language=en_US&pageSize=30"
         res = requests.get(url, timeout=5).json()
         articles = res.get('data', [])
-        for art in articles[:10]:
+        for art in articles[:30]:
             art_id = f"bitget_promo_{art.get('annId')}"
             title = art.get('annTitle', '')
             link = art.get('annUrl', '')
@@ -632,22 +627,27 @@ def fetch_bitget_promos():
 
 def fetch_mexc_promos():
     try:
-        url = "https://www.mexc.com/api/common/announcement?page=1&pageSize=10"
-        res = requests.get(url, timeout=5).json()
-        articles = res.get('data', {}).get('announcementList', [])
-        for art in articles:
-            art_id = f"mexc_promo_{art.get('id')}"
-            title = art.get('title', '')
-            link = f"https://www.mexc.com/support/articles/{art.get('id')}" if art.get('id') else "https://www.mexc.com"
-            summary = art.get('summary', '')
-            raw_text = f"MEXC Event / Promotion: {title}\n{summary}\n{link}"
-            process_item(art_id, raw_text, link, "MEXC")
+        # Расширенный охват по нескольким эндпоинтам MEXC (Общие + Акции/Кикстартер)
+        urls = [
+            "https://www.mexc.com/api/common/announcement?page=1&pageSize=30",
+            "https://www.mexc.com/api/common/announcement?page=1&pageSize=30&category=activity"
+        ]
+        for url in urls:
+            res = requests.get(url, timeout=5).json()
+            articles = res.get('data', {}).get('announcementList', [])
+            for art in articles:
+                art_id = f"mexc_promo_{art.get('id')}"
+                title = art.get('title', '')
+                link = f"https://www.mexc.com/support/articles/{art.get('id')}" if art.get('id') else "https://www.mexc.com"
+                summary = art.get('summary', '')
+                raw_text = f"MEXC Event / Promotion / Kickstarter: {title}\n{summary}\n{link}"
+                process_item(art_id, raw_text, link, "MEXC")
     except Exception as e:
         print(f"MEXC Promo Error: {e}")
 
 def fetch_gate_promos():
     try:
-        url = "https://api.gateio.ws/api/v4/support/announcements?limit=10"
+        url = "https://api.gateio.ws/api/v4/support/announcements?limit=30"
         res = requests.get(url, timeout=5).json()
         for art in res:
             art_id = f"gate_promo_{art.get('id')}"
@@ -660,7 +660,7 @@ def fetch_gate_promos():
 
 def fetch_kucoin_promos():
     try:
-        url = "https://api.kucoin.com/api/v1/bulletins?currentPage=1&pageSize=10"
+        url = "https://api.kucoin.com/api/v1/bulletins?currentPage=1&pageSize=30"
         res = requests.get(url, timeout=5).json()
         articles = res.get('data', {}).get('items', [])
         for art in articles:
@@ -674,7 +674,7 @@ def fetch_kucoin_promos():
 
 def fetch_bingx_promos():
     try:
-        url = "https://open-api.bingx.com/openApi/common/v1/announcements?limit=10"
+        url = "https://open-api.bingx.com/openApi/common/v1/announcements?limit=30"
         res = requests.get(url, timeout=5).json()
         articles = res.get('data', [])
         for art in articles:
@@ -688,7 +688,7 @@ def fetch_bingx_promos():
 
 def fetch_whitebit_promos():
     try:
-        url = "https://whitebit.com/api/v4/public/announcements?limit=10"
+        url = "https://whitebit.com/api/v4/public/announcements?limit=30"
         res = requests.get(url, timeout=5).json()
         articles = res.get('result', [])
         for art in articles:
@@ -709,8 +709,8 @@ def monitor_news():
         ("https://bitcoinmagazine.com/.rss/full/", "NEWS")
     ]
     
-    # === ОДНОРАЗОВАЯ ПРОВЕРКА ПРОМО ЗА 24 ЧАСА ПРИ СТАРТЕ ===
-    print("🚀 Выполняется одноразовый сбор промо-акций за 24 часа...")
+    # === ОДНОРАЗОВАЯ ПРОВЕРКА ПРОМО ЗА 24 ЧАСА ПРИ СТАРТЕ (ГЛУБОКИЙ СБОР) ===
+    print("🚀 Выполняется глубокий одноразовый сбор промо-акций по всем 9 биржам...")
     fetch_binance_promos()
     fetch_bybit_promos()
     fetch_okx_promos()
@@ -720,8 +720,8 @@ def monitor_news():
     fetch_kucoin_promos()
     fetch_bingx_promos()
     fetch_whitebit_promos()
-    print("✅ Одноразовый сбор завершен. Переход в штатный режим 24/7.")
-    # =================================================
+    print("✅ Одноразовый глубокий сбор завершен. Переход в штатный режим 24/7.")
+    # ====================================================================
 
     while True:
         fetch_binance_promos()
@@ -752,7 +752,7 @@ def monitor_news():
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     
-    send_to_topic("SPREAD", "🚀 **Бот запущен с киевским временем и обновленным монитором спредов!**")
+    send_to_topic("SPREAD", "🚀 **Бот запущен с расширенным сбором промо по всем 9 биржам и киевским временем!**")
     
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()

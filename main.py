@@ -35,7 +35,7 @@ TOPICS = {
 }
 
 processed_ids = set()
-active_spreads = {}   # {sym: {"msg_id": int, "start_time": float, "last_text": str, "min_ex": str, "max_ex": str, "min_p": float, "max_p": float, "initial_spread": float}}
+active_spreads = {}   # {sym: {"msg_id": int, "start_time": float, "last_text": str, "min_ex": str, "max_ex": str, "min_p": float, "max_p": float}}
 active_fundings = {}  # {symbol: {"msg_id": int, "last_rates_str": str, "last_text": str}}
 
 KYIV_TZ = pytz.timezone("Europe/Kyiv")
@@ -206,7 +206,6 @@ def process_item(item_id, raw_text, link, default_topic):
             detected_ex = ex_name
             break
             
-    # Универсальный словарь диплинков для открытия мобильных приложений
     APP_DEEPLINKS = {
         "BINANCE": "bnc://app.binance.com",
         "BYBIT": "bybit://",
@@ -235,7 +234,6 @@ def process_item(item_id, raw_text, link, default_topic):
 
 # ==================== TELEGRAM CHANNELS PROMO MONITOR ====================
 def fetch_telegram_channels_promos():
-    """Мониторинг официальных Telegram-каналов и региональных комьюнити через публичные веб-превью t.me/s/"""
     channels = {
         "Binance": ["Binance_UA_official", "BinanceUkrainian", "BinanceAnnouncements"],
         "OKX": ["okx_ru", "okx_campaign_announcement", "okxwalletannouncement", "OKX_Official"],
@@ -261,19 +259,17 @@ def fetch_telegram_channels_promos():
                     soup = BeautifulSoup(res.text, 'html.parser')
                     messages = soup.find_all('div', class_='tgme_widget_message')
                     
-                    for msg in messages[-15:]:  # Берем последние 15 постов
+                    for msg in messages[-15:]:
                         msg_id_attr = msg.get('data-post', '')
                         if not msg_id_attr:
                             continue
                         
                         item_id = f"tg_chan_{msg_id_attr.replace('/', '_')}"
-                        
                         text_div = msg.find('div', class_='tgme_widget_message_text')
                         if not text_div:
                             continue
                         
                         raw_text = text_div.get_text(separator='\n', strip=True)
-                        
                         post_link = f"https://t.me/{msg_id_attr}"
                         btn = msg.find('a', class_='tgme_widget_message_url')
                         if btn and btn.get('href'):
@@ -282,25 +278,21 @@ def fetch_telegram_channels_promos():
                         full_payload = f"Telegram Channel [{exchange} / @{chan}]:\n{raw_text}\nLink: {post_link}"
                         process_item(item_id, full_payload, post_link, exchange.upper())
                         
-            time.sleep(600)  # Проверка каналов каждые 10 минут
+            time.sleep(600)
         except Exception as e:
             print(f"Telegram Channels Monitor Error: {e}")
             time.sleep(60)
 
 # ==================== GLOBAL CRYPTO APIS, RSS & WEB3 AGGREGATORS MONITOR ====================
 def fetch_global_crypto_promos():
-    """Дополнительный сканер официальных REST API, RSS-лент бирж и Web3-агрегаторов (CoinMarketCap, CoinGecko, Galxe/Layer3)"""
     sources = [
-        # Binance CMS API
         ("https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=48&pageNo=1&pageSize=20", "BINANCE"),
         ("https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=161&pageNo=1&pageSize=20", "BINANCE"),
-        # Дополнительные агрегаторы и RSS (если доступны через общие эндпоинты)
         ("https://coinmarketcap.com/headlines/news/", "NEWS"),
     ]
 
     while True:
         try:
-            # 1. Проверка Binance промо через прямой CMS API
             for api_url, topic in sources[:2]:
                 res = secure_request(api_url, timeout=6)
                 if not res: continue
@@ -314,7 +306,6 @@ def fetch_global_crypto_promos():
                     raw_text = f"Global Official Announcement / Event: {title}\nLink: {link}"
                     process_item(art_id, raw_text, link, topic)
 
-            # 2. Мониторинг RSS-лент и агрегаторов (CoinMarketCap / CoinGecko / Web3)
             rss_feeds = [
                 "https://cointelegraph.com/rss",
                 "https://cryptopotato.com/feed/"
@@ -335,7 +326,7 @@ def fetch_global_crypto_promos():
         except Exception as e:
             print(f"Global Promos Monitor Error: {e}")
         
-        time.sleep(900)  # Сканирование глобальных источников каждые 15 минут
+        time.sleep(900)
 
 # ==================== FUTURES DATA & LIQUIDITY FETCHING ====================
 def fetch_futures_data():
@@ -573,14 +564,11 @@ def monitor_spread():
                         fund_info["max_ex"] = max_ex
                         fund_info["min_p"] = min_p
                         fund_info["max_p"] = max_p
-                        init_spread = fund_info["initial_spread"]
 
-                        spread_dynamic = f"📊 **Спред:** был `{init_spread:.2f}%` ➡️ стал `{spread:.2f}%`"
-
+                        # Лишняя строка "Спред: был X% ➡️ стал Y%" убрана для лаконичности
                         msg_text = (
                             f"{badge}\n"
                             f"🪙 **#{sym} | Spread: `{spread:.2f}%`**\n"
-                            f"{spread_dynamic}"
                             f"{risk_tag}\n"
                             f"🟢 **Long ({min_ex}):** `${min_p}` (Funding: `{min_fund:+.2f}%`)\n"
                             f"🔴 **Short ({max_ex}):** `${max_p}` (Funding: `{max_fund:+.2f}%`)\n\n"
@@ -594,13 +582,9 @@ def monitor_spread():
                             if success:
                                 fund_info["last_text"] = msg_text
                     else:
-                        init_spread = spread
-                        spread_dynamic = f"📊 **Спред:** `{spread:.2f}%` (Старт)"
-
                         msg_text = (
                             f"{badge}\n"
                             f"🪙 **#{sym} | Spread: `{spread:.2f}%`**\n"
-                            f"{spread_dynamic}"
                             f"{risk_tag}\n"
                             f"🟢 **Long ({min_ex}):** `${min_p}` (Funding: `{min_fund:+.2f}%`)\n"
                             f"🔴 **Short ({max_ex}):** `${max_p}` (Funding: `{max_fund:+.2f}%`)\n\n"
@@ -618,8 +602,7 @@ def monitor_spread():
                                 "min_ex": min_ex,
                                 "max_ex": max_ex,
                                 "min_p": min_p,
-                                "max_p": max_p,
-                                "initial_spread": init_spread
+                                "max_p": max_p
                             }
             
             expired_syms = []
@@ -645,10 +628,9 @@ def monitor_spread():
                     mins = duration // 60
                     secs = duration % 60
                     time_str = f"{mins}:{secs:02d}"
-                    init_s = data.get("initial_spread", 0.0)
                     
                     aligned_msg = (
-                        f"✅ `[{sym}]` prices aligned in `{time_str}` (спред: с `{init_s:.2f}%` до `{final_spread:.2f}%`)\n"
+                        f"✅ `[{sym}]` prices aligned in `{time_str}` (финальный спред: `{final_spread:.2f}%`)\n"
                         f"📌 **Финальные цены:** `{data['min_ex']}`: `${data['min_p']}` | `{data['max_ex']}`: `${data['max_p']}`"
                     )
                     send_to_topic("SPREAD", aligned_msg, reply_to_message_id=data["msg_id"])
@@ -656,7 +638,7 @@ def monitor_spread():
         except Exception as e:
             print(f"Spread Monitor Error: {e}")
         
-        time.sleep(15)  # Ускоренная проверка спредов каждые 15 секунд
+        time.sleep(15)
 
 def monitor_funding():
     while True:
@@ -745,7 +727,7 @@ if __name__ == "__main__":
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
-    threading.Thread(target=fetch_global_crypto_promos, daemon=True).start()  # Запуск нового комплексного сканера API/RSS/Web3
+    threading.Thread(target=fetch_global_crypto_promos, daemon=True).start()
     
     print("===> Your service is live 🚀")
     bot.infinity_polling()

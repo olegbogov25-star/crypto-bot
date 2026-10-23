@@ -75,17 +75,17 @@ def normalize_symbol(raw_sym):
             sym += 'USDT'
     return sym
 
-# ==================== ADVANCED AI & PROMO ANALYZER ====================
+# ==================== ADVANCED AI & PROMO ANALYZER (АНТИ-ШУМ) ====================
 def analyze_text(text):
     if not OPENROUTER_API_KEY:
         return text
     prompt = f"""
-Ты — главный крипто-аналитик. Проанализируй текст официального анонса из RSS-ленты и сформируй структурированный отчет.
+Ты — главный крипто-аналитик. Проанализируй текст официального анонса и сформируй структурированный отчет.
 
-СТРОГОЕ ПРАВИЛО ФИЛЬТРАЦИИ:
-Если новость про суды, штрафы, регуляторов, делистинг, техобслуживание, юридические вопросы, лицензии, Binance Square / посты блогеров или НЕ содержит практических наград/профита для пользователей — ответь строго одним словом: SKIP.
+СТРОГОЕ ПРАВИЛО ФИЛЬТРАЦИИ (АНТИ-ШУМ):
+Если новость про суды, штрафы, регуляторов, делистинг, техобслуживание, юридические вопросы, лицензии, Binance Square / посты блогеров, а также если это листинг токенизированных акций традиционных компаний (например, JPMorgan, Blackberry, Apple, ETF и т.д.), форекс, традиционные финансовые инструменты или обычные рядовые листинги спотовых пар БЕЗ призовых фондов, аирдропов, лаунчпулов или лаунчпадов — ответь строго одним словом: SKIP.
 
-Если новость содержит акции, промо, аирдропы, листинги, кампании, лаунчпады — выдай отчет по следующей форме:
+Если новость содержит реальные акции, промо-кампании, лаунчпулы, лаунчпады, мегадропы, эйрдропы или квесты с наградами — выдай отчет по следующей форме:
 1. 📌 **Источник / Платформа:** Название биржи.
 2. 🏷 **Тип события / Теги:** Выбери подходящие теги (#OKX_Web3 #Binance_Web3 #Bybit_Web3 #Web3 #XLaunch #XTrade #TokenSplash #Megadrop #Binance #Bybit #OKX #Bitget #MEXC #BingX #KuCoin #WhiteBit #Kraken #Gate #Ourbit #Promotion #Launchpool #Launchpad #Airdrop #Listing и др.).
 3. 🪙 **Токен / Проект.**
@@ -399,26 +399,33 @@ def monitor_spread():
                         
                         msg_id = send_to_topic("SPREAD", msg_text)
                         if msg_id:
+                            # Сохраняем начальные цены и биржи для последующего отчета при сведении
                             active_spreads[sym] = {
                                 "msg_id": msg_id,
-                                "start_time": time.time()
+                                "start_time": time.time(),
+                                "min_ex": min_ex,
+                                "max_ex": max_ex,
+                                "min_p": min_p,
+                                "max_p": max_p
                             }
             
             expired_syms = []
             for sym in list(active_spreads.keys()):
                 if sym not in current_scanned_syms or sym not in prices:
-                    expired_syms.append((sym, 0.0))
+                    expired_syms.append((sym, 0.0, "", "", 0, 0))
                 else:
                     ex_data = prices[sym]
                     if len(ex_data) >= 2:
-                        curr_min = min(ex_data.values())
-                        curr_max = max(ex_data.values())
+                        curr_min_ex = min(ex_data, key=ex_data.get)
+                        curr_max_ex = max(ex_data, key=ex_data.get)
+                        curr_min = ex_data[curr_min_ex]
+                        curr_max = ex_data[curr_max_ex]
                         if curr_min > 0:
                             curr_spread = ((curr_max - curr_min) / curr_min) * 100
                             if curr_spread < 1.0:
-                                expired_syms.append((sym, curr_spread))
+                                expired_syms.append((sym, curr_spread, curr_min_ex, curr_max_ex, curr_min, curr_max))
 
-            for sym, final_spread in expired_syms:
+            for sym, final_spread, c_min_ex, c_max_ex, c_min_p, c_max_p in expired_syms:
                 data = active_spreads.pop(sym, None)
                 if data:
                     duration = int(time.time() - data["start_time"])
@@ -426,7 +433,16 @@ def monitor_spread():
                     secs = duration % 60
                     time_str = f"{mins}:{secs:02d}"
                     
-                    aligned_msg = f"✅ `[{sym}]` prices aligned in `{time_str}` (spread: `{final_spread:.2f}%`)"
+                    f_min_ex = c_min_ex if c_min_ex else data["min_ex"]
+                    f_max_ex = c_max_ex if c_max_ex else data["max_ex"]
+                    f_min_p = c_min_p if c_min_p > 0 else data["min_p"]
+                    f_max_p = c_max_p if c_max_p > 0 else data["max_p"]
+                    
+                    # Детальный отчет о сведении цен с финальными ценами
+                    aligned_msg = (
+                        f"✅ `[{sym}]` prices aligned in `{time_str}` (spread: `{final_spread:.2f}%`)\n"
+                        f"📌 **Финальные цены:** `{f_min_ex}`: `${f_min_p}` | `{f_max_ex}`: `${f_max_p}`"
+                    )
                     send_to_topic("SPREAD", aligned_msg, reply_to_message_id=data["msg_id"])
 
         except Exception as e:

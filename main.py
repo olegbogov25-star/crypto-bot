@@ -164,6 +164,7 @@ def send_to_topic(topic_name, text, reply_to_message_id=None, reply_markup=None)
                 reply_to_message_id=reply_to_message_id,
                 reply_markup=reply_markup
             )
+            time.sleep(0.5)  # Защита от флуда Telegram
             return res.message_id
         except Exception as e:
             print(f"❌ Send Error ({topic_name}): {e}")
@@ -180,6 +181,7 @@ def edit_topic_message(topic_name, message_id, text, reply_markup=None):
                 disable_web_page_preview=True,
                 reply_markup=reply_markup
             )
+            time.sleep(0.3)
             return True
         except Exception as e:
             print(f"❌ Edit Error ({topic_name}): {e}")
@@ -210,6 +212,7 @@ def process_item(item_id, raw_text, link, default_topic):
         markup.add(InlineKeyboardButton(f"📱 Открыть в {detected_ex.upper()}", url=link))
 
     send_to_topic(target_topic, ai_result, reply_markup=markup)
+    time.sleep(1)
 
 # ==================== FUTURES DATA & LIQUIDITY FETCHING (ВКЛЮЧАЯ OURBIT) ====================
 def fetch_futures_data():
@@ -591,7 +594,7 @@ def monitor_funding():
             
         time.sleep(300)
 
-# ==================== PROMO & WEB3 MONITORS (ЗАЩИЩЕННЫЕ ЗАПРОСЫ + РЕЗЕРВНЫЕ АГРЕГАТОРЫ) ====================
+# ==================== PROMO & WEB3 MONITORS (ЗАЩИЩЕННЫЕ ЗАПРОСЫ + АГРЕГАТОРЫ) ====================
 def fetch_binance_promos():
     try:
         url = "https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=48&pageNo=1&pageSize=50"
@@ -810,22 +813,35 @@ def fetch_aggregators():
                 summary = entry.get('summary', '')
                 raw_text = f"Aggregator Airdrop / Promo: {title}\n{summary}\n{link}"
                 process_item(entry.id, raw_text, link, topic)
+                time.sleep(0.5)
         except Exception as e:
             print(f"Aggregator RSS Error ({url}): {e}")
 
 def run_all_promos():
     fetch_binance_promos()
+    time.sleep(1)
     fetch_binance_web3()
+    time.sleep(1)
     fetch_bybit_promos()
+    time.sleep(1)
     fetch_okx_promos()
+    time.sleep(1)
     fetch_okx_web3()
+    time.sleep(1)
     fetch_bitget_promos()
+    time.sleep(1)
     fetch_mexc_promos()
+    time.sleep(1)
     fetch_gate_promos()
+    time.sleep(1)
     fetch_kucoin_promos()
+    time.sleep(1)
     fetch_bingx_promos()
+    time.sleep(1)
     fetch_whitebit_promos()
+    time.sleep(1)
     fetch_kraken_promos()
+    time.sleep(1)
     fetch_aggregators()
 
 def monitor_news():
@@ -838,7 +854,7 @@ def monitor_news():
     ]
     
     # === ОДНОРАЗОВАЯ ПРОВЕРКА ПРОМО ЗА 24 ЧАСА ПРИ СТАРТЕ ===
-    print("🚀 Выполняется глубокий одноразовый сбор промо-акций, Web3 и агрегаторов (защищенные запросы)...")
+    print("🚀 Выполняется глубокий одноразовый сбор промо-акций (защищенные запросы)...")
     run_all_promos()
     print("✅ Одноразовый глубокий сбор завершен. Переход в штатный режим 24/7.")
     # =======================================================
@@ -855,6 +871,7 @@ def monitor_news():
                     summary = entry.get('summary', '')
                     raw_text = f"{title}\n{summary}\n{link}"
                     process_item(entry.id, raw_text, link, topic)
+                    time.sleep(0.5)
             except Exception as e:
                 print(f"RSS Error ({url}): {e}")
         
@@ -864,7 +881,7 @@ def monitor_news():
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     
-    send_to_topic("SPREAD", "🚀 **Бот запущен: Защищенные заголовки Cloudflare, агрегаторы, Web3 X-Launch и 10 бирж промо!**")
+    send_to_topic("SPREAD", "🚀 **Бот запущен: Защита от флуда активна, заголовки Cloudflare, агрегаторы и 10 бирж!**")
     
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()

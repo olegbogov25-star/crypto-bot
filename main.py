@@ -345,12 +345,12 @@ def monitor_spread():
                             badge = "⚡ **STRONG SPREAD (>= 7%)**"
 
                         sym_vols = volumes.get(sym, {})
-                        vol_min = sym_vols.get(min_ex, 50000) * 0.01
-                        vol_max = sym_vols.get(max_ex, 50000) * 0.01
-                        max_pos_usdt = int(min(vol_min, vol_max, 50000))
+                        vol_min = sym_vols.get(min_ex, 0) * 0.01
+                        vol_max = sym_vols.get(max_ex, 0) * 0.01
+                        max_pos_usdt = int(min(vol_min, vol_max))
                         if max_pos_usdt < 100: max_pos_usdt = 100
 
-                        # Проверка делистинга (>25%) и пустого стакана (<10k)
+                        # Проверка риска: делистинг (>25%) или пустой стакан (<10k)
                         risk_tag = ""
                         low_liq_exs = [ex for ex, v in sym_vols.items() if v < 10000 and ex in ex_data]
                         
@@ -358,7 +358,7 @@ def monitor_spread():
                             risk_tag = "\n⚠️ **RISK: Аномальный спред / Риск делистинга!**\n"
                         elif low_liq_exs:
                             bad_exs_str = ", ".join(low_liq_exs)
-                            risk_tag = f"\n⚠️ **RISK: Низкая ликвидность / Пустой стакан ({bad_exs_str})**\n"
+                            risk_tag = f"\n⚠️ **RISK: Низкая ликвидность / Мертвый стакан ({bad_exs_str})**\n"
 
                         sym_funds = fundings.get(sym, {})
                         min_fund = sym_funds.get(min_ex, 0.0)

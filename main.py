@@ -118,23 +118,22 @@ def analyze_text(text):
     if not OPENROUTER_API_KEY:
         return text
     prompt = f"""
-Ты — жесткий фильтр и аналитик крипто-анонсов. Твоя задача — отсечь 100% информационного шума, но ОСТАВИТЬ все реальные промо-акции, кикстартеры, лаунчпулы, мегадропы, Web3-ивенты, X-Launch и ивенты с призами (включая розыгрыши гаджетов вроде iPhone, мерча или токенов, а также локальные телеграм-квизы и мини-приложения / Mini Apps).
+Ты — аналитик крипто-анонсов и промо-акций. Твоя задача — находить и структурировать любые потенциальные активности, квизы, мини-приложения (Mini Apps), лаунчпулы, мегадропы, баунти, Web3-ивенты, раздачи, IDO и розыгрыши.
 
-ОБЯЗАТЕЛЬНОЕ ПРАВИЛО: Ответь строго одним словом "SKIP", если:
-1. Это обычный листинг/добавление новой торговой пары БЕЗ какой-либо промо-кампании, баунти или призового фонда.
-2. Новость про токенизированные акции, традиционные ETF или залоговые активы.
-3. Новость про суды, штрафы, регуляторов, делистинг, техническое обслуживание.
-(Если есть намек на призы, розыгрыш, стейкинг с наградами, Web3 или промо — НЕ пропускай).
+МЯГКИЙ ФИЛЬТР (SKIP только для явного мусора):
+Ответь строго одним словом "SKIP", ТОЛЬКО если это:
+1. Судебные иски, регуляторные запреты или сухие официальные отчеты компаний.
+2. Техническое обслуживание сетей или плановые кошельковые работы БЕЗ каких-либо бонусов/акций для пользователей.
 
-ЕСЛИ ЭТО РЕАЛЬНАЯ АКЦИЯ, ИВЕНТ, LAUNCHPOOL, MEGADROP, WEB3 AIRDROP, MINI-APP КВИЗ — сформируй отчет строго по форме:
+В ЛЮБЫХ ДРУГИХ СЛУЧАЯХ (если есть намек на промо, квиз, игру, бонус, токен, стейкинг или аирдроп) — НЕ делай SKIP, а сформируй подробный отчет строго по форме:
 1. 📌 **Источник / Платформа:** Название биржи или Web3-кошелька.
-2. 🏷 **Тип события / Теги:** (#OKX_Web3 #Binance_Web3 #Bybit_Web3 #Web3 #Launchpool #Launchpad #Airdrop #TokenSplash #Promotion #Kickstarter #Kraken и др.).
+2. 🏷 **Тип события / Теги:** (#OKX_Web3 #Binance_Web3 #Bybit_Web3 #Web3 #Launchpool #Launchpad #Airdrop #TokenSplash #Promotion #MiniApp и др.).
 3. 🪙 **Токен / Проект.**
 4. 📅 **Даты проведения.**
 5. 📋 **Краткое описание.**
-6. ⚡ **Пошаговая инструкция.**
+6. ⚡ **Пошаговая инструкция (как участвовать, куда нажимать).**
 7. 🎁 **Награды / Призовой фонд.**
-8. 💡 **Расчет профита для $100, $1K, $5K, $20K+.**
+8. 💡 **Расчет потенциального профита.**
 
 Текст для анализа:
 {text}
@@ -165,7 +164,7 @@ def send_to_topic(topic_name, text, reply_to_message_id=None, reply_markup=None)
                 reply_to_message_id=reply_to_message_id,
                 reply_markup=reply_markup
             )
-            time.sleep(0.5)  # Защита от флуда Telegram
+            time.sleep(0.5)
             return res.message_id
         except Exception as e:
             print(f"❌ Send Error ({topic_name}): {e}")
@@ -217,12 +216,18 @@ def process_item(item_id, raw_text, link, default_topic):
 
 # ==================== TELEGRAM CHANNELS PROMO MONITOR ====================
 def fetch_telegram_channels_promos():
-    """Мониторинг официальных Telegram-каналов бирж через публичные веб-превью t.me/s/"""
+    """Мониторинг официальных Telegram-каналов и региональных комьюнити через публичные веб-превью t.me/s/"""
     channels = {
-        "Binance": ["BinanceUkraine", "BinanceAnnouncements"],
-        "OKX": ["OKX_Official", "okx_cis"],
-        "Bybit": ["Bybit_CIS", "BybitAnnouncements"],
-        "Bitget": ["bitget_cis"]
+        "Binance": ["Binance_UA_official", "BinanceUkrainian", "BinanceAnnouncements"],
+        "OKX": ["okx_ru", "okx_campaign_announcement", "okxwalletannouncement", "OKX_Official"],
+        "Bybit": ["bybitukrainian", "bybitukrainiannews", "Bybit_CIS", "BybitAnnouncements"],
+        "Bitget": ["BitgetUA", "BitgetENOfficial"],
+        "MEXC": ["MEXCKraineOfficial", "MEXCofficialNews"],
+        "Gate": ["Gate_Ukrainian", "GateCom_EN"],
+        "Kraken": ["kraken_announcements"],
+        "BingX": ["BingXOfficial", "BingXAnnouncement"],
+        "KuCoin": ["Kucoin_Exchange", "Kucoin_News"],
+        "WhiteBit": ["whitebit_ua_news", "White_Bit"]
     }
     
     while True:
@@ -250,7 +255,6 @@ def fetch_telegram_channels_promos():
                         
                         raw_text = text_div.get_text(separator='\n', strip=True)
                         
-                        # Ищем ссылку на пост или кнопку внутри поста
                         post_link = f"https://t.me/{msg_id_attr}"
                         btn = msg.find('a', class_='tgme_widget_message_url')
                         if btn and btn.get('href'):
@@ -779,7 +783,7 @@ def run_all_promos():
             fetch_bitget_promos()
         except Exception as e:
             print(f"Promos Loop Error: {e}")
-        time.sleep(1800) # Проверка официальных API каждые 30 минут
+        time.sleep(1800)
 
 if __name__ == "__main__":
     # Запуск HTTP сервера для Render healthcheck
@@ -792,11 +796,10 @@ if __name__ == "__main__":
     # Запуск мониторинга официальных промо-акций через API бирж
     threading.Thread(target=run_all_promos, daemon=True).start()
     
-    # Запуск нового мониторинга официальных Telegram-каналов (для ловли локальных квизов, мини-аппов и дропов)
+    # Запуск мониторинга официальных Telegram-каналов со всеми украинскими и глобальными источниками
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     
-    print("🚀 Web3 & Promo Bot с поддержкой Telegram-каналов успешно запущен!")
+    print("🚀 Web3 & Promo Bot со всеми региональными каналами и мягким фильтром запущен!")
     
-    # Бесконечный цикл для поддержания работы бота
     while True:
         time.sleep(3600)

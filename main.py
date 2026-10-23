@@ -565,13 +565,12 @@ def monitor_spread():
                         fund_info["min_p"] = min_p
                         fund_info["max_p"] = max_p
 
-                        # Лишняя строка "Спред: был X% ➡️ стал Y%" убрана для лаконичности
                         msg_text = (
                             f"{badge}\n"
                             f"🪙 **#{sym} | Spread: `{spread:.2f}%`**\n"
                             f"{risk_tag}\n"
-                            f"🟢 **Long ({min_ex}):** `${min_p}` (Funding: `{min_fund:+.2f}%`)\n"
-                            f"🔴 **Short ({max_ex}):** `${max_p}` (Funding: `{max_fund:+.2f}%`)\n\n"
+                            f"🟢 **Long ({min_ex}):** `${min_p}` (Funding: `{min_fund:.2f}%`)\n"
+                            f"🔴 **Short ({max_ex}):** `${max_p}` (Funding: `{max_fund:.2f}%`)\n\n"
                             f"💰 **Доступный объем позиции:** `~${max_pos_usdt:,} USDT`\n\n"
                             f"📝 **All Exchanges Overview (по ликвидности):**\n{overview}\n\n"
                             f"🔄 _Обновлено: {curr_time_str} (Киев)_"
@@ -586,8 +585,8 @@ def monitor_spread():
                             f"{badge}\n"
                             f"🪙 **#{sym} | Spread: `{spread:.2f}%`**\n"
                             f"{risk_tag}\n"
-                            f"🟢 **Long ({min_ex}):** `${min_p}` (Funding: `{min_fund:+.2f}%`)\n"
-                            f"🔴 **Short ({max_ex}):** `${max_p}` (Funding: `{max_fund:+.2f}%`)\n\n"
+                            f"🟢 **Long ({min_ex}):** `${min_p}` (Funding: `{min_fund:.2f}%`)\n"
+                            f"🔴 **Short ({max_ex}):** `${max_p}` (Funding: `{max_fund:.2f}%`)\n\n"
                             f"💰 **Доступный объем позиции:** `~${max_pos_usdt:,} USDT`\n\n"
                             f"📝 **All Exchanges Overview (по ликвидности):**\n{overview}\n\n"
                             f"🔄 _Обновлено: {curr_time_str} (Киев)_"
@@ -676,7 +675,10 @@ def monitor_funding():
                         url = get_exchange_url(ex, symbol)
                         target_t = sym_times.get(ex, 0)
                         countdown_str = format_countdown(target_t)
-                        overview_list.append(f"🔹 [{ex}]({url}): `{r:+.2f}%` (⏱ {countdown_str})")
+                        
+                        # Вывод без принудительного плюса для положительных значений
+                        rate_str = f"{r:.2f}%"
+                        overview_list.append(f"🔹 [{ex}]({url}): `{rate_str}` (⏱ {countdown_str})")
                     
                     overview = "\n".join(overview_list)
 

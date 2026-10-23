@@ -205,10 +205,27 @@ def process_item(item_id, raw_text, link, default_topic):
     if target_topic not in TOPICS:
         target_topic = "NEWS"
 
+    # Официальные мобильные смарт-шлюзы, которые телефон перехватывает и открывает в приложении
+    MOBILE_APP_URLS = {
+        "BINANCE": "https://www.binance.com/activity",
+        "BYBIT": "https://www.bybit.com/app/re-direct",
+        "OKX": "https://www.okx.com/campaigns",
+        "BITGET": "https://www.bitget.com/events",
+        "MEXC": "https://www.mexc.com/landings",
+        "GATE": "https://www.gate.io/activities",
+        "BINGX": "https://bingx.com/act",
+        "KUCOIN": "https://www.kucoin.com/landings",
+        "WHITEBIT": "https://whitebit.com/referral",
+        "KRAKEN": "https://www.kraken.com"
+    }
+
     markup = None
     if link and link.startswith("http"):
         markup = InlineKeyboardMarkup()
-        app_button = InlineKeyboardButton(f"📱 Открыть в приложении ({target_topic})", url=link)
+        ex_key = target_topic.upper()
+        # Используем смарт-ссылку редиректа для принудительного открытия приложения на мобилке
+        app_url = MOBILE_APP_URLS.get(ex_key, link)
+        app_button = InlineKeyboardButton(f"📱 Открыть в приложении {ex_key}", url=app_url)
         markup.add(app_button)
 
     send_to_topic(target_topic, ai_result, reply_markup=markup)

@@ -90,7 +90,7 @@ def analyze_text(text):
     if not OPENROUTER_API_KEY:
         return text
     prompt = f"""
-Ты — жесткий фильтр и аналитик крипто-анонсов. Твоя задача — отсечь 100% информационного шума, но ОСТАВИТЬ все реальные промо-акции, кикстартеры, лаунчпулы, эйрдропы, Web3-ивенты и ивенты с призами (включая розыгрыши гаджетов вроде iPhone, мерча или токенов).
+Ты — жесткий фильтр и аналитик крипто-анонсов. Твоя задача — отсечь 100% информационного шума, но ОСТАВИТЬ все реальные промо-акции, кикстартеры, лаунчпулы, мегадропы, Web3-ивенты, X-Launch и ивенты с призами (включая розыгрыши гаджетов вроде iPhone, мерча или токенов).
 
 ОБЯЗАТЕЛЬНОЕ ПРАВИЛО: Ответь строго одним словом "SKIP", если:
 1. Это обычный листинг/добавление новой торговой пары БЕЗ какой-либо промо-кампании, баунти или призового фонда.
@@ -564,10 +564,10 @@ def monitor_funding():
             
         time.sleep(300)
 
-# ==================== PROMO & WEB3 MONITORS (ПОЛНЫЙ КОМПЛЕКТ С KRAKEN И WEB3) ====================
+# ==================== PROMO & WEB3 MONITORS (УСИЛЕННЫЙ ОХВАТ ГЛУБИНОЙ 50+) ====================
 def fetch_binance_promos():
     try:
-        url = "https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=48&pageNo=1&pageSize=30"
+        url = "https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=48&pageNo=1&pageSize=50"
         res = requests.get(url, timeout=5).json()
         articles = res.get('data', {}).get('articles', [])
         for art in articles:
@@ -582,7 +582,7 @@ def fetch_binance_promos():
 
 def fetch_binance_web3():
     try:
-        url = "https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=410&pageNo=1&pageSize=20"
+        url = "https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=410&pageNo=1&pageSize=50"
         res = requests.get(url, timeout=5).json()
         articles = res.get('data', {}).get('articles', [])
         for art in articles:
@@ -590,14 +590,14 @@ def fetch_binance_web3():
             title = art.get('title', '')
             code = art.get('code', '')
             link = f"https://web3.binance.com/ru-UA/support/announcement/{code}" if code else "https://web3.binance.com"
-            raw_text = f"#Binance_Web3 Airdrop / Quest: {title}\n{link}"
+            raw_text = f"#Binance_Web3 Airdrop / Quest / Booster: {title}\n{link}"
             process_item(art_id, raw_text, link, "BINANCE")
     except Exception as e:
         print(f"Binance Web3 Error: {e}")
 
 def fetch_bybit_promos():
     try:
-        url = "https://api.bybit.com/v5/announcements/index?locale=en-US&limit=30"
+        url = "https://api.bybit.com/v5/announcements/index?locale=en-US&limit=50"
         res = requests.get(url, timeout=5).json()
         articles = res.get('result', {}).get('list', [])
         for art in articles:
@@ -613,10 +613,10 @@ def fetch_bybit_promos():
 
 def fetch_okx_promos():
     try:
-        url = "https://www.okx.com/priapi/v5/support/news/bulletins?page=1&pageSize=30"
+        url = "https://www.okx.com/priapi/v5/support/news/bulletins?page=1&pageSize=50"
         res = requests.get(url, timeout=5).json()
         articles = res.get('data', [{}])[0].get('details', [])
-        for art in articles[:30]:
+        for art in articles[:50]:
             art_id = f"okx_promo_{art.get('id')}"
             title = art.get('title', '')
             link = f"https://www.okx.com/ru/help/{art.get('slug', '')}" if art.get('slug') else "https://www.okx.com"
@@ -627,24 +627,29 @@ def fetch_okx_promos():
 
 def fetch_okx_web3():
     try:
-        url = "https://www.okx.com/priapi/v5/support/news/bulletins?type=web3&page=1&pageSize=20"
-        res = requests.get(url, timeout=5).json()
-        articles = res.get('data', [{}])[0].get('details', [])
-        for art in articles[:20]:
-            art_id = f"okx_web3_{art.get('id')}"
-            title = art.get('title', '')
-            link = f"https://web3.okx.com/ru/help/{art.get('slug', '')}" if art.get('slug') else "https://web3.okx.com"
-            raw_text = f"#OKX_Web3 Wallet Airdrop / Quest: {title}\n{link}"
-            process_item(art_id, raw_text, link, "OKX")
+        # Интегрирован поиск по маркетинговым кампаниям X Launch и Web3 Дропам
+        url = "https://www.okx.com/priapi/v5/nft/market/activity/campaign-list?limit=50&page=1"
+        alt_url = "https://www.okx.com/priapi/v5/support/news/bulletins?type=web3&page=1&pageSize=50"
+        
+        for u in [url, alt_url]:
+            res = requests.get(u, timeout=5, headers={"User-Agent": "Mozilla/5.0"}).json()
+            items = res.get('data', [])
+            if isinstance(items, list):
+                for art in items:
+                    art_id = f"okx_web3_launch_{art.get('id', art.get('campaignId', ''))}"
+                    title = art.get('title', art.get('name', 'OKX Web3 X Launch / Earn'))
+                    link = art.get('url', 'https://web3.okx.com')
+                    raw_text = f"#OKX_Web3 X Launch / Earn / Airdrop: {title}\n{link}"
+                    process_item(art_id, raw_text, link, "OKX")
     except Exception as e:
         print(f"OKX Web3 Error: {e}")
 
 def fetch_bitget_promos():
     try:
-        url = "https://api.bitget.com/api/v2/spot/public/announcements?language=en_US&pageSize=30"
+        url = "https://api.bitget.com/api/v2/spot/public/announcements?language=en_US&pageSize=50"
         res = requests.get(url, timeout=5).json()
         articles = res.get('data', [])
-        for art in articles[:30]:
+        for art in articles[:50]:
             art_id = f"bitget_promo_{art.get('annId')}"
             title = art.get('annTitle', '')
             link = art.get('annUrl', '')
@@ -657,8 +662,8 @@ def fetch_bitget_promos():
 def fetch_mexc_promos():
     try:
         urls = [
-            "https://www.mexc.com/api/common/announcement?page=1&pageSize=30",
-            "https://www.mexc.com/api/common/announcement?page=1&pageSize=30&category=activity"
+            "https://www.mexc.com/api/common/announcement?page=1&pageSize=50",
+            "https://www.mexc.com/api/common/announcement?page=1&pageSize=50&category=activity"
         ]
         for url in urls:
             res = requests.get(url, timeout=5).json()
@@ -675,7 +680,7 @@ def fetch_mexc_promos():
 
 def fetch_gate_promos():
     try:
-        url = "https://api.gateio.ws/api/v4/support/announcements?limit=30"
+        url = "https://api.gateio.ws/api/v4/support/announcements?limit=50"
         res = requests.get(url, timeout=5).json()
         for art in res:
             art_id = f"gate_promo_{art.get('id')}"
@@ -688,7 +693,7 @@ def fetch_gate_promos():
 
 def fetch_kucoin_promos():
     try:
-        url = "https://api.kucoin.com/api/v1/bulletins?currentPage=1&pageSize=30"
+        url = "https://api.kucoin.com/api/v1/bulletins?currentPage=1&pageSize=50"
         res = requests.get(url, timeout=5).json()
         articles = res.get('data', {}).get('items', [])
         for art in articles:
@@ -702,7 +707,7 @@ def fetch_kucoin_promos():
 
 def fetch_bingx_promos():
     try:
-        url = "https://open-api.bingx.com/openApi/common/v1/announcements?limit=30"
+        url = "https://open-api.bingx.com/openApi/common/v1/announcements?limit=50"
         res = requests.get(url, timeout=5).json()
         articles = res.get('data', [])
         for art in articles:
@@ -716,7 +721,7 @@ def fetch_bingx_promos():
 
 def fetch_whitebit_promos():
     try:
-        url = "https://whitebit.com/api/v4/public/announcements?limit=30"
+        url = "https://whitebit.com/api/v4/public/announcements?limit=50"
         res = requests.get(url, timeout=5).json()
         articles = res.get('result', [])
         for art in articles:
@@ -732,7 +737,7 @@ def fetch_kraken_promos():
     try:
         url = "https://blog.kraken.com/feed"
         feed = feedparser.parse(url)
-        for entry in feed.entries[:20]:
+        for entry in feed.entries[:30]:
             art_id = f"kraken_promo_{entry.get('id', entry.get('link'))}"
             title = entry.get('title', '')
             link = entry.get('link', 'https://www.kraken.com')
@@ -766,7 +771,7 @@ def monitor_news():
     ]
     
     # === ОДНОРАЗОВАЯ ПРОВЕРКА ПРОМО ЗА 24 ЧАСА ПРИ СТАРТЕ ===
-    print("🚀 Выполняется глубокий одноразовый сбор промо-акций и Web3 (включая Kraken и все биржи)...")
+    print("🚀 Выполняется глубокий одноразовый сбор промо-акций и Web3 (повышенная глубина 50)...")
     run_all_promos()
     print("✅ Одноразовый глубокий сбор завершен. Переход в штатный режим 24/7.")
     # =======================================================
@@ -792,7 +797,7 @@ def monitor_news():
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     
-    send_to_topic("SPREAD", "🚀 **Бот запущен: Kraken, Binance/OKX Web3, 10 бирж для промо, Ourbit для спредов и киевское время!**")
+    send_to_topic("SPREAD", "🚀 **Бот запущен: Увеличенная глубина 50+, Web3 X-Launch, Kraken, 10 бирж промо и Ourbit для спредов!**")
     
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()

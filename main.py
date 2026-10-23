@@ -75,7 +75,7 @@ def normalize_symbol(raw_sym):
             sym += 'USDT'
     return sym
 
-# ==================== ADVANCED AI & PROMO ANALYZER (СТРОГИЙ АНТИ-ШУМ) ====================
+# ==================== ADVANCED AI & PROMO ANALYZER (АНТИ-ШУМ) ====================
 def analyze_text(text):
     if not OPENROUTER_API_KEY:
         return text
@@ -326,7 +326,7 @@ def format_countdown(target_timestamp):
     minutes = int((diff % 3600) // 60)
     return f"{hours}ч {minutes:02d}м"
 
-# ==================== SPREAD MONITOR (7% - 30% + Риски по биржам) ====================
+# ==================== SPREAD MONITOR (7% - 30% + Ликвидность >= $1000) ====================
 def monitor_spread():
     while True:
         try:
@@ -334,13 +334,21 @@ def monitor_spread():
             current_scanned_syms = set()
 
             for sym, ex_data in prices.items():
-                if len(ex_data) < 2:
+                sym_vols = volumes.get(sym, {})
+                
+                # Исключаем биржи с нулевым или мертвым объемом (< $1000 за сутки)
+                valid_ex_data = {
+                    ex: p for ex, p in ex_data.items() 
+                    if sym_vols.get(ex, 0) >= 1000
+                }
+
+                if len(valid_ex_data) < 2:
                     continue
                 
-                min_ex = min(ex_data, key=ex_data.get)
-                max_ex = max(ex_data, key=ex_data.get)
-                min_p = ex_data[min_ex]
-                max_p = ex_data[max_ex]
+                min_ex = min(valid_ex_data, key=valid_ex_data.get)
+                max_ex = max(valid_ex_data, key=valid_ex_data.get)
+                min_p = valid_ex_data[min_ex]
+                max_p = valid_ex_data[max_ex]
                 
                 if min_p <= 0: continue
                 spread = ((max_p - min_p) / min_p) * 100
@@ -357,15 +365,14 @@ def monitor_spread():
                         else:
                             badge = "⚡ **STRONG SPREAD (>= 7%)**"
 
-                        sym_vols = volumes.get(sym, {})
                         vol_min = sym_vols.get(min_ex, 0) * 0.01
                         vol_max = sym_vols.get(max_ex, 0) * 0.01
                         max_pos_usdt = int(min(vol_min, vol_max))
                         if max_pos_usdt < 100: max_pos_usdt = 100
 
-                        # Проверка риска: делистинг (>25%) или пустой стакан (<10k)
+                        # Проверка риска: делистинг (>25%) или низкая ликвидность (<10k)
                         risk_tag = ""
-                        low_liq_exs = [ex for ex, v in sym_vols.items() if v < 10000 and ex in ex_data]
+                        low_liq_exs = [ex for ex, v in sym_vols.items() if v < 10000 and ex in valid_ex_data]
                         
                         if spread > 25.0:
                             risk_tag = "\n⚠️ **RISK: Аномальный спред / Риск делистинга!**\n"
@@ -378,11 +385,11 @@ def monitor_spread():
                         max_fund = sym_funds.get(max_ex, 0.0)
 
                         # Сортировка бирж: топовые биржи по ликвидности идут первыми в списке
-                        sorted_exs = sorted(ex_data.keys(), key=lambda ex: sym_vols.get(ex, 0), reverse=True)
+                        sorted_exs = sorted(valid_ex_data.keys(), key=lambda ex: sym_vols.get(ex, 0), reverse=True)
                         
                         overview_list = []
                         for ex in sorted_exs:
-                            p = ex_data[ex]
+                            p = valid_ex_data[ex]
                             v = sym_vols.get(ex, 0)
                             v_str = format_volume(v)
                             url = get_exchange_url(ex, sym)
@@ -418,11 +425,14 @@ def monitor_spread():
                     expired_syms.append((sym, 0.0, "", "", 0, 0))
                 else:
                     ex_data = prices[sym]
-                    if len(ex_data) >= 2:
-                        curr_min_ex = min(ex_data, key=ex_data.get)
-                        curr_max_ex = max(ex_data, key=ex_data.get)
-                        curr_min = ex_data[curr_min_ex]
-                        curr_max = ex_data[curr_max_ex]
+                    sym_vols = volumes.get(sym, {})
+                    valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 1000}
+                    
+                    if len(valid_ex_data) >= 2:
+                        curr_min_ex = min(valid_ex_data, key=valid_ex_data.get)
+                        curr_max_ex = max(valid_ex_data, key=valid_ex_data.get)
+                        curr_min = valid_ex_data[curr_min_ex]
+                        curr_max = valid_ex_data[curr_max_ex]
                         if curr_min > 0:
                             curr_spread = ((curr_max - curr_min) / curr_min) * 100
                             if curr_spread < 1.0:

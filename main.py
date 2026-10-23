@@ -199,9 +199,9 @@ def process_item(item_id, raw_text, link, default_topic):
     target_topic = default_topic
     upper_res = ai_result.upper()
     
-    detected_ex = "EXCHANGE"
+    detected_ex = default_topic
     for ex_name in TOPICS.keys():
-        if f"#{ex_name}" in upper_res or ex_name in upper_res:
+        if ex_name in upper_res or f"#{ex_name}" in upper_res:
             target_topic = ex_name
             detected_ex = ex_name
             break
@@ -215,7 +215,8 @@ def process_item(item_id, raw_text, link, default_topic):
         "OKX": "okx://",
         "BINGX": "bingx://",
         "KUCOIN": "kucoin://",
-        "WHITEBIT": "https://whitebit.com"
+        "WHITEBIT": "https://whitebit.com",
+        "KRAKEN": "https://kraken.com"
     }
 
     markup = None

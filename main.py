@@ -209,26 +209,23 @@ def process_item(item_id, raw_text, link, default_topic):
             detected_ex = ex_name
             break
             
-    # Нативные глубокие ссылки (Deep Links) для мгновенного открытия мобильных приложений бирж
+    # Официальные мобильные смарт-ссылки для гарантированного открытия приложений
     APP_DEEPLINKS = {
-        "BINANCE": "bnc://app.binance.com/en/activity",
-        "BYBIT": "bybit://app/re-direct",
-        "BITGET": "bitget://app/events",
-        "MEXC": "mexc://app/landings",
-        "GATE": "gateio://app/activities",
-        "OKX": "okx://app/campaigns",
-        "BINGX": "bingx://app/act",
-        "KUCOIN": "kucoin://app/landings",
-        "WHITEBIT": "whitebit://app/referral",
-        "KRAKEN": "kraken://app"
+        "BINANCE": "https://www.binance.com/activity",
+        "BYBIT": "https://www.bybit.com/app/re-direct",
+        "BITGET": "https://www.bitget.com/events",
+        "MEXC": "https://www.mexc.com/landings",
+        "GATE": "https://www.gate.io/activities",
+        "OKX": "https://www.okx.com/campaigns",
+        "BINGX": "https://bingx.com/act",
+        "KUCOIN": "https://www.kucoin.com/landings",
+        "WHITEBIT": "https://whitebit.com/ru/referral",
+        "KRAKEN": "https://www.kraken.com"
     }
 
     markup = None
     if link and link.startswith("http"):
         markup = InlineKeyboardMarkup()
-        web_button = InlineKeyboardButton("🌐 Читать анонс (Веб)", url=link)
-        markup.add(web_button)
-        
         ex_key = detected_ex.upper()
         app_url = APP_DEEPLINKS.get(ex_key, link)
         app_button = InlineKeyboardButton(f"📱 Открыть в приложении {ex_key}", url=app_url)

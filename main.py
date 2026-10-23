@@ -735,4 +735,4 @@ if __name__ == "__main__":
     threading.Thread(target=fetch_global_crypto_promos, daemon=True).start()
     
     print("===> Your service is live 🚀")
-    bot.infinity_polling(skip_pending_flush=True)
+    bot.infinity_polling()

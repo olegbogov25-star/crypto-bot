@@ -336,7 +336,6 @@ def monitor_spread():
             for sym, ex_data in prices.items():
                 sym_vols = volumes.get(sym, {})
                 
-                # Исключаем биржи с нулевым или мертвым объемом (< $1000 за сутки)
                 valid_ex_data = {
                     ex: p for ex, p in ex_data.items() 
                     if sym_vols.get(ex, 0) >= 1000
@@ -353,7 +352,6 @@ def monitor_spread():
                 if min_p <= 0: continue
                 spread = ((max_p - min_p) / min_p) * 100
                 
-                # Фильтр спредов строго от 7% до 30%
                 if spread >= 7.0 and spread <= 30.0:
                     current_scanned_syms.add(sym)
                     
@@ -370,7 +368,6 @@ def monitor_spread():
                         max_pos_usdt = int(min(vol_min, vol_max))
                         if max_pos_usdt < 100: max_pos_usdt = 100
 
-                        # Проверка риска: делистинг (>25%) или низкая ликвидность (<10k)
                         risk_tag = ""
                         low_liq_exs = [ex for ex, v in sym_vols.items() if v < 10000 and ex in valid_ex_data]
                         
@@ -384,7 +381,6 @@ def monitor_spread():
                         min_fund = sym_funds.get(min_ex, 0.0)
                         max_fund = sym_funds.get(max_ex, 0.0)
 
-                        # Сортировка бирж: топовые биржи по ликвидности идут первыми в списке
                         sorted_exs = sorted(valid_ex_data.keys(), key=lambda ex: sym_vols.get(ex, 0), reverse=True)
                         
                         overview_list = []
@@ -409,7 +405,6 @@ def monitor_spread():
                         
                         msg_id = send_to_topic("SPREAD", msg_text)
                         if msg_id:
-                            # Сохраняем начальные цены и биржи для последующего отчета при сведении
                             active_spreads[sym] = {
                                 "msg_id": msg_id,
                                 "start_time": time.time(),
@@ -451,7 +446,6 @@ def monitor_spread():
                     f_min_p = c_min_p if c_min_p > 0 else data["min_p"]
                     f_max_p = c_max_p if c_max_p > 0 else data["max_p"]
                     
-                    # Детальный отчет о сведении цен с финальными ценами
                     aligned_msg = (
                         f"✅ `[{sym}]` prices aligned in `{time_str}` (spread: `{final_spread:.2f}%`)\n"
                         f"📌 **Финальные цены:** `{f_min_ex}`: `${f_min_p}` | `{f_max_ex}`: `${f_max_p}`"
@@ -520,7 +514,22 @@ def monitor_funding():
             
         time.sleep(300)
 
-# ==================== NEWS & PROMO DIRECT API MONITORS (ALL TAGS) ====================
+# ==================== ALL EXCHANGES PROMO & ANNOUNCEMENT MONITORS ====================
+def fetch_binance_promos():
+    try:
+        url = "https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=48&pageNo=1&pageSize=10"
+        res = requests.get(url, timeout=5).json()
+        articles = res.get('data', {}).get('articles', [])
+        for art in articles:
+            art_id = f"binance_promo_{art.get('id')}"
+            title = art.get('title', '')
+            code = art.get('code', '')
+            link = f"https://www.binance.com/en/support/announcement/{code}" if code else "https://www.binance.com"
+            raw_text = f"Binance Event / Launchpool / Megadrop: {title}\n{link}"
+            process_item(art_id, raw_text, link, "BINANCE")
+    except Exception as e:
+        print(f"Binance Promo Error: {e}")
+
 def fetch_bybit_promos():
     try:
         url = "https://api.bybit.com/v5/announcements/index?locale=en-US&limit=10"
@@ -537,6 +546,20 @@ def fetch_bybit_promos():
     except Exception as e:
         print(f"Bybit Promo Error: {e}")
 
+def fetch_okx_promos():
+    try:
+        url = "https://www.okx.com/priapi/v5/support/news/bulletins?page=1&pageSize=10"
+        res = requests.get(url, timeout=5).json()
+        articles = res.get('data', [{}])[0].get('details', [])
+        for art in articles[:10]:
+            art_id = f"okx_promo_{art.get('id')}"
+            title = art.get('title', '')
+            link = f"https://www.okx.com/help/{art.get('slug', '')}" if art.get('slug') else "https://www.okx.com"
+            raw_text = f"OKX Event / Flash Earn / Jumpstart: {title}\n{link}"
+            process_item(art_id, raw_text, link, "OKX")
+    except Exception as e:
+        print(f"OKX Promo Error: {e}")
+
 def fetch_bitget_promos():
     try:
         url = "https://api.bitget.com/api/v2/spot/public/announcements?language=en_US"
@@ -552,34 +575,75 @@ def fetch_bitget_promos():
     except Exception as e:
         print(f"Bitget Promo Error: {e}")
 
-def fetch_okx_promos():
+def fetch_mexc_promos():
     try:
-        url = "https://www.okx.com/priapi/v5/support/news/bulletins?page=1&pageSize=10"
+        url = "https://www.mexc.com/api/common/announcement?page=1&pageSize=10"
         res = requests.get(url, timeout=5).json()
-        articles = res.get('data', [{}])[0].get('details', [])
-        for art in articles[:10]:
-            art_id = f"okx_promo_{art.get('id')}"
-            title = art.get('title', '')
-            link = f"https://www.okx.com/help/{art.get('slug', '')}" if art.get('slug') else "https://www.okx.com"
-            raw_text = f"OKX Event / Flash Earn / Jumpstart: {title}\n{link}"
-            process_item(art_id, raw_text, link, "OKX")
-    except Exception as e:
-        print(f"OKX Promo Error: {e}")
-
-def fetch_binance_promos():
-    try:
-        url = "https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=48&pageNo=1&pageSize=10"
-        res = requests.get(url, timeout=5).json()
-        articles = res.get('data', {}).get('articles', [])
+        articles = res.get('data', {}).get('announcementList', [])
         for art in articles:
-            art_id = f"binance_promo_{art.get('id')}"
+            art_id = f"mexc_promo_{art.get('id')}"
             title = art.get('title', '')
-            code = art.get('code', '')
-            link = f"https://www.binance.com/en/support/announcement/{code}" if code else "https://www.binance.com"
-            raw_text = f"Binance Event / Launchpool / Megadrop: {title}\n{link}"
-            process_item(art_id, raw_text, link, "BINANCE")
+            link = f"https://www.mexc.com/support/articles/{art.get('id')}" if art.get('id') else "https://www.mexc.com"
+            summary = art.get('summary', '')
+            raw_text = f"MEXC Event / Promotion: {title}\n{summary}\n{link}"
+            process_item(art_id, raw_text, link, "MEXC")
     except Exception as e:
-        print(f"Binance Promo Error: {e}")
+        print(f"MEXC Promo Error: {e}")
+
+def fetch_gate_promos():
+    try:
+        url = "https://api.gateio.ws/api/v4/support/announcements?limit=10"
+        res = requests.get(url, timeout=5).json()
+        for art in res:
+            art_id = f"gate_promo_{art.get('id')}"
+            title = art.get('title', '')
+            link = art.get('url', 'https://www.gate.io')
+            raw_text = f"Gate.io Event / Promotion: {title}\n{link}"
+            process_item(art_id, raw_text, link, "GATE")
+    except Exception as e:
+        print(f"Gate Promo Error: {e}")
+
+def fetch_kucoin_promos():
+    try:
+        url = "https://api.kucoin.com/api/v1/bulletins?currentPage=1&pageSize=10"
+        res = requests.get(url, timeout=5).json()
+        articles = res.get('data', {}).get('items', [])
+        for art in articles:
+            art_id = f"kucoin_promo_{art.get('cId')}"
+            title = art.get('title', '')
+            link = f"https://www.kucoin.com/news/{art.get('cName', '')}" if art.get('cName') else "https://www.kucoin.com"
+            raw_text = f"KuCoin Event / Promotion: {title}\n{link}"
+            process_item(art_id, raw_text, link, "KUCOIN")
+    except Exception as e:
+        print(f"KuCoin Promo Error: {e}")
+
+def fetch_bingx_promos():
+    try:
+        url = "https://open-api.bingx.com/openApi/common/v1/announcements?limit=10"
+        res = requests.get(url, timeout=5).json()
+        articles = res.get('data', [])
+        for art in articles:
+            art_id = f"bingx_promo_{art.get('id')}"
+            title = art.get('title', '')
+            link = art.get('url', 'https://bingx.com')
+            raw_text = f"BingX Event / Promotion: {title}\n{link}"
+            process_item(art_id, raw_text, link, "BINGX")
+    except Exception as e:
+        print(f"BingX Promo Error: {e}")
+
+def fetch_whitebit_promos():
+    try:
+        url = "https://whitebit.com/api/v4/public/announcements?limit=10"
+        res = requests.get(url, timeout=5).json()
+        articles = res.get('result', [])
+        for art in articles:
+            art_id = f"whitebit_promo_{art.get('id')}"
+            title = art.get('title', '')
+            link = art.get('url', 'https://whitebit.com')
+            raw_text = f"WhiteBit Event / Promotion: {title}\n{link}"
+            process_item(art_id, raw_text, link, "WHITEBIT")
+    except Exception as e:
+        print(f"WhiteBit Promo Error: {e}")
 
 def monitor_news():
     feeds = [
@@ -590,11 +654,16 @@ def monitor_news():
         ("https://bitcoinmagazine.com/.rss/full/", "NEWS")
     ]
     while True:
-        # Прямые запросы к разделам Earn/Launchpool/Promos бирж
-        fetch_bybit_promos()
-        fetch_bitget_promos()
-        fetch_okx_promos()
+        # Прямые запросы к разделам Promo / Launchpool / Airdrop для ВСЕХ 9 бирж
         fetch_binance_promos()
+        fetch_bybit_promos()
+        fetch_okx_promos()
+        fetch_bitget_promos()
+        fetch_mexc_promos()
+        fetch_gate_promos()
+        fetch_kucoin_promos()
+        fetch_bingx_promos()
+        fetch_whitebit_promos()
 
         for url, topic in feeds:
             try:
@@ -614,7 +683,7 @@ def monitor_news():
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     
-    send_to_topic("SPREAD", "🚀 **Бот запущен и работает в штатном режиме!**")
+    send_to_topic("SPREAD", "🚀 **Бот запущен и работает в штатном режиме (морятся все 9 бирж)!**")
     
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()

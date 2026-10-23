@@ -58,14 +58,14 @@ def run_flask():
 def get_exchange_url(exchange, symbol):
     base_sym = symbol.replace('USDT', '')
     links = {
-        "Binance": f"https://www.binance.com/en/futures/{base_sym}USDT",
+        "Binance": f"https://www.binance.com/ru-UA/futures/{base_sym}USDT",
         "Bybit": f"https://www.bybit.com/trade/usdt/{base_sym}USDT",
-        "OKX": f"https://www.okx.com/trade-swap/{base_sym.lower()}-usdt-swap",
-        "Gate": f"https://www.gate.io/futures/USDT/{base_sym}_USDT",
+        "OKX": f"https://www.okx.com/ru/trade-swap/{base_sym.lower()}-usdt-swap",
+        "Gate": f"https://www.gate.io/ru/futures/USDT/{base_sym}_USDT",
         "Bitget": f"https://www.bitget.com/futures/usdt/{base_sym}USDT",
         "MEXC": f"https://futures.mexc.com/exchange/{base_sym}_USDT",
-        "BingX": f"https://bingx.com/futures/forward/{base_sym}USDT",
-        "KuCoin": f"https://www.kucoin.com/futures/trade/{base_sym}USDTM",
+        "BingX": f"https://bingx.com/ru/futures/forward/{base_sym}USDT",
+        "KuCoin": f"https://www.kucoin.com/ru/futures/trade/{base_sym}USDTM",
         "WhiteBit": f"https://whitebit.com/trade/{base_sym}_USDT?type=futures",
         "Kraken": f"https://futures.kraken.com",
         "Ourbit": f"https://www.ourbit.com/futures/trade/{base_sym}_USDT"
@@ -90,17 +90,17 @@ def analyze_text(text):
     if not OPENROUTER_API_KEY:
         return text
     prompt = f"""
-Ты — жесткий фильтр и аналитик крипто-анонсов. Твоя задача — отсечь 100% информационного шума, но ОСТАВИТЬ все реальные промо-акции, кикстартеры, лаунчпулы, эйрдропы и ивенты с призами (включая розыгрыши гаджетов вроде iPhone, мерча или токенов).
+Ты — жесткий фильтр и аналитик крипто-анонсов. Твоя задача — отсечь 100% информационного шума, но ОСТАВИТЬ все реальные промо-акции, кикстартеры, лаунчпулы, эйрдропы, Web3-ивенты и ивенты с призами (включая розыгрыши гаджетов вроде iPhone, мерча или токенов).
 
 ОБЯЗАТЕЛЬНОЕ ПРАВИЛО: Ответь строго одним словом "SKIP", если:
 1. Это обычный листинг/добавление новой торговой пары БЕЗ какой-либо промо-кампании, баунти или призового фонда.
 2. Новость про токенизированные акции, традиционные ETF или залоговые активы.
 3. Новость про суды, штрафы, регуляторов, делистинг, техническое обслуживание.
-(Если есть намек на призы, розыгрыш, стейкинг с наградами или промо — НЕ пропускай).
+(Если есть намек на призы, розыгрыш, стейкинг с наградами, Web3 или промо — НЕ пропускай).
 
-ЕСЛИ ЭТО РЕАЛЬНАЯ АКЦИЯ, ИВЕНТ, LAUNCHPOOL, MEGADROP ИЛИ AIRDROP — сформируй отчет строго по форме:
-1. 📌 **Источник / Платформа:** Название биржи.
-2. 🏷 **Тип события / Теги:** (#OKX_Web3 #Binance_Web3 #Bybit_Web3 #Web3 #Launchpool #Launchpad #Airdrop #TokenSplash #Promotion #Kickstarter и др.).
+ЕСЛИ ЭТО РЕАЛЬНАЯ АКЦИЯ, ИВЕНТ, LAUNCHPOOL, MEGADROP, WEB3 AIRDROP — сформируй отчет строго по форме:
+1. 📌 **Источник / Платформа:** Название биржи или Web3-кошелька.
+2. 🏷 **Тип события / Теги:** (#OKX_Web3 #Binance_Web3 #Bybit_Web3 #Web3 #Launchpool #Launchpad #Airdrop #TokenSplash #Promotion #Kickstarter #Kraken и др.).
 3. 🪙 **Токен / Проект.**
 4. 📅 **Даты проведения.**
 5. 📋 **Краткое описание.**
@@ -184,7 +184,7 @@ def process_item(item_id, raw_text, link, default_topic):
 
     send_to_topic(target_topic, ai_result, reply_markup=markup)
 
-# ==================== FUTURES DATA & LIQUIDITY FETCHING ====================
+# ==================== FUTURES DATA & LIQUIDITY FETCHING (ВКЛЮЧАЯ OURBIT) ====================
 def fetch_futures_data():
     prices = {}
     volumes = {}
@@ -564,7 +564,7 @@ def monitor_funding():
             
         time.sleep(300)
 
-# ==================== ALL EXCHANGES PROMO & ANNOUNCEMENT MONITORS (ГЛУБОКИЙ ОХВАТ 30+) ====================
+# ==================== PROMO & WEB3 MONITORS (ПОЛНЫЙ КОМПЛЕКТ С KRAKEN И WEB3) ====================
 def fetch_binance_promos():
     try:
         url = "https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=48&pageNo=1&pageSize=30"
@@ -574,11 +574,26 @@ def fetch_binance_promos():
             art_id = f"binance_promo_{art.get('id')}"
             title = art.get('title', '')
             code = art.get('code', '')
-            link = f"https://www.binance.com/en/support/announcement/{code}" if code else "https://www.binance.com"
+            link = f"https://www.binance.com/ru-UA/support/announcement/{code}" if code else "https://www.binance.com"
             raw_text = f"Binance Event / Launchpool / Megadrop: {title}\n{link}"
             process_item(art_id, raw_text, link, "BINANCE")
     except Exception as e:
         print(f"Binance Promo Error: {e}")
+
+def fetch_binance_web3():
+    try:
+        url = "https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=410&pageNo=1&pageSize=20"
+        res = requests.get(url, timeout=5).json()
+        articles = res.get('data', {}).get('articles', [])
+        for art in articles:
+            art_id = f"binance_web3_{art.get('id')}"
+            title = art.get('title', '')
+            code = art.get('code', '')
+            link = f"https://web3.binance.com/ru-UA/support/announcement/{code}" if code else "https://web3.binance.com"
+            raw_text = f"#Binance_Web3 Airdrop / Quest: {title}\n{link}"
+            process_item(art_id, raw_text, link, "BINANCE")
+    except Exception as e:
+        print(f"Binance Web3 Error: {e}")
 
 def fetch_bybit_promos():
     try:
@@ -604,11 +619,25 @@ def fetch_okx_promos():
         for art in articles[:30]:
             art_id = f"okx_promo_{art.get('id')}"
             title = art.get('title', '')
-            link = f"https://www.okx.com/help/{art.get('slug', '')}" if art.get('slug') else "https://www.okx.com"
+            link = f"https://www.okx.com/ru/help/{art.get('slug', '')}" if art.get('slug') else "https://www.okx.com"
             raw_text = f"OKX Event / Flash Earn / Jumpstart: {title}\n{link}"
             process_item(art_id, raw_text, link, "OKX")
     except Exception as e:
         print(f"OKX Promo Error: {e}")
+
+def fetch_okx_web3():
+    try:
+        url = "https://www.okx.com/priapi/v5/support/news/bulletins?type=web3&page=1&pageSize=20"
+        res = requests.get(url, timeout=5).json()
+        articles = res.get('data', [{}])[0].get('details', [])
+        for art in articles[:20]:
+            art_id = f"okx_web3_{art.get('id')}"
+            title = art.get('title', '')
+            link = f"https://web3.okx.com/ru/help/{art.get('slug', '')}" if art.get('slug') else "https://web3.okx.com"
+            raw_text = f"#OKX_Web3 Wallet Airdrop / Quest: {title}\n{link}"
+            process_item(art_id, raw_text, link, "OKX")
+    except Exception as e:
+        print(f"OKX Web3 Error: {e}")
 
 def fetch_bitget_promos():
     try:
@@ -627,7 +656,6 @@ def fetch_bitget_promos():
 
 def fetch_mexc_promos():
     try:
-        # Расширенный охват по нескольким эндпоинтам MEXC (Общие + Акции/Кикстартер)
         urls = [
             "https://www.mexc.com/api/common/announcement?page=1&pageSize=30",
             "https://www.mexc.com/api/common/announcement?page=1&pageSize=30&category=activity"
@@ -666,7 +694,7 @@ def fetch_kucoin_promos():
         for art in articles:
             art_id = f"kucoin_promo_{art.get('cId')}"
             title = art.get('title', '')
-            link = f"https://www.kucoin.com/news/{art.get('cName', '')}" if art.get('cName') else "https://www.kucoin.com"
+            link = f"https://www.kucoin.com/ru/news/{art.get('cName', '')}" if art.get('cName') else "https://www.kucoin.com"
             raw_text = f"KuCoin Event / Promotion: {title}\n{link}"
             process_item(art_id, raw_text, link, "KUCOIN")
     except Exception as e:
@@ -700,6 +728,34 @@ def fetch_whitebit_promos():
     except Exception as e:
         print(f"WhiteBit Promo Error: {e}")
 
+def fetch_kraken_promos():
+    try:
+        url = "https://blog.kraken.com/feed"
+        feed = feedparser.parse(url)
+        for entry in feed.entries[:20]:
+            art_id = f"kraken_promo_{entry.get('id', entry.get('link'))}"
+            title = entry.get('title', '')
+            link = entry.get('link', 'https://www.kraken.com')
+            summary = entry.get('summary', '')
+            raw_text = f"Kraken Event / Promotion / Announcement: {title}\n{summary}\n{link}"
+            process_item(art_id, raw_text, link, "KRAKEN")
+    except Exception as e:
+        print(f"Kraken Promo Error: {e}")
+
+def run_all_promos():
+    fetch_binance_promos()
+    fetch_binance_web3()
+    fetch_bybit_promos()
+    fetch_okx_promos()
+    fetch_okx_web3()
+    fetch_bitget_promos()
+    fetch_mexc_promos()
+    fetch_gate_promos()
+    fetch_kucoin_promos()
+    fetch_bingx_promos()
+    fetch_whitebit_promos()
+    fetch_kraken_promos()
+
 def monitor_news():
     feeds = [
         ("https://cryptopanic.com/news/rss/", "NEWS"),
@@ -709,30 +765,14 @@ def monitor_news():
         ("https://bitcoinmagazine.com/.rss/full/", "NEWS")
     ]
     
-    # === ОДНОРАЗОВАЯ ПРОВЕРКА ПРОМО ЗА 24 ЧАСА ПРИ СТАРТЕ (ГЛУБОКИЙ СБОР) ===
-    print("🚀 Выполняется глубокий одноразовый сбор промо-акций по всем 9 биржам...")
-    fetch_binance_promos()
-    fetch_bybit_promos()
-    fetch_okx_promos()
-    fetch_bitget_promos()
-    fetch_mexc_promos()
-    fetch_gate_promos()
-    fetch_kucoin_promos()
-    fetch_bingx_promos()
-    fetch_whitebit_promos()
+    # === ОДНОРАЗОВАЯ ПРОВЕРКА ПРОМО ЗА 24 ЧАСА ПРИ СТАРТЕ ===
+    print("🚀 Выполняется глубокий одноразовый сбор промо-акций и Web3 (включая Kraken и все биржи)...")
+    run_all_promos()
     print("✅ Одноразовый глубокий сбор завершен. Переход в штатный режим 24/7.")
-    # ====================================================================
+    # =======================================================
 
     while True:
-        fetch_binance_promos()
-        fetch_bybit_promos()
-        fetch_okx_promos()
-        fetch_bitget_promos()
-        fetch_mexc_promos()
-        fetch_gate_promos()
-        fetch_kucoin_promos()
-        fetch_bingx_promos()
-        fetch_whitebit_promos()
+        run_all_promos()
 
         for url, topic in feeds:
             try:
@@ -752,7 +792,7 @@ def monitor_news():
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     
-    send_to_topic("SPREAD", "🚀 **Бот запущен с расширенным сбором промо по всем 9 биржам и киевским временем!**")
+    send_to_topic("SPREAD", "🚀 **Бот запущен: Kraken, Binance/OKX Web3, 10 бирж для промо, Ourbit для спредов и киевское время!**")
     
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()

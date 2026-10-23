@@ -209,18 +209,18 @@ def process_item(item_id, raw_text, link, default_topic):
             detected_ex = ex_name
             break
             
-    # Смарт-ссылки для гарантированного открытия мобильных приложений бирж
+    # Нативные глубокие ссылки (Deep Links) для мгновенного открытия мобильных приложений бирж
     APP_DEEPLINKS = {
-        "BINANCE": "https://www.binance.com/ukr/download",
-        "BYBIT": "https://www.bybit.com/en/download",
-        "BITGET": "https://www.bitget.com/en/download",
-        "MEXC": "https://www.mexc.com/download",
-        "GATE": "https://www.gate.io/mobile",
-        "OKX": "https://www.okx.com/download",
-        "BINGX": "https://bingx.com/en-us/download/",
-        "KUCOIN": "https://www.kucoin.com/download",
-        "WHITEBIT": "https://whitebit.com/app",
-        "KRAKEN": "https://www.kraken.com/features/kraken-app"
+        "BINANCE": "bnc://app.binance.com/en/activity",
+        "BYBIT": "bybit://app/re-direct",
+        "BITGET": "bitget://app/events",
+        "MEXC": "mexc://app/landings",
+        "GATE": "gateio://app/activities",
+        "OKX": "okx://app/campaigns",
+        "BINGX": "bingx://app/act",
+        "KUCOIN": "kucoin://app/landings",
+        "WHITEBIT": "whitebit://app/referral",
+        "KRAKEN": "kraken://app"
     }
 
     markup = None

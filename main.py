@@ -32,8 +32,8 @@ TOPICS = {
 }
 
 processed_ids = set()
-processed_arbitrage = set()
-active_spreads = {}
+active_spreads = {}   # {sym: {"msg_id": int, "start_time": float, "last_text": str}}
+active_fundings = {}  # {symbol: {"msg_id": int, "last_rates_str": str}}
 
 # ==================== HEALTHCHECK SERVER ====================
 @app.route('/')
@@ -132,6 +132,22 @@ def send_to_topic(topic_name, text, reply_to_message_id=None, reply_markup=None)
             print(f"❌ Send Error ({topic_name}): {e}")
     return None
 
+def edit_topic_message(topic_name, message_id, text, reply_markup=None):
+    if CHAT_ID and message_id:
+        try:
+            bot.edit_message_text(
+                chat_id=CHAT_ID,
+                message_id=message_id,
+                text=text,
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+                reply_markup=reply_markup
+            )
+            return True
+        except Exception as e:
+            print(f"❌ Edit Error ({topic_name}): {e}")
+    return False
+
 def process_item(item_id, raw_text, link, default_topic):
     if item_id in processed_ids:
         return
@@ -151,7 +167,6 @@ def process_item(item_id, raw_text, link, default_topic):
             detected_ex = ex_name
             break
             
-    # Создаем инлайн-кнопку для перехода в приложение биржи / на акцию
     markup = None
     if link and link.startswith("http"):
         markup = InlineKeyboardMarkup()
@@ -326,19 +341,21 @@ def format_countdown(target_timestamp):
     minutes = int((diff % 3600) // 60)
     return f"{hours}ч {minutes:02d}м"
 
-# ==================== SPREAD MONITOR (7% - 30% + Ликвидность >= $1000) ====================
+# ==================== SPREAD MONITOR (7% - 30% + АВТО-ОБНОВЛЕНИЕ) ====================
 def monitor_spread():
     while True:
         try:
             prices, volumes, fundings, _ = fetch_futures_data()
             current_scanned_syms = set()
+            curr_time_str = time.strftime("%H:%M:%S")
 
             for sym, ex_data in prices.items():
                 sym_vols = volumes.get(sym, {})
                 
+                # Мягкий фильтр ликвидности: берем все биржи, где объем больше 0 (исключаем мертвые снулые стаканы)
                 valid_ex_data = {
                     ex: p for ex, p in ex_data.items() 
-                    if sym_vols.get(ex, 0) >= 1000
+                    if sym_vols.get(ex, 0) > 0
                 }
 
                 if len(valid_ex_data) < 2:
@@ -346,94 +363,100 @@ def monitor_spread():
                 
                 min_ex = min(valid_ex_data, key=valid_ex_data.get)
                 max_ex = max(valid_ex_data, key=valid_ex_data.get)
+                min_p = valid_ex_data[min_p_ex := min_ex] # синтаксис фиксации
                 min_p = valid_ex_data[min_ex]
                 max_p = valid_ex_data[max_ex]
                 
                 if min_p <= 0: continue
                 spread = ((max_p - min_p) / min_p) * 100
                 
-                if spread >= 7.0 and spread <= 30.0:
+                # Строгий диапазон спредов от 7% до 30%
+                if 7.0 <= spread <= 30.0:
                     current_scanned_syms.add(sym)
                     
-                    if sym not in active_spreads:
-                        if spread >= 15.0:
-                            badge = "🔥🔥🔥 **MEGA SPREAD (>= 15%)**"
-                        elif spread >= 10.0:
-                            badge = "🔥 **HIGH SPREAD (>= 10%)**"
-                        else:
-                            badge = "⚡ **STRONG SPREAD (>= 7%)**"
+                    if spread >= 15.0:
+                        badge = "🔥🔥🔥 **MEGA SPREAD (>= 15%)**"
+                    elif spread >= 10.0:
+                        badge = "🔥 **HIGH SPREAD (>= 10%)**"
+                    else:
+                        badge = "⚡ **STRONG SPREAD (>= 7%)**"
 
-                        vol_min = sym_vols.get(min_ex, 0) * 0.01
-                        vol_max = sym_vols.get(max_ex, 0) * 0.01
-                        max_pos_usdt = int(min(vol_min, vol_max))
-                        if max_pos_usdt < 100: max_pos_usdt = 100
+                    vol_min = sym_vols.get(min_ex, 0) * 0.01
+                    vol_max = sym_vols.get(max_ex, 0) * 0.01
+                    max_pos_usdt = int(min(vol_min, vol_max))
+                    if max_pos_usdt < 100: max_pos_usdt = 100
 
-                        risk_tag = ""
-                        low_liq_exs = [ex for ex, v in sym_vols.items() if v < 10000 and ex in valid_ex_data]
-                        
-                        if spread > 25.0:
-                            risk_tag = "\n⚠️ **RISK: Аномальный спред / Риск делистинга!**\n"
-                        elif low_liq_exs:
-                            bad_exs_str = ", ".join(low_liq_exs)
-                            risk_tag = f"\n⚠️ **RISK: Низкая ликвидность / Мертвый стакан ({bad_exs_str})**\n"
+                    risk_tag = ""
+                    low_liq_exs = [ex for ex, v in sym_vols.items() if v < 10000 and ex in valid_ex_data]
+                    
+                    if spread > 25.0:
+                        risk_tag = "\n⚠️ **RISK: Аномальный спред / Риск делистинга!**\n"
+                    elif low_liq_exs:
+                        bad_exs_str = ", ".join(low_liq_exs)
+                        risk_tag = f"\n⚠️ **RISK: Низкая ликвидность / Мертвый стакан ({bad_exs_str})**\n"
 
-                        sym_funds = fundings.get(sym, {})
-                        min_fund = sym_funds.get(min_ex, 0.0)
-                        max_fund = sym_funds.get(max_ex, 0.0)
+                    sym_funds = fundings.get(sym, {})
+                    min_fund = sym_funds.get(min_ex, 0.0)
+                    max_fund = sym_funds.get(max_ex, 0.0)
 
-                        sorted_exs = sorted(valid_ex_data.keys(), key=lambda ex: sym_vols.get(ex, 0), reverse=True)
-                        
-                        overview_list = []
-                        for ex in sorted_exs:
-                            p = valid_ex_data[ex]
-                            v = sym_vols.get(ex, 0)
-                            v_str = format_volume(v)
-                            url = get_exchange_url(ex, sym)
-                            overview_list.append(f"🔹 [{ex}]({url}): `${p}` ({v_str})")
-                        
-                        overview = "\n".join(overview_list)
-                        
-                        msg_text = (
-                            f"{badge}\n"
-                            f"🪙 **#{sym} | Spread: `{spread:.2f}%`**"
-                            f"{risk_tag}\n"
-                            f"🟢 **Long ({min_ex}):** `${min_p}` (Funding: `{min_fund:+.2f}%`)\n"
-                            f"🔴 **Short ({max_ex}):** `${max_p}` (Funding: `{max_fund:+.2f}%`)\n\n"
-                            f"💰 **Доступный объем позиции:** `~${max_pos_usdt:,} USDT`\n\n"
-                            f"📝 **All Exchanges Overview (по ликвидности):**\n{overview}"
-                        )
-                        
+                    sorted_exs = sorted(valid_ex_data.keys(), key=lambda ex: sym_vols.get(ex, 0), reverse=True)
+                    
+                    overview_list = []
+                    for ex in sorted_exs:
+                        p = valid_ex_data[ex]
+                        v = sym_vols.get(ex, 0)
+                        v_str = format_volume(v)
+                        url = get_exchange_url(ex, sym)
+                        overview_list.append(f"🔹 [{ex}]({url}): `${p}` ({v_str})")
+                    
+                    overview = "\n".join(overview_list)
+                    
+                    msg_text = (
+                        f"{badge}\n"
+                        f"🪙 **#{sym} | Spread: `{spread:.2f}%`**"
+                        f"{risk_tag}\n"
+                        f"🟢 **Long ({min_ex}):** `${min_p}` (Funding: `{min_fund:+.2f}%`)\n"
+                        f"🔴 **Short ({max_ex}):** `${max_p}` (Funding: `{max_fund:+.2f}%`)\n\n"
+                        f"💰 **Доступный объем позиции:** `~${max_pos_usdt:,} USDT`\n\n"
+                        f"📝 **All Exchanges Overview (по ликвидности):**\n{overview}\n\n"
+                        f"🔄 _Обновлено: {curr_time_str}_"
+                    )
+                    
+                    if sym in active_spreads:
+                        # Обновляем существующее сообщение в реальном времени
+                        fund_info = active_spreads[sym]
+                        if fund_info["last_text"] != msg_text:
+                            success = edit_topic_message("SPREAD", fund_info["msg_id"], msg_text)
+                            if success:
+                                fund_info["last_text"] = msg_text
+                    else:
+                        # Создаем новый активный спред
                         msg_id = send_to_topic("SPREAD", msg_text)
                         if msg_id:
                             active_spreads[sym] = {
                                 "msg_id": msg_id,
                                 "start_time": time.time(),
-                                "min_ex": min_ex,
-                                "max_ex": max_ex,
-                                "min_p": min_p,
-                                "max_p": max_p
+                                "last_text": msg_text
                             }
             
+            # Проверка на сведение спредов (цена выровнялась < 1.0%)
             expired_syms = []
             for sym in list(active_spreads.keys()):
                 if sym not in current_scanned_syms or sym not in prices:
-                    expired_syms.append((sym, 0.0, "", "", 0, 0))
+                    expired_syms.append((sym, 0.0))
                 else:
                     ex_data = prices[sym]
                     sym_vols = volumes.get(sym, {})
-                    valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 1000}
-                    
+                    valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) > 0}
                     if len(valid_ex_data) >= 2:
-                        curr_min_ex = min(valid_ex_data, key=valid_ex_data.get)
-                        curr_max_ex = max(valid_ex_data, key=valid_ex_data.get)
-                        curr_min = valid_ex_data[curr_min_ex]
-                        curr_max = valid_ex_data[curr_max_ex]
+                        curr_min = min(valid_ex_data.values())
+                        curr_max = max(valid_ex_data.values())
                         if curr_min > 0:
                             curr_spread = ((curr_max - curr_min) / curr_min) * 100
                             if curr_spread < 1.0:
-                                expired_syms.append((sym, curr_spread, curr_min_ex, curr_max_ex, curr_min, curr_max))
+                                expired_syms.append((sym, curr_spread))
 
-            for sym, final_spread, c_min_ex, c_max_ex, c_min_p, c_max_p in expired_syms:
+            for sym, final_spread in expired_syms:
                 data = active_spreads.pop(sym, None)
                 if data:
                     duration = int(time.time() - data["start_time"])
@@ -441,27 +464,21 @@ def monitor_spread():
                     secs = duration % 60
                     time_str = f"{mins}:{secs:02d}"
                     
-                    f_min_ex = c_min_ex if c_min_ex else data["min_ex"]
-                    f_max_ex = c_max_ex if c_max_ex else data["max_ex"]
-                    f_min_p = c_min_p if c_min_p > 0 else data["min_p"]
-                    f_max_p = c_max_p if c_max_p > 0 else data["max_p"]
-                    
-                    aligned_msg = (
-                        f"✅ `[{sym}]` prices aligned in `{time_str}` (spread: `{final_spread:.2f}%`)\n"
-                        f"📌 **Финальные цены:** `{f_min_ex}`: `${f_min_p}` | `{f_max_ex}`: `${f_max_p}`"
-                    )
-                    send_to_topic("SPREAD", aligned_msg, reply_to_message_id=data["msg_id"])
+                    aligned_msg = data["last_text"] + f"\n\n✅ **Спред сошелся в {time_str} (Финальный спред: `{final_spread:.2f}%`)**"
+                    edit_topic_message("SPREAD", data["msg_id"], aligned_msg)
 
         except Exception as e:
             print(f"Spread Monitor Error: {e}")
         
         time.sleep(45)
 
-# ==================== FUNDING MONITOR ====================
+# ==================== FUNDING MONITOR (С АВТО-ОБНОВЛЕНИЕМ И ИСТОРИЕЙ) ====================
 def monitor_funding():
     while True:
         try:
             _, volumes_cache, all_funding, funding_times = fetch_futures_data()
+            current_active_symbols = set()
+            curr_time_str = time.strftime("%H:%M:%S")
 
             for symbol, ex_rates in all_funding.items():
                 if len(ex_rates) < 2:
@@ -473,41 +490,64 @@ def monitor_funding():
                 max_rate = ex_rates[max_ex]
                 
                 funding_spread = max_rate - min_rate
-                
                 has_high_absolute = any(abs(rate) >= 1.0 for rate in ex_rates.values())
                 has_funding_spread = funding_spread >= 1.0
                 
                 if has_high_absolute or has_funding_spread:
-                    rates_str = "_".join([f"{ex}:{rate:.2f}" for ex, rate in sorted(ex_rates.items())])
-                    sig_id = f"FUND_SPREAD_{symbol}_{rates_str}"
+                    current_active_symbols.add(symbol)
+                    rates_key = "_".join([f"{ex}:{rate:.2f}" for ex, rate in sorted(ex_rates.items())])
                     
-                    if sig_id not in processed_arbitrage:
-                        processed_arbitrage.add(sig_id)
-                        
-                        sym_vols = volumes_cache.get(symbol, {})
-                        vol_min = sym_vols.get(min_ex, 50000) * 0.01
-                        vol_max = sym_vols.get(max_ex, 50000) * 0.01
-                        max_pos_usdt = int(min(vol_min, vol_max, 50000))
-                        if max_pos_usdt < 100: max_pos_usdt = 100
+                    sym_vols = volumes_cache.get(symbol, {})
+                    vol_min = sym_vols.get(min_ex, 50000) * 0.01
+                    vol_max = sym_vols.get(max_ex, 50000) * 0.01
+                    max_pos_usdt = int(min(vol_min, vol_max, 50000))
+                    if max_pos_usdt < 100: max_pos_usdt = 100
 
-                        sym_times = funding_times.get(symbol, {})
-                        overview_list = []
-                        for ex, r in sorted(ex_rates.items(), key=lambda x: x[1], reverse=True):
-                            url = get_exchange_url(ex, symbol)
-                            target_t = sym_times.get(ex, 0)
-                            countdown_str = format_countdown(target_t)
-                            overview_list.append(f"🔹 [{ex}]({url}): `{r:+.2f}%` (⏱ {countdown_str})")
-                        
-                        overview = "\n".join(overview_list)
+                    sym_times = funding_times.get(symbol, {})
+                    overview_list = []
+                    for ex, r in sorted(ex_rates.items(), key=lambda x: x[1], reverse=True):
+                        url = get_exchange_url(ex, symbol)
+                        target_t = sym_times.get(ex, 0)
+                        countdown_str = format_countdown(target_t)
+                        overview_list.append(f"🔹 [{ex}]({url}): `{r:+.2f}%` (⏱ {countdown_str})")
+                    
+                    overview = "\n".join(overview_list)
 
-                        msg = (
-                            f"🔥 **FUNDING ARBITRAGE / HIGH RATE (>= ±1.0%)**\n"
-                            f"🪙 **#{symbol}** (Spread: `{funding_spread:.2f}%`)\n\n"
-                            f"💰 **Доступный объем позиции:** `~${max_pos_usdt:,} USDT`\n\n"
-                            f"📊 **All Exchanges Rates & Timers:**\n{overview}"
-                        )
+                    msg = (
+                        f"🔥 **FUNDING ARBITRAGE / HIGH RATE (>= ±1.0%)**\n"
+                        f"🪙 **#{symbol}** (Spread: `{funding_spread:.2f}%`)\n\n"
+                        f"💰 **Доступный объем позиции:** `~${max_pos_usdt:,} USDT`\n\n"
+                        f"📊 **All Exchanges Rates & Timers:**\n{overview}\n\n"
+                        f"🔄 _Данные обновлены в {curr_time_str}_"
+                    )
 
-                        send_to_topic("FUNDING", msg)
+                    if symbol in active_fundings:
+                        fund_data = active_fundings[symbol]
+                        if fund_data["last_rates_str"] != rates_key:
+                            success = edit_topic_message("FUNDING", fund_data["msg_id"], msg)
+                            if success:
+                                fund_data["last_rates_str"] = rates_key
+                                fund_data["last_text"] = msg
+                    else:
+                        msg_id = send_to_topic("FUNDING", msg)
+                        if msg_id:
+                            active_fundings[symbol] = {
+                                "msg_id": msg_id,
+                                "last_rates_str": rates_key,
+                                "last_text": msg
+                            }
+
+            # Проверка на нормализацию фандинга (когда ставки упали ниже порогов)
+            normalized_syms = []
+            for symbol in list(active_fundings.keys()):
+                if symbol not in current_active_symbols:
+                    normalized_syms.append(symbol)
+
+            for symbol in normalized_syms:
+                data = active_fundings.pop(symbol, None)
+                if data:
+                    norm_msg = data["last_text"] + f"\n\n✅ **Фандинг вернулся в норму в {time.strftime('%H:%M')}**"
+                    edit_topic_message("FUNDING", data["msg_id"], norm_msg)
 
         except Exception as e:
             print(f"Funding Monitor Error: {e}")
@@ -654,7 +694,6 @@ def monitor_news():
         ("https://bitcoinmagazine.com/.rss/full/", "NEWS")
     ]
     while True:
-        # Прямые запросы к разделам Promo / Launchpool / Airdrop для ВСЕХ 9 бирж
         fetch_binance_promos()
         fetch_bybit_promos()
         fetch_okx_promos()
@@ -683,7 +722,7 @@ def monitor_news():
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     
-    send_to_topic("SPREAD", "🚀 **Бот запущен и работает в штатном режиме (морятся все 9 бирж)!**")
+    send_to_topic("SPREAD", "🚀 **Бот запущен и работает в штатном режиме (авто-обновление и история активны)!**")
     
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()

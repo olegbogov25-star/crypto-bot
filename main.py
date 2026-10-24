@@ -336,6 +336,7 @@ def fetch_global_crypto_promos():
 
 # ==================== FUTURES & SPOT DATA FETCHING ====================
 def fetch_futures_data():
+    global latest_prices_cache
     prices, volumes, fundings, funding_times = {}, {}, {}, {}
     
     try:
@@ -470,12 +471,12 @@ def fetch_futures_data():
                 volumes.setdefault(sym, {})['Ourbit'] = float(item.get('vol', 0))
     except Exception: pass
 
-    # Подтягиваем SPOT рынки для щитков и редких монет (Binance Spot & MEXC Spot)
+    # Подтягиваем SPOT рынки для щитков и редких монет
     try:
         r = requests.get("https://api.binance.com/api/v3/ticker/price", timeout=5).json()
         for item in r:
             sym = normalize_symbol(item['symbol'])
-            if sym and sym not in latest_prices_cache:
+            if sym:
                 prices.setdefault(sym, {})['BinanceSpot'] = float(item['price'])
     except Exception: pass
 
@@ -483,12 +484,10 @@ def fetch_futures_data():
         r = requests.get("https://www.mexc.com/open/api/v2/market/ticker", timeout=5).json().get('data', [])
         for item in r:
             sym = normalize_symbol(item.get('symbol', ''))
-            if sym and 'symbol' in item:
+            if sym:
                 prices.setdefault(sym, {})['MEXCSpot'] = float(item.get('close', 0))
     except Exception: pass
 
-    # Обновляем глобальный кэш цен для калькулятора (включая щитки со спота)
-    global latest_prices_cache
     for sym, ex_dict in prices.items():
         if ex_dict:
             latest_prices_cache[sym] = list(ex_dict.values())[0]
@@ -659,7 +658,6 @@ def monitor_funding():
 # ==================== HANDLERS: VOLUME CALCULATOR & COIN PRICE ====================
 @bot.message_handler(func=lambda message: message.text and message.text.startswith('/vol'))
 def handle_volume_calculator(message):
-    """Калькулятор стоимости 1K объема по команде /vol [затраты] [объем]"""
     try:
         parts = message.text.strip().split()
         if len(parts) < 3:
@@ -677,7 +675,7 @@ def handle_volume_calculator(message):
         reply_text = (
             f"📊 **Расчет стоимости объема:**\n"
             f"💵 **Затраты:** `${cost:,.2f}`\n"
-            f"📈 **Объем:** `{volume_k * 1,000:,.0f}` (`{volume_k}K`)\n"
+            f"📈 **Объем:** `{volume_k * 1000:,.0f}` (`{volume_k}K`)\n"
             f"💎 **Цена за 1K объема:** **`${cost_per_1k:,.2f}`**"
         )
 
@@ -693,7 +691,6 @@ def handle_volume_calculator(message):
 
 @bot.message_handler(func=lambda message: message.text and not message.text.startswith('/'))
 def handle_calculator(message):
-    """Универсальный калькулятор монет (для нормальных монеток и щитков)"""
     try:
         text = message.text.strip()
         match = re.match(r'^([\d\.]+)\s+([a-zA-Z0-9]+)$', text)
@@ -706,7 +703,6 @@ def handle_calculator(message):
 
         price = 0.0
 
-        # 1. Поиск в кэше со всех бирж и спота
         if symbol in latest_prices_cache and latest_prices_cache[symbol] > 0:
             price = latest_prices_cache[symbol]
 
@@ -717,7 +713,6 @@ def handle_calculator(message):
                     symbol = cached_sym
                     break
 
-        # 2. Прямой запрос к Binance Spot API для щитков
         if price <= 0:
             try:
                 r = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}", timeout=3).json()
@@ -725,7 +720,6 @@ def handle_calculator(message):
                     price = float(r['price'])
             except: pass
 
-        # 3. Прямой запрос к CoinGecko API (для редких щитков)
         if price <= 0:
             try:
                 cg = requests.get(f"https://api.coingecko.com/api/v3/simple/price?ids={raw_coin.lower()}&vs_currencies=usdt", timeout=3).json()

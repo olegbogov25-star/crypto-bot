@@ -266,10 +266,11 @@ def fetch_telegram_channels_promos():
             print(f"Telegram Channels Monitor Error: {e}")
             time.sleep(60)
 
-# ==================== DIRECT EXCHANGE PROMOS API PARSER ====================
+# ==================== DIRECT EXCHANGE WEBSITES & APIS SCRAPER ====================
 def fetch_direct_exchange_promos():
     while True:
         try:
+            # 1. Binance Direct API
             binance_api = "https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=48&pageNo=1&pageSize=10"
             res = secure_request(binance_api, timeout=6)
             if res:
@@ -282,6 +283,7 @@ def fetch_direct_exchange_promos():
                     raw_text = f"Binance Direct API Promo / Campaign: {title}\nLink: {link}"
                     process_item(art_id, raw_text, link, "BINANCE")
 
+            # 2. MEXC Support API
             mexc_api = "https://www.mexc.com/api/support/list?categoryId=19&page=1&pageSize=10"
             res_mexc = secure_request(mexc_api, timeout=6)
             if res_mexc:
@@ -292,8 +294,37 @@ def fetch_direct_exchange_promos():
                     link = f"https://www.mexc.com/support/articles/{item.get('id')}"
                     raw_text = f"MEXC Direct API Promo / Campaign: {title}\nLink: {link}"
                     process_item(item_id, raw_text, link, "MEXC")
+
+            # 3. Официальные веб-сайты остальных бирж (Прямой веб-скрейпинг анонсов)
+            websites = [
+                ("OKX", "https://www.okx.com/help/section/announcements-latest-promotions", "a"),
+                ("BITGET", "https://www.bitget.com/support/articles/latest-activities", "a"),
+                ("GATE", "https://www.gate.io/articlelist/ann", "a"),
+                ("KUCOIN", "https://www.kucoin.com/news/categories/promotion", "a"),
+                ("WHITEBIT", "https://blog.whitebit.com/category/events/", "h2")
+            ]
+
+            for ex_name, site_url, tag in websites:
+                web_res = secure_request(site_url, timeout=8)
+                if not web_res: continue
+                soup = BeautifulSoup(web_res.text, 'html.parser')
+                elements = soup.find_all(tag, limit=15)
+                for el in elements:
+                    title = el.get_text(strip=True)
+                    if len(title) < 15: continue
+                    link = el.get('href', '')
+                    if link and not link.startswith('http'):
+                        if ex_name == "OKX": link = f"https://www.okx.com{link}"
+                        elif ex_name == "BITGET": link = f"https://www.bitget.com{link}"
+                        elif ex_name == "GATE": link = f"https://www.gate.io{link}"
+                        elif ex_name == "KUCOIN": link = f"https://www.kucoin.com{link}"
+                    
+                    item_id = f"web_{ex_name.lower()}_{abs(hash(title))}"
+                    raw_text = f"Official Website Announcement [{ex_name}]: {title}\nLink: {link if link else site_url}"
+                    process_item(item_id, raw_text, link if link else site_url, ex_name)
+
         except Exception as e:
-            print(f"Direct Promos API Error: {e}")
+            print(f"Direct Promos Website/API Error: {e}")
         time.sleep(1200)
 
 # ==================== GLOBAL CRYPTO APIS & RSS ====================
@@ -711,7 +742,7 @@ def handle_calculator(message):
     try:
         text = message.text.strip()
         
-        # Поддержка как раздельного написания ("10000 zig"), так и слитного ("1zig", "10000zig")
+        # Поддержка слитного и раздельного написания ("1zig", "10000 zig")
         match = re.match(r'^([\d\.\s]+)\s*([a-zA-Z0-9]+)$', text)
         if not match:
             return

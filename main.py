@@ -81,20 +81,21 @@ def secure_request(url, timeout=10):
 # ==================== LINK GENERATORS ====================
 def get_exchange_url(exchange, symbol="BTCUSDT"):
     base_sym = symbol.replace('USDT', '')
+    ex_upper = exchange.upper()
     links = {
-        "Binance": f"https://www.binance.com/en/futures/{base_sym}USDT",
-        "Bybit": f"https://www.bybit.com/trade/usdt/{base_sym}USDT",
+        "BINANCE": f"https://www.binance.com/en/futures/{base_sym}USDT",
+        "BYBIT": f"https://www.bybit.com/trade/usdt/{base_sym}USDT",
         "OKX": f"https://www.okx.com/trade-swap/{base_sym.lower()}-usdt-swap",
-        "Gate": f"https://www.gate.io/futures/USDT/{base_sym}_USDT",
-        "Bitget": f"https://www.bitget.com/futures/usdt/{base_sym}USDT",
+        "GATE": f"https://www.gate.io/futures/USDT/{base_sym}_USDT",
+        "BITGET": f"https://www.bitget.com/futures/usdt/{base_sym}USDT",
         "MEXC": f"https://futures.mexc.com/exchange/{base_sym}_USDT",
-        "BingX": f"https://bingx.com/en/futures/forward/{base_sym}USDT",
-        "KuCoin": f"https://www.kucoin.com/futures/trade/{base_sym}USDTM",
-        "WhiteBit": f"https://whitebit.com/trade/{base_sym}_USDT?type=futures",
-        "Kraken": f"https://futures.kraken.com",
-        "Ourbit": f"https://www.ourbit.com/futures/trade/{base_sym}_USDT"
+        "BINGX": f"https://bingx.com/en/futures/forward/{base_sym}USDT",
+        "KUCOIN": f"https://www.kucoin.com/futures/trade/{base_sym}USDTM",
+        "WHITEBIT": f"https://whitebit.com/trade/{base_sym}_USDT?type=futures",
+        "KRAKEN": f"https://futures.kraken.com",
+        "OURBIT": f"https://www.ourbit.com/futures/trade/{base_sym}_USDT"
     }
-    return links.get(exchange, "https://www.binance.com")
+    return links.get(ex_upper, None)
 
 def normalize_symbol(raw_sym):
     if not raw_sym:
@@ -189,15 +190,15 @@ def process_item(item_id, raw_text, link, default_topic):
     if target_topic not in TOPICS:
         target_topic = "NEWS"
 
-    markup = None
-    # Генерируем прямую ссылку на приложение/биржу вместо сырой ссылки на тг-пост
-    direct_url = get_exchange_url(target_topic) if target_topic in TOPICS and target_topic not in ["NEWS", "SPREAD", "FUNDING"] else link
-    if not direct_url or direct_url == "https://google.com":
+    # Корректная генерация ссылки: если биржа известна — берем её веб-версию, иначе оставляем ссылку на пост
+    direct_url = get_exchange_url(target_topic) if target_topic in TOPICS and target_topic not in ["NEWS", "SPREAD", "FUNDING"] else None
+    if not direct_url:
         direct_url = link
 
+    markup = None
     if direct_url and direct_url.startswith("http"):
         markup = InlineKeyboardMarkup()
-        app_button = InlineKeyboardButton(f"📱 Открыть приложение ({target_topic})", url=direct_url)
+        app_button = InlineKeyboardButton(f"🌐 Открыть источник ({target_topic})", url=direct_url)
         markup.add(app_button)
 
     send_to_topic(target_topic, ai_result, reply_markup=markup)
@@ -229,12 +230,12 @@ def fetch_telegram_channels_promos():
                     soup = BeautifulSoup(res.text, 'html.parser')
                     messages = soup.find_all('div', class_='tgme_widget_message')
                     
-                    # ОГРАНИЧЕНИЕ: Берем только 3 последних поста, чтобы не тратить баланс ИИ при редеплое
+                    # ОГРАНИЧЕНИЕ: Берем только последние 3 поста для экономии баланса ИИ
                     for msg in messages[-3:]:
                         msg_id_attr = msg.get('data-post', '')
                         if not msg_id_attr: continue
                         
-                        # ЗАЩИТА ОТ СТАРЫХ ПОСТОВ
+                        # ЗАЩИТА ОТ СТАРЫХ ПОСТОВ (архивные посты отсекаются)
                         date_elem = msg.find('time', class_='tgme_widget_message_date')
                         if date_elem and date_elem.has_attr('datetime'):
                             post_date_str = date_elem['datetime'][:10]
@@ -465,6 +466,7 @@ def monitor_spread():
             for sym, ex_data in prices.items():
                 sym_vols = volumes.get(sym, {})
                 
+                # ЖЕСТКИЙ ФИЛЬТР ЛИКВИДНОСТИ: убираем биржи с объемом ниже $500,000
                 valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 500_000}
 
                 if len(valid_ex_data) < 2:

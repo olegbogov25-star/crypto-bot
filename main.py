@@ -30,14 +30,14 @@ TOPICS = {
     "WHITEBIT": 72, 
     "KRAKEN": 73,   
     "GATE": 67,     
-    "OKX": 2,       # При необходимости укажи точный ID топика OKX в супергруппе
+    "OKX": 2,       
     "FUNDING": 76,  
     "SPREAD": 77    
 }
 
 processed_ids = set()
-active_spreads = {}   # {sym: {"msg_id": int, "start_time": float, "last_text": str, "min_ex": str, "max_ex": str, "min_p": float, "max_p": float}}
-active_fundings = {}  # {symbol: {"msg_id": int, "last_rates_str": str, "last_text": str}}
+active_spreads = {}   
+active_fundings = {}  
 
 KYIV_TZ = pytz.timezone("Europe/Kyiv")
 
@@ -56,7 +56,7 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# ==================== SECURE REQUESTS (ОБХОД CLOUDFLARE / WAF) ====================
+# ==================== SECURE REQUESTS ====================
 BROWSER_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
@@ -64,26 +64,21 @@ BROWSER_HEADERS = {
     "Accept-Encoding": "gzip, deflate, br",
     "Connection": "keep-alive",
     "Upgrade-Insecure-Requests": "1",
-    "Sec-Ch-Ua": '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
-    "Sec-Ch-Ua-Mobile": "?0",
-    "Sec-Ch-Ua-Platform": '"Windows"',
     "Cache-Control": "max-age=0"
 }
 
 def secure_request(url, timeout=10):
-    """Безопасный запрос с имитацией браузера для обхода защитных экранов бирж"""
     try:
         response = requests.get(url, headers=BROWSER_HEADERS, timeout=timeout)
         if response.status_code == 200:
             return response
         else:
-            print(f"⚠️ Защита биржи вернула код {response.status_code} для: {url}")
             return None
     except Exception as e:
         print(f"❌ Secure Request Error ({url}): {e}")
         return None
 
-# ==================== LINK GENERATORS & DEEPLINKS ====================
+# ==================== LINK GENERATORS ====================
 def get_exchange_url(exchange, symbol):
     base_sym = symbol.replace('USDT', '')
     links = {
@@ -114,33 +109,24 @@ def normalize_symbol(raw_sym):
             sym += 'USDT'
     return sym
 
-# ==================== ADVANCED AI & PROMO ANALYZER (АНТИ-ШУМ + РАСЧЕТ ЗАТРАТ) ====================
+# ==================== ADVANCED AI & PROMO ANALYZER ====================
 def analyze_text(text):
     if not OPENROUTER_API_KEY:
         return text
     prompt = f"""
-Ты — профессиональный финансовый аналитик крипто-анонсов, промо-акций и торговых ивентов. Твоя задача — находить и структурировать любые потенциальные активности, квизы, мини-приложения (Mini Apps), лаунчпулы, мегадропы, баунти, Web3-ивенты, раздачи, IDO и розыгрыши.
-
-МЯГКИЙ ФИЛЬТР (SKIP только для явного мусора):
-Ответь строго одним словом "SKIP", ТОЛЬКО если это:
-1. Судебные иски, регуляторные запреты или сухие официальные отчеты компаний.
-2. Техническое обслуживание сетей или плановые кошельковые работы БЕЗ каких-либо бонусов/акций для пользователей.
-
-В ЛЮБЫХ ДРУГИХ СЛУЧАЯХ сформируй подробный отчет строго по форме:
-1. 📌 **Источник / Платформа:** Название биржи или Web3-кошелька.
-2. 🏷 **Тип события / Теги:** (#OKX_Web3 #Binance_Web3 #Bybit_Web3 #Web3 #Launchpool #Launchpad #Airdrop #TokenSplash #Promotion #MiniApp и др.).
+Ты — профессиональный финансовый аналитик крипто-анонсов и промо-акций. Найди и структурируй активности, лаунчпулы, баунти, раздачи и аирдропы.
+Ответь строго одним словом "SKIP", если это судебные иски или тех. обслуживание без бонусов.
+В остальных случаях сформируй отчет по форме:
+1. 📌 **Источник / Платформа:**
+2. 🏷 **Тип события / Теги:**
 3. 🪙 **Токен / Проект.**
 4. 📅 **Даты проведения.**
 5. 📋 **Краткое описание.**
-6. ⚡ **Пошаговая инструкция (как участвовать, куда нажимать).**
+6. ⚡ **Пошаговая инструкция.**
 7. 🎁 **Награды / Призовой фонд.**
-8. 💡 **Финансовый расчет (Затраты и Профит):**
-   - 💸 **Обязательные затраты:** (Учти стоимость открытия боксов/билетов, комиссии за спотовый/фьючерсный объем сделок, сетевые комиссии).
-   - 💰 **Ожидаемый валовый доход:** (Сумма потенциальной награды).
-   - 📈 **Чистый потенциальный профит:** (Доход минус затраты с учетом рисков).
+8. 💡 **Финансовый расчет (Затраты и Профит).**
 
-Текст для анализа:
-{text}
+Текст: {text}
 """
     try:
         res = requests.post(
@@ -149,8 +135,7 @@ def analyze_text(text):
             json={"model": "openai/gpt-4o-mini", "messages": [{"role": "user", "content": prompt}]},
             timeout=15
         )
-        data = res.json()
-        return data['choices'][0]['message']['content'].strip()
+        return res.json()['choices'][0]['message']['content'].strip()
     except Exception as e:
         print(f"AI Error: {e}")
         return text
@@ -200,32 +185,14 @@ def process_item(item_id, raw_text, link, default_topic):
     if "SKIP" in ai_result.upper():
         return
     
-    # Жесткая фиксация топика по источнику (исключает перепутывание бирж)
     target_topic = default_topic.upper()
     if target_topic not in TOPICS:
         target_topic = "NEWS"
 
-    # Официальные мобильные смарт-шлюзы, которые телефон перехватывает и открывает в приложении
-    MOBILE_APP_URLS = {
-        "BINANCE": "https://www.binance.com/activity",
-        "BYBIT": "https://www.bybit.com/app/re-direct",
-        "OKX": "https://www.okx.com/campaigns",
-        "BITGET": "https://www.bitget.com/events",
-        "MEXC": "https://www.mexc.com/landings",
-        "GATE": "https://www.gate.io/activities",
-        "BINGX": "https://bingx.com/act",
-        "KUCOIN": "https://www.kucoin.com/landings",
-        "WHITEBIT": "https://whitebit.com/referral",
-        "KRAKEN": "https://www.kraken.com"
-    }
-
     markup = None
     if link and link.startswith("http"):
         markup = InlineKeyboardMarkup()
-        ex_key = target_topic.upper()
-        # Используем смарт-ссылку редиректа для принудительного открытия приложения на мобилке
-        app_url = MOBILE_APP_URLS.get(ex_key, link)
-        app_button = InlineKeyboardButton(f"📱 Открыть в приложении {ex_key}", url=app_url)
+        app_button = InlineKeyboardButton(f"📱 Открыть анонс ({target_topic})", url=link)
         markup.add(app_button)
 
     send_to_topic(target_topic, ai_result, reply_markup=markup)
@@ -252,21 +219,18 @@ def fetch_telegram_channels_promos():
                 for chan in chan_list:
                     url = f"https://t.me/s/{chan}"
                     res = secure_request(url, timeout=8)
-                    if not res:
-                        continue
+                    if not res: continue
                     
                     soup = BeautifulSoup(res.text, 'html.parser')
                     messages = soup.find_all('div', class_='tgme_widget_message')
                     
                     for msg in messages[-15:]:
                         msg_id_attr = msg.get('data-post', '')
-                        if not msg_id_attr:
-                            continue
+                        if not msg_id_attr: continue
                         
                         item_id = f"tg_chan_{msg_id_attr.replace('/', '_')}"
                         text_div = msg.find('div', class_='tgme_widget_message_text')
-                        if not text_div:
-                            continue
+                        if not text_div: continue
                         
                         raw_text = text_div.get_text(separator='\n', strip=True)
                         post_link = f"https://t.me/{msg_id_attr}"
@@ -282,7 +246,7 @@ def fetch_telegram_channels_promos():
             print(f"Telegram Channels Monitor Error: {e}")
             time.sleep(60)
 
-# ==================== GLOBAL CRYPTO APIS, RSS & WEB3 AGGREGATORS MONITOR ====================
+# ==================== GLOBAL CRYPTO APIS & RSS ====================
 def fetch_global_crypto_promos():
     sources = [
         ("https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=48&pageNo=1&pageSize=20", "BINANCE"),
@@ -305,10 +269,7 @@ def fetch_global_crypto_promos():
                     raw_text = f"Global Official Announcement / Event: {title}\nLink: {link}"
                     process_item(art_id, raw_text, link, topic)
 
-            rss_feeds = [
-                "https://cointelegraph.com/rss",
-                "https://cryptopotato.com/feed/"
-            ]
+            rss_feeds = ["https://cointelegraph.com/rss", "https://cryptopotato.com/feed/"]
             for feed_url in rss_feeds:
                 try:
                     feed = feedparser.parse(feed_url)
@@ -321,18 +282,13 @@ def fetch_global_crypto_promos():
                         process_item(entry_id, raw_text, link, "NEWS")
                 except Exception as rss_err:
                     print(f"RSS Parse Error ({feed_url}): {rss_err}")
-
         except Exception as e:
             print(f"Global Promos Monitor Error: {e}")
-        
         time.sleep(900)
 
 # ==================== FUTURES DATA & LIQUIDITY FETCHING ====================
 def fetch_futures_data():
-    prices = {}
-    volumes = {}
-    fundings = {}
-    funding_times = {}
+    prices, volumes, fundings, funding_times = {}, {}, {}, {}
     
     try:
         r = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=5).json()
@@ -350,8 +306,7 @@ def fetch_futures_data():
             if sym:
                 fundings.setdefault(sym, {})['Binance'] = float(item['lastFundingRate']) * 100
                 next_time = int(item.get('nextFundingTime', 0)) // 1000
-                if next_time > 0:
-                    funding_times.setdefault(sym, {})['Binance'] = next_time
+                if next_time > 0: funding_times.setdefault(sym, {})['Binance'] = next_time
     except Exception: pass
 
     try:
@@ -365,8 +320,7 @@ def fetch_futures_data():
                 if item.get('fundingRate'):
                     fundings.setdefault(sym, {})['Bybit'] = float(item['fundingRate']) * 100
                     next_time = int(item.get('nextFundingTime', 0)) // 1000
-                    if next_time > 0:
-                        funding_times.setdefault(sym, {})['Bybit'] = next_time
+                    if next_time > 0: funding_times.setdefault(sym, {})['Bybit'] = next_time
     except Exception: pass
 
     try:
@@ -385,8 +339,7 @@ def fetch_futures_data():
             if sym and item.get('fundingRate'):
                 fundings.setdefault(sym, {})['OKX'] = float(item['fundingRate']) * 100
                 next_time = int(item.get('nextFundingTime', 0)) // 1000
-                if next_time > 0:
-                    funding_times.setdefault(sym, {})['OKX'] = next_time
+                if next_time > 0: funding_times.setdefault(sym, {})['OKX'] = next_time
     except Exception: pass
 
     try:
@@ -399,8 +352,7 @@ def fetch_futures_data():
                 if 'funding_rate' in item:
                     fundings.setdefault(sym, {})['Gate'] = float(item['funding_rate']) * 100
                     next_time = int(item.get('funding_next_time', 0))
-                    if next_time > 0:
-                        funding_times.setdefault(sym, {})['Gate'] = next_time
+                    if next_time > 0: funding_times.setdefault(sym, {})['Gate'] = next_time
     except Exception: pass
 
     try:
@@ -413,8 +365,7 @@ def fetch_futures_data():
                 if item.get('fundingRate'):
                     fundings.setdefault(sym, {})['Bitget'] = float(item['fundingRate']) * 100
                     next_time = int(item.get('nextFundingTime', 0)) // 1000
-                    if next_time > 0:
-                        funding_times.setdefault(sym, {})['Bitget'] = next_time
+                    if next_time > 0: funding_times.setdefault(sym, {})['Bitget'] = next_time
     except Exception: pass
 
     try:
@@ -427,8 +378,7 @@ def fetch_futures_data():
                 if 'fundingRate' in item:
                     fundings.setdefault(sym, {})['MEXC'] = float(item['fundingRate']) * 100
                     next_time = int(item.get('nextSettleTime', 0)) // 1000
-                    if next_time > 0:
-                        funding_times.setdefault(sym, {})['MEXC'] = next_time
+                    if next_time > 0: funding_times.setdefault(sym, {})['MEXC'] = next_time
     except Exception: pass
 
     try:
@@ -447,8 +397,7 @@ def fetch_futures_data():
             if sym and 'lastFundingRate' in item:
                 fundings.setdefault(sym, {})['BingX'] = float(item['lastFundingRate']) * 100
                 next_time = int(item.get('nextFundingTime', 0)) // 1000
-                if next_time > 0:
-                    funding_times.setdefault(sym, {})['BingX'] = next_time
+                if next_time > 0: funding_times.setdefault(sym, {})['BingX'] = next_time
     except Exception: pass
 
     try:
@@ -461,8 +410,7 @@ def fetch_futures_data():
                 if 'fundingFeeRate' in item:
                     fundings.setdefault(sym, {})['KuCoin'] = float(item['fundingFeeRate']) * 100
                     next_time = int(item.get('nextFundingRateTime', 0)) // 1000
-                    if next_time > 0:
-                        funding_times.setdefault(sym, {})['KuCoin'] = next_time
+                    if next_time > 0: funding_times.setdefault(sym, {})['KuCoin'] = next_time
     except Exception: pass
 
     try:
@@ -477,19 +425,14 @@ def fetch_futures_data():
     return prices, volumes, fundings, funding_times
 
 def format_volume(vol):
-    if vol >= 1_000_000:
-        return f"${vol / 1_000_000:.1f}M (24h)"
-    elif vol >= 1_000:
-        return f"${vol / 1_000:.1f}K (24h)"
-    else:
-        return f"${vol:.0f} (24h)"
+    if vol >= 1_000_000: return f"${vol / 1_000_000:.1f}M (24h)"
+    elif vol >= 1_000: return f"${vol / 1_000:.1f}K (24h)"
+    else: return f"${vol:.0f} (24h)"
 
 def format_countdown(target_timestamp):
-    if not target_timestamp:
-        return "N/A"
+    if not target_timestamp: return "N/A"
     diff = target_timestamp - time.time()
-    if diff <= 0:
-        return "0ч 00м"
+    if diff <= 0: return "0ч 00м"
     hours = int(diff // 3600)
     minutes = int((diff % 3600) // 60)
     return f"{hours}ч {minutes:02d}м"
@@ -504,7 +447,9 @@ def monitor_spread():
 
             for sym, ex_data in prices.items():
                 sym_vols = volumes.get(sym, {})
-                valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) > 0}
+                
+                # ЖЕСТКИЙ ФИЛЬТР ЛИКВИДНОСТИ: убираем биржи с объемом ниже $500,000, чтобы не было фейковых спредов на мертвых стаканах
+                valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 500_000}
 
                 if len(valid_ex_data) < 2:
                     continue
@@ -517,7 +462,8 @@ def monitor_spread():
                 if min_p <= 0: continue
                 spread = ((max_p - min_p) / min_p) * 100
                 
-                if 7.0 <= spread <= 30.0:
+                # Подняли порог спреда от 5% до 30%
+                if 5.0 <= spread <= 30.0:
                     current_scanned_syms.add(sym)
 
                     if spread >= 15.0:
@@ -525,7 +471,7 @@ def monitor_spread():
                     elif spread >= 10.0:
                         badge = "🔥 **HIGH SPREAD (>= 10%)**"
                     else:
-                        badge = "⚡ **STRONG SPREAD (>= 7%)**"
+                        badge = "⚡ **STRONG SPREAD (>= 5%)**"
 
                     vol_min = sym_vols.get(min_ex, 0) * 0.01
                     vol_max = sym_vols.get(max_ex, 0) * 0.01
@@ -533,13 +479,8 @@ def monitor_spread():
                     if max_pos_usdt < 100: max_pos_usdt = 100
 
                     risk_tag = ""
-                    low_liq_exs = [ex for ex, v in sym_vols.items() if v < 10000 and ex in valid_ex_data]
-                    
                     if spread > 25.0:
                         risk_tag = "\n⚠️ **RISK: Аномальный спред / Риск делистинга!**\n"
-                    elif low_liq_exs:
-                        bad_exs_str = ", ".join(low_liq_exs)
-                        risk_tag = f"\n⚠️ **RISK: Низкая ликвидность / Мертвый стакан ({bad_exs_str})**\n"
 
                     sym_funds = fundings.get(sym, {})
                     min_fund = sym_funds.get(min_ex, 0.0)
@@ -557,40 +498,28 @@ def monitor_spread():
                     
                     overview = "\n".join(overview_list)
 
+                    msg_text = (
+                        f"{badge}\n"
+                        f"🪙 **#{sym} | Spread: `{spread:.2f}%`**\n"
+                        f"{risk_tag}\n"
+                        f"🟢 **Long ({min_ex}):** `${min_p}` (Funding: `{min_fund:.2f}%`)\n"
+                        f"🔴 **Short ({max_ex}):** `${max_p}` (Funding: `{max_fund:.2f}%`)\n\n"
+                        f"💰 **Доступный объем позиции:** `~${max_pos_usdt:,} USDT`\n\n"
+                        f"📝 **All Exchanges Overview (ликвидные стаканы):**\n{overview}\n\n"
+                        f"🔄 _Обновлено: {curr_time_str} (Киев)_"
+                    )
+
                     if sym in active_spreads:
                         fund_info = active_spreads[sym]
                         fund_info["min_ex"] = min_ex
                         fund_info["max_ex"] = max_ex
                         fund_info["min_p"] = min_p
                         fund_info["max_p"] = max_p
-
-                        msg_text = (
-                            f"{badge}\n"
-                            f"🪙 **#{sym} | Spread: `{spread:.2f}%`**\n"
-                            f"{risk_tag}\n"
-                            f"🟢 **Long ({min_ex}):** `${min_p}` (Funding: `{min_fund:.2f}%`)\n"
-                            f"🔴 **Short ({max_ex}):** `${max_p}` (Funding: `{max_fund:.2f}%`)\n\n"
-                            f"💰 **Доступный объем позиции:** `~${max_pos_usdt:,} USDT`\n\n"
-                            f"📝 **All Exchanges Overview (по ликвидности):**\n{overview}\n\n"
-                            f"🔄 _Обновлено: {curr_time_str} (Киев)_"
-                        )
+                        fund_info["last_text"] = msg_text
 
                         if fund_info["last_text"] != msg_text:
-                            success = edit_topic_message("SPREAD", fund_info["msg_id"], msg_text)
-                            if success:
-                                fund_info["last_text"] = msg_text
+                            edit_topic_message("SPREAD", fund_info["msg_id"], msg_text)
                     else:
-                        msg_text = (
-                            f"{badge}\n"
-                            f"🪙 **#{sym} | Spread: `{spread:.2f}%`**\n"
-                            f"{risk_tag}\n"
-                            f"🟢 **Long ({min_ex}):** `${min_p}` (Funding: `{min_fund:.2f}%`)\n"
-                            f"🔴 **Short ({max_ex}):** `${max_p}` (Funding: `{max_fund:.2f}%`)\n\n"
-                            f"💰 **Доступный объем позиции:** `~${max_pos_usdt:,} USDT`\n\n"
-                            f"📝 **All Exchanges Overview (по ликвидности):**\n{overview}\n\n"
-                            f"🔄 _Обновлено: {curr_time_str} (Киев)_"
-                        )
-
                         msg_id = send_to_topic("SPREAD", msg_text)
                         if msg_id:
                             active_spreads[sym] = {
@@ -610,7 +539,7 @@ def monitor_spread():
                 else:
                     ex_data = prices[sym]
                     sym_vols = volumes.get(sym, {})
-                    valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) > 0}
+                    valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 500_000}
                     if len(valid_ex_data) >= 2:
                         curr_min = min(valid_ex_data.values())
                         curr_max = max(valid_ex_data.values())
@@ -646,19 +575,13 @@ def monitor_funding():
             curr_time_str = get_kyiv_time()
 
             for symbol, ex_rates in all_funding.items():
-                if len(ex_rates) < 2:
-                    continue
+                if len(ex_rates) < 2: continue
                 
                 min_ex = min(ex_rates, key=ex_rates.get)
                 max_ex = max(ex_rates, key=ex_rates.get)
-                min_rate = ex_rates[min_ex]
-                max_rate = ex_rates[max_ex]
+                funding_spread = ex_rates[max_ex] - ex_rates[min_ex]
                 
-                funding_spread = max_rate - min_rate
-                has_high_absolute = any(abs(rate) >= 1.0 for rate in ex_rates.values())
-                has_funding_spread = funding_spread >= 1.0
-                
-                if has_high_absolute or has_funding_spread:
+                if any(abs(rate) >= 1.0 for rate in ex_rates.values()) or funding_spread >= 1.0:
                     current_active_symbols.add(symbol)
                     rates_key = "_".join([f"{ex}:{rate:.2f}" for ex, rate in sorted(ex_rates.items())])
                     
@@ -672,8 +595,7 @@ def monitor_funding():
                     overview_list = []
                     for ex, r in sorted(ex_rates.items(), key=lambda x: x[1], reverse=True):
                         url = get_exchange_url(ex, symbol)
-                        target_t = sym_times.get(ex, 0)
-                        countdown_str = format_countdown(target_t)
+                        countdown_str = format_countdown(sym_times.get(ex, 0))
                         overview_list.append(f"🔹 [{ex}]({url}): `{r:.2f}%` (⏱ {countdown_str})")
                     
                     overview = "\n".join(overview_list)
@@ -702,12 +624,7 @@ def monitor_funding():
                                 "last_text": msg
                             }
 
-            normalized_syms = []
-            for symbol in list(active_fundings.keys()):
-                if symbol not in current_active_symbols:
-                    normalized_syms.append(symbol)
-
-            for symbol in normalized_syms:
+            for symbol in [s for s in list(active_fundings.keys()) if s not in current_active_symbols]:
                 data = active_fundings.pop(symbol, None)
                 if data:
                     norm_msg = data["last_text"] + f"\n\n✅ **Фандинг вернулся в норму в {get_kyiv_date_time()} (Киев)**"

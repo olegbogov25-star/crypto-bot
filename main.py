@@ -35,7 +35,7 @@ TOPICS = {
     "OKX": 2,       
     "FUNDING": 76,  
     "SPREAD": 77,
-    "CHAT": 1       # ID топика «Чат» для калькулятора и запросов монет
+    "CHAT": 1       # ID топика «Чат» для калькулятора, /vol и запросов монет
 }
 
 processed_ids = set()
@@ -751,7 +751,7 @@ def monitor_funding():
             print(f"Funding Monitor Error: {e}")
         time.sleep(60)
 
-# ==================== CHAT BOT HANDLER (CALCULATOR & COINS) ====================
+# ==================== CHAT BOT HANDLER (CALCULATOR, /VOL & COINS) ====================
 @bot.message_handler(func=lambda message: True)
 def handle_chat_messages(message):
     if not message.text:
@@ -759,7 +759,32 @@ def handle_chat_messages(message):
     
     text = message.text.strip()
 
-    # 1. Математический калькулятор (минус/плюс, поддерживает пробелы и слитно, например: 53.6-51.9)
+    # 0. Обработка команды /vol [цена1] [цена2] (или просто через пробелы/запятые)
+    if text.lower().startswith('/vol') or text.lower().startswith('vol'):
+        nums = re.findall(r'\d+(?:\.\d+)?', text)
+        if len(nums) >= 2:
+            try:
+                p1 = float(nums[0])
+                p2 = float(nums[1])
+                # Расчет: общая сумма траты за комиссию общего объема и на 1К объема
+                total_spend = p1 + p2
+                fee_rate = 0.0004  # Средняя тейкер комиссия 0.04%
+                commission = total_spend * fee_rate
+                spend_per_1k = (total_spend / 1000) if total_spend > 0 else 0
+
+                reply_vol = (
+                    f"📊 **Расчет по VOL:**\n"
+                    f"🔹 Значения: `{p1}` и `{p2}`\n"
+                    f"💰 Общая сумма траты: `{total_spend:,.4f}` USDT\n"
+                    f"🧾 Комиссия (~0.04%): `{commission:,.4f}` USDT\n"
+                    f"⚡ Затраты на 1К объема: `{spend_per_1k:,.4f}` USDT"
+                )
+                bot.reply_to(message, reply_vol, parse_mode="Markdown")
+                return
+            except Exception as e:
+                print(f"Vol calc error: {e}")
+
+    # 1. Математический калькулятор (минус/плюс, поддерживает пробелы и слитно, например: 65.11-11.76)
     math_pattern = r'^\s*([+-]?\d+(?:\.\d+)?)\s*([+\-])\s*([+-]?\d+(?:\.\d+)?)\s*$'
     match = re.match(math_pattern, text)
     if not match:
@@ -783,7 +808,7 @@ def handle_chat_messages(message):
         except Exception as e:
             print(f"Calc error: {e}")
 
-    # 2. Обрабатываем запросы монет (например: "10 000 zig", "10000zig", "1398.08 zig", "1 zig")
+    # 2. Обрабатываем запросы монет (например: "10 000 zig", "10000zig", "1 zig")
     cleaned_text = re.sub(r'(\d)\s+(\d)', r'\1\2', text)
     parts = cleaned_text.split()
     

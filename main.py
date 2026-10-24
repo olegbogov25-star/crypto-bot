@@ -665,19 +665,50 @@ def handle_calculator(message):
     try:
         text = message.text.strip()
         
-        # Проверяем формат "число + монета" (например, "1 btc" или "1417 zig")
+        # Проверяем формат "число + монета" (например, "1 btc", "1417 zig", "10 zec")
         match = re.match(r'^([\d\.]+)\s+([a-zA-Z0-9]+)$', text)
         if not match:
             return
 
         amount = float(match.group(1))
-        raw_coin = match.group(2)
+        raw_coin = match.group(2).upper()
         symbol = normalize_symbol(raw_coin)
 
-        # 1. Сначала ищем цену в нашем глобальном кэше
-        price = latest_prices_cache.get(symbol, 0.0)
+        price = 0.0
 
-        # 2. Если в кэше нет, делаем быстрый прямой запрос к публичному API Binance
+        # 1. Ищем в нашем глобальном кэше цен со всех бирж
+        if symbol in latest_prices_cache and latest_prices_cache[symbol] > 0:
+            price = latest_prices_cache[symbol]
+
+        # 2. Ищем нечетким совпадением в кэше
+        if price <= 0:
+            for cached_sym, cached_price in latest_prices_cache.items():
+                if raw_coin in cached_sym:
+                    price = cached_price
+                    symbol = cached_sym
+                    break
+
+        # 3. Если в кэше нет, запрашиваем у Bybit
+        if price <= 0:
+            try:
+                r = requests.get(f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={symbol}", timeout=3).json()
+                lst = r.get('result', {}).get('list', [])
+                if lst and 'lastPrice' in lst[0]:
+                    price = float(lst[0]['lastPrice'])
+            except:
+                pass
+
+        # 4. Если нет, запрашиваем у MEXC
+        if price <= 0:
+            try:
+                r = requests.get(f"https://contract.mexc.com/api/v1/contract/ticker?symbol={symbol}", timeout=3).json()
+                data = r.get('data', {})
+                if 'lastPrice' in data:
+                    price = float(data['lastPrice'])
+            except:
+                pass
+
+        # 5. Если нет, запрашиваем у Binance
         if price <= 0:
             try:
                 r = requests.get(f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={symbol}", timeout=3).json()
@@ -687,26 +718,18 @@ def handle_calculator(message):
                 pass
 
         if price <= 0:
-            try:
-                r = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}", timeout=3).json()
-                if 'price' in r:
-                    price = float(r['price'])
-            except:
-                pass
-
-        if price <= 0:
-            return  # Если цены нет вообще нигде, молчим
+            return  # Если монета не найдена вообще нигде, молчим
 
         total_usdt = amount * price
-        base_sym = symbol.replace('USDT', '')
+        clean_base = symbol.replace('USDT', '')
 
-        exchange_url = get_exchange_url("BINANCE", symbol)
+        exchange_url = get_exchange_url("BINANCE", symbol) or f"https://www.bybit.com/trade/usdt/{symbol}"
         markup = InlineKeyboardMarkup()
         if exchange_url:
-            markup.add(InlineKeyboardButton(f"🌐 Биржа ({base_sym})", url=exchange_url))
+            markup.add(InlineKeyboardButton(f"🌐 Биржа ({clean_base})", url=exchange_url))
 
         reply_text = (
-            f"🔍 **{amount:,.4f} {base_sym}**\n"
+            f"🔍 **{amount:,.4f} {clean_base}**\n"
             f"💵 **${total_usdt:,.2f} USDT**"
         )
 

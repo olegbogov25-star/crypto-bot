@@ -2,6 +2,7 @@ import os
 import time
 import threading
 import datetime
+import json
 import re
 import pytz
 import requests
@@ -34,12 +35,34 @@ TOPICS = {
     "OKX": 2,       
     "FUNDING": 76,  
     "SPREAD": 77,
-    "CHAT": 1       # ID топика «Чат» для калькулятора монет
+    "CHAT": 1       # ID топика «Чат» для калькулятора и запросов монет
 }
 
 processed_ids = set()
-active_spreads = {}   
 active_fundings = {}  
+
+# ==================== PERSISTENT ACTIVE SPREADS (JSON) ====================
+SPREADS_FILE = "active_spreads.json"
+
+def load_active_spreads():
+    """Загружает активные спреды из файла при старте бота"""
+    if os.path.exists(SPREADS_FILE):
+        try:
+            with open(SPREADS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def save_active_spreads(spreads_dict):
+    """Сохраняет актуальные активные спреды на диск"""
+    try:
+        with open(SPREADS_FILE, "w", encoding="utf-8") as f:
+            json.dump(spreads_dict, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        print(f"❌ Error saving spreads json: {e}")
+
+active_spreads = load_active_spreads()
 
 KYIV_TZ = pytz.timezone("Europe/Kyiv")
 
@@ -112,7 +135,6 @@ def normalize_symbol(raw_sym):
             sym += 'USDT'
     return sym
 
-# Глобальный кэш цен для калькулятора монет
 latest_prices_cache = {}
 
 # ==================== ADVANCED AI & PROMO ANALYZER ====================
@@ -233,7 +255,6 @@ def fetch_telegram_channels_promos():
                     soup = BeautifulSoup(res.text, 'html.parser')
                     messages = soup.find_all('div', class_='tgme_widget_message')
                     
-                    # Глубина парсинга увеличена до 10 последних постов
                     for msg in messages[-10:]:
                         msg_id_attr = msg.get('data-post', '')
                         if not msg_id_attr: continue
@@ -270,7 +291,6 @@ def fetch_telegram_channels_promos():
 def fetch_direct_exchange_promos():
     while True:
         try:
-            # 1. Binance Direct API
             binance_api = "https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=48&pageNo=1&pageSize=10"
             res = secure_request(binance_api, timeout=6)
             if res:
@@ -283,7 +303,6 @@ def fetch_direct_exchange_promos():
                     raw_text = f"Binance Direct API Promo / Campaign: {title}\nLink: {link}"
                     process_item(art_id, raw_text, link, "BINANCE")
 
-            # 2. MEXC Support API
             mexc_api = "https://www.mexc.com/api/support/list?categoryId=19&page=1&pageSize=10"
             res_mexc = secure_request(mexc_api, timeout=6)
             if res_mexc:
@@ -295,7 +314,6 @@ def fetch_direct_exchange_promos():
                     raw_text = f"MEXC Direct API Promo / Campaign: {title}\nLink: {link}"
                     process_item(item_id, raw_text, link, "MEXC")
 
-            # 3. Официальные веб-сайты остальных бирж (Прямой веб-скрейпинг анонсов)
             websites = [
                 ("OKX", "https://www.okx.com/help/section/announcements-latest-promotions", "a"),
                 ("BITGET", "https://www.bitget.com/support/articles/latest-activities", "a"),
@@ -498,12 +516,13 @@ def fetch_futures_data():
         r = requests.get("https://api.ourbit.com/api/v1/futures/market/tickers", timeout=5).json().get('data', [])
         for item in r:
             sym = normalize_symbol(item.get('symbol', ''))
-            if sym and 'close' in item:
-                prices.setdefault(sym, {})['Ourbit'] = float(item['close'])
-                volumes.setdefault(sym, {})['Ourbit'] = float(item.get('vol', 0))
+            price_val = float(item.get('close', item.get('lastPrice', 0)))
+            vol_val = float(item.get('vol', item.get('turnover24h', 0)))
+            if sym and price_val > 0:
+                prices.setdefault(sym, {})['Ourbit'] = price_val
+                volumes.setdefault(sym, {})['Ourbit'] = vol_val
     except Exception: pass
 
-    # Подтягиваем SPOT рынки для щитков и редких монет
     try:
         r = requests.get("https://api.binance.com/api/v3/ticker/price", timeout=5).json()
         for item in r:
@@ -555,16 +574,20 @@ def format_countdown(target_timestamp):
     minutes = int((diff % 3600) // 60)
     return f"{hours}ч {minutes:02d}м"
 
-# ==================== SPREAD & FUNDING MONITORS ====================
+# ==================== SPREAD MONITOR WITH PERSISTENT ALIGNED TRACKING ====================
 def monitor_spread():
+    global active_spreads
     while True:
         try:
             prices, volumes, fundings, _ = fetch_futures_data()
-            current_scanned_syms = set()
+            current_time = time.time()
             curr_time_str = get_kyiv_time()
+
+            current_scanned_syms = set()
 
             for sym, ex_data in prices.items():
                 sym_vols = volumes.get(sym, {})
+                # Смягчен минимальный объем или фильтр ликвидности при необходимости
                 valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 200_000}
 
                 if len(valid_ex_data) < 2:
@@ -630,21 +653,50 @@ def monitor_spread():
                         fund_info["min_p"] = min_p
                         fund_info["max_p"] = max_p
                         fund_info["last_text"] = msg_text
+                        save_active_spreads(active_spreads)
 
-                        if fund_info["last_text"] != msg_text:
+                        if fund_info.get("last_text") != msg_text:
                             edit_topic_message("SPREAD", fund_info["msg_id"], msg_text)
                     else:
                         msg_id = send_to_topic("SPREAD", msg_text)
                         if msg_id:
                             active_spreads[sym] = {
                                 "msg_id": msg_id,
-                                "start_time": time.time(),
+                                "start_time": current_time,
                                 "last_text": msg_text,
                                 "min_ex": min_ex,
                                 "max_ex": max_ex,
                                 "min_p": min_p,
                                 "max_p": max_p
                             }
+                            save_active_spreads(active_spreads)
+
+            # Проверяем спреды, которые были активны, но теперь сошлись (< 7.0%)
+            for sym in list(active_spreads.keys()):
+                if sym not in current_scanned_syms:
+                    data = active_spreads[sym]
+                    elapsed_sec = int(current_time - data["start_time"])
+                    minutes = elapsed_sec // 60
+                    seconds = elapsed_sec % 60
+                    
+                    # Проверяем актуальный последний спред или ставим 0.00%
+                    p_min = data.get("min_p", 0)
+                    p_max = data.get("max_p", 0)
+                    final_spread = 0.0
+                    if p_min > 0:
+                        final_spread = ((p_max - p_min) / p_min) * 100
+
+                    alignment_msg = (
+                        f"✅ **[{sym}] prices aligned**\n"
+                        f"⏱ Сходился: **{minutes:02d}:{seconds:02d}** (финальный спред: `{final_spread:.2f}%`)\n\n"
+                        f"📌 **Финальные цены:**\n"
+                        f"{data['min_ex']}: `${p_min}` | {data['max_ex']}: `${p_max}`"
+                    )
+                    send_to_topic("SPREAD", alignment_msg)
+                    
+                    del active_spreads[sym]
+                    save_active_spreads(active_spreads)
+
         except Exception as e:
             print(f"Spread Monitor Error: {e}")
         time.sleep(15)
@@ -653,7 +705,6 @@ def monitor_funding():
     while True:
         try:
             _, volumes_cache, all_funding, funding_times = fetch_futures_data()
-            current_active_symbols = set()
             curr_time_str = get_kyiv_time()
 
             for symbol, ex_rates in all_funding.items():
@@ -663,7 +714,6 @@ def monitor_funding():
                 funding_spread = ex_rates[max_ex] - ex_rates[min_ex]
                 
                 if any(abs(rate) >= 1.0 for rate in ex_rates.values()) or funding_spread >= 1.0:
-                    current_active_symbols.add(symbol)
                     rates_key = "_".join([f"{ex}:{rate:.2f}" for ex, rate in sorted(ex_rates.items())])
                     
                     sym_vols = volumes_cache.get(symbol, {})
@@ -701,147 +751,94 @@ def monitor_funding():
                             active_fundings[symbol] = {"msg_id": msg_id, "last_rates_str": rates_key, "last_text": msg}
         except Exception as e:
             print(f"Funding Monitor Error: {e}")
-        time.sleep(300)
+        time.sleep(60)
 
-# ==================== HANDLERS: VOLUME CALCULATOR & COIN PRICE ====================
-@bot.message_handler(func=lambda message: message.text and message.text.startswith('/vol'))
-def handle_volume_calculator(message):
-    try:
-        parts = message.text.strip().split()
-        if len(parts) < 3:
-            bot.send_message(message.chat.id, "⚠️ **Формат команды:** `/vol [затраты_usdt] [объем_в_тысячах]`\nПример: `/vol 52.5 11`", parse_mode="Markdown")
+# ==================== CHAT BOT HANDLER (CALCULATOR & COINS) ====================
+@bot.message_handler(func=lambda message: True)
+def handle_chat_messages(message):
+    if not message.text:
+        return
+    
+    # Обрабатываем только топик «Чат» (или все сообщения, если топик равен 1)
+    if message.message_thread_id != TOPICS.get("CHAT", 1):
+        return
+
+    text = message.text.strip()
+
+    # 1. Проверяем математическое выражение (например: 12-18 или 50+25)
+    math_pattern = r'^\s*([+-]?\d+(?:\.\d+)?)\s*([+\-])\s*([+-]?\d+(?:\.\d+)?)\s*$'
+    match = re.match(math_pattern, text)
+    if match:
+        try:
+            num1 = float(match.group(1))
+            op = match.group(2)
+            num2 = float(match.group(3))
+            
+            if op == '+':
+                result = num1 + num2
+            elif op == '-':
+                result = num1 - num2
+            else:
+                return
+
+            # Форматируем вывод красиво
+            res_str = f"{result:g}" if isinstance(result, float) and result.is_integer() else f"{result:.4f}".rstrip('0').rstrip('.')
+            reply_text = f"🧮 **Калькулятор:**\n`{text} = {res_str}`"
+            bot.reply_to(message, reply_text, parse_mode="Markdown")
             return
+        except Exception as e:
+            print(f"Calc error: {e}")
 
-        cost = float(parts[1])
-        volume_k = float(parts[2])
+    # 2. Обрабатываем запросы монет (например: "1 zig" или просто "zig")
+    parts = text.split()
+    if not parts:
+        return
+    
+    multiplier = 1.0
+    coin_query = ""
 
-        if volume_k <= 0:
-            return
+    if len(parts) == 2:
+        try:
+            multiplier = float(parts[0])
+            coin_query = parts[1]
+        except ValueError:
+            coin_query = parts[0]
+    else:
+        coin_query = parts[0]
 
-        cost_per_1k = cost / volume_k
-
-        reply_text = (
-            f"📊 **Расчет стоимости объема:**\n"
-            f"💵 **Затраты:** `${cost:,.2f}`\n"
-            f"📈 **Объем:** `{volume_k * 1000:,.0f}` (`{volume_k}K`)\n"
-            f"💎 **Цена за 1K объема:** **`${cost_per_1k:,.2f}`**"
-        )
-
-        bot.send_message(
-            chat_id=message.chat.id,
-            message_thread_id=getattr(message, 'message_thread_id', None),
-            text=reply_text,
-            parse_mode="Markdown",
-            reply_to_message_id=message.message_id
-        )
-    except Exception as e:
-        print(f"Volume Calculator Error: {e}")
-
-@bot.message_handler(func=lambda message: message.text and not message.text.startswith('/'))
-def handle_calculator(message):
-    try:
-        text = message.text.strip()
+    norm_query = normalize_symbol(coin_query)
+    
+    if norm_query in latest_prices_cache:
+        price = latest_prices_cache[norm_query]
+        total_val = price * multiplier
+        user_name = message.from_user.first_name or "Трейдер"
         
-        # Поддержка слитного и раздельного написания ("1zig", "10000 zig")
-        match = re.match(r'^([\d\.\s]+)\s*([a-zA-Z0-9]+)$', text)
-        if not match:
-            return
-
-        amount_str = match.group(1).replace(' ', '')
-        amount = float(amount_str)
-        raw_coin = match.group(2).upper()
-        symbol = normalize_symbol(raw_coin)
-
-        price = 0.0
-
-        # 1. Ищем в глобальном кэше (фьючерсы + спот-агрегатор)
-        if symbol in latest_prices_cache and latest_prices_cache[symbol] > 0:
-            price = latest_prices_cache[symbol]
-
-        if price <= 0:
-            for cached_sym, cached_price in latest_prices_cache.items():
-                if raw_coin in cached_sym:
-                    price = cached_price
-                    symbol = cached_sym
-                    break
-
-        # 2. Фоллбэк: точечный запрос на Binance Spot
-        if price <= 0:
-            try:
-                r = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}", timeout=3).json()
-                if 'price' in r:
-                    price = float(r['price'])
-            except: pass
-
-        # 3. Фоллбэк: точечный запрос на MEXC Spot
-        if price <= 0:
-            try:
-                r = requests.get(f"https://www.mexc.com/open/api/v2/market/ticker?symbol={symbol}", timeout=3).json()
-                data_list = r.get('data', [])
-                if isinstance(data_list, list) and len(data_list) > 0:
-                    price = float(data_list[0].get('close', 0))
-                elif isinstance(r.get('data'), dict):
-                    price = float(r.get('data', {}).get('close', 0))
-            except: pass
-
-        # 4. Фоллбэк: точечный запрос на Gate.io Spot
-        if price <= 0:
-            try:
-                r = requests.get(f"https://api.gateio.ws/api/v4/spot/tickers?currency_pair={raw_coin}_USDT", timeout=3).json()
-                if isinstance(r, list) and len(r) > 0 and 'last' in r[0]:
-                    price = float(r[0]['last'])
-            except: pass
-
-        # 5. Фоллбэк: CoinGecko API для редких альтов и щитков
-        if price <= 0:
-            try:
-                cg = requests.get(f"https://api.coingecko.com/api/v3/simple/price?ids={raw_coin.lower()}&vs_currencies=usdt", timeout=3).json()
-                if raw_coin.lower() in cg and 'usdt' in cg[raw_coin.lower()]:
-                    price = float(cg[raw_coin.lower()]['usdt'])
-            except: pass
-
-        if price <= 0:
-            return
-
-        total_usdt = amount * price
-        clean_base = symbol.replace('USDT', '')
-
-        exchange_url = get_exchange_url("BINANCE", symbol) or f"https://www.binance.com/en/trade/{clean_base}_USDT"
-        markup = InlineKeyboardMarkup()
-        if exchange_url:
-            markup.add(InlineKeyboardButton(f"🌐 Биржа ({clean_base})", url=exchange_url))
-
-        reply_text = (
-            f"🔍 **{amount:,.4f} {clean_base}**\n"
-            f"💵 **${total_usdt:,.2f} USDT**"
+        reply_msg = (
+            f"👤 **{user_name}**\n"
+            f"{multiplier:g} {coin_query.upper()}\n"
+            f"🔍 `{price}` USDT\n"
+            f"💵 **${total_val:,.2f} USDT**"
         )
-
-        bot.send_message(
-            chat_id=message.chat.id,
-            message_thread_id=getattr(message, 'message_thread_id', None),
-            text=reply_text,
-            parse_mode="Markdown",
-            reply_to_message_id=message.message_id,
-            reply_markup=markup
-        )
-    except Exception as e:
-        print(f"Calculator Error: {e}")
+        bot.reply_to(message, reply_msg, parse_mode="Markdown")
 
 # ==================== MAIN INITIALIZATION ====================
 if __name__ == "__main__":
-    print("===> Clearing webhooks & starting bot...")
-    try:
-        bot.remove_webhook()
-        time.sleep(1)
-    except Exception as e:
-        print(f"Webhook remove warning: {e}")
-
+    print("🚀 Bot starting...")
+    
+    # Запускаем фоновый Flask сервер для Render/Heroku
     threading.Thread(target=run_flask, daemon=True).start()
+
+    # Запускаем фоновые потоки мониторинга
+    threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
+    threading.Thread(target=fetch_direct_exchange_promos, daemon=True).start()
+    threading.Thread(target=fetch_global_crypto_promos, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()
-    threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
-    threading.Thread(target=fetch_global_crypto_promos, daemon=True).start()
-    threading.Thread(target=fetch_direct_exchange_promos, daemon=True).start()
-    
-    print("===> Your service is live 🚀")
-    bot.infinity_polling()
+
+    # Запуск телеграм-бота в бесконечном цикле polling
+    while True:
+        try:
+            bot.infinity_polling(timeout=60, long_polling_timeout=60)
+        except Exception as err:
+            print(f"❌ Telegram Bot Polling Error: {err}")
+            time.sleep(15)

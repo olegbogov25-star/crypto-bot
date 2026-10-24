@@ -488,6 +488,22 @@ def fetch_futures_data():
                 prices.setdefault(sym, {})['MEXCSpot'] = float(item.get('close', 0))
     except Exception: pass
 
+    try:
+        r = requests.get("https://api.gateio.ws/api/v4/spot/tickers", timeout=5).json()
+        for item in r:
+            sym = normalize_symbol(item.get('currency_pair', ''))
+            if sym and 'last' in item:
+                prices.setdefault(sym, {})['GateSpot'] = float(item['last'])
+    except Exception: pass
+
+    try:
+        r = requests.get("https://api.kucoin.com/api/v1/market/allTickers", timeout=5).json().get('data', {}).get('ticker', [])
+        for item in r:
+            sym = normalize_symbol(item.get('symbol', ''))
+            if sym and 'last' in item:
+                prices.setdefault(sym, {})['KuCoinSpot'] = float(item['last'])
+    except Exception: pass
+
     for sym, ex_dict in prices.items():
         if ex_dict:
             latest_prices_cache[sym] = list(ex_dict.values())[0]
@@ -703,6 +719,7 @@ def handle_calculator(message):
 
         price = 0.0
 
+        # 1. Ищем в глобальном кэше (фьючерсы + спот-агрегатор)
         if symbol in latest_prices_cache and latest_prices_cache[symbol] > 0:
             price = latest_prices_cache[symbol]
 
@@ -713,6 +730,7 @@ def handle_calculator(message):
                     symbol = cached_sym
                     break
 
+        # 2. Фоллбэк: точечный запрос на Binance Spot
         if price <= 0:
             try:
                 r = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}", timeout=3).json()
@@ -720,6 +738,26 @@ def handle_calculator(message):
                     price = float(r['price'])
             except: pass
 
+        # 3. Фоллбэк: точечный запрос на MEXC Spot
+        if price <= 0:
+            try:
+                r = requests.get(f"https://www.mexc.com/open/api/v2/market/ticker?symbol={symbol}", timeout=3).json()
+                data_list = r.get('data', [])
+                if isinstance(data_list, list) and len(data_list) > 0:
+                    price = float(data_list[0].get('close', 0))
+                elif isinstance(r.get('data'), dict):
+                    price = float(r.get('data', {}).get('close', 0))
+            except: pass
+
+        # 4. Фоллбэк: точечный запрос на Gate.io Spot
+        if price <= 0:
+            try:
+                r = requests.get(f"https://api.gateio.ws/api/v4/spot/tickers?currency_pair={raw_coin}_USDT", timeout=3).json()
+                if isinstance(r, list) and len(r) > 0 and 'last' in r[0]:
+                    price = float(r[0]['last'])
+            except: pass
+
+        # 5. Фоллбэк: CoinGecko API для редких альтов и щитков
         if price <= 0:
             try:
                 cg = requests.get(f"https://api.coingecko.com/api/v3/simple/price?ids={raw_coin.lower()}&vs_currencies=usdt", timeout=3).json()

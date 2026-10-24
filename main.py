@@ -120,9 +120,10 @@ def analyze_text(text):
     if not OPENROUTER_API_KEY:
         return text
     prompt = f"""
-Ты — профессиональный финансовый аналитик крипто-анонсов и промо-акций. Найди и структурируй активности, лаунчпулы, баунти, раздачи и аирдропы.
-Ответь строго одним словом "SKIP", если это судебные иски или тех. обслуживание без бонусов.
-В остальных случаях сформируй отчет по форме:
+Ты — профессиональный финансовый аналитик крипто-анонсов, промо-акций, кешбеков и торговых турниров. 
+Найди и структурируй любые активности, лаунчпулы, баунти, раздачи, аирдропы, кешбеки и торговые арены/турниры.
+Ответь строго одним словом "SKIP", только если это чисто техническое обслуживание без бонусов или судебные иски. Любые промо, бонусы и турниры НЕ пропускай!
+Сформируй отчет по форме:
 1. 📌 **Источник / Платформа:**
 2. 🏷 **Тип события / Теги:**
 3. 🪙 **Токен / Проект.**
@@ -201,7 +202,7 @@ def process_item(item_id, raw_text, link, default_topic):
     if exchange_url and exchange_url.startswith("http"):
         markup.add(InlineKeyboardButton(f"🌐 Биржа ({target_topic})", url=exchange_url))
     if link and link.startswith("http"):
-        markup.add(InlineKeyboardButton("📱 Источник (Telegram)", url=link))
+        markup.add(InlineKeyboardButton("📱 Источник", url=link))
 
     send_to_topic(target_topic, ai_result, reply_markup=markup)
     time.sleep(1)
@@ -209,11 +210,11 @@ def process_item(item_id, raw_text, link, default_topic):
 # ==================== TELEGRAM CHANNELS PROMO MONITOR ====================
 def fetch_telegram_channels_promos():
     channels = {
-        "BINANCE": ["Binance_UA_official", "BinanceUkrainian", "binance_announcements"],
+        "BINANCE": ["Binance_UA_official", "BinanceUkrainian", "binance_announcements", "Binance_Announcements"],
         "OKX": ["okx_ru", "okx_campaign_announcement", "okxwalletannouncement", "OKX_Official"],
         "BYBIT": ["bybitukrainian", "bybitukrainiannews", "Bybit_CIS", "BybitAnnouncements"],
         "BITGET": ["BitgetUA", "BitgetENOfficial"],
-        "MEXC": ["MEXCKraineOfficial", "MEXCofficialNews"],
+        "MEXC": ["MEXCKraineOfficial", "MEXCofficialNews", "MEXCofficial"],
         "GATE": ["Gate_Ukrainian", "GateCom_EN"],
         "KRAKEN": ["kraken_announcements"],
         "BINGX": ["BingXOfficial", "BingXAnnouncement"],
@@ -264,17 +265,51 @@ def fetch_telegram_channels_promos():
             print(f"Telegram Channels Monitor Error: {e}")
             time.sleep(60)
 
+# ==================== DIRECT EXCHANGE PROMOS API PARSER ====================
+def fetch_direct_exchange_promos():
+    """Прямой опрос системных API бирж для мггоновенного отлова промо-акций и турниров"""
+    while True:
+        try:
+            # 1. Binance Announcements API
+            binance_api = "https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=48&pageNo=1&pageSize=10"
+            res = secure_request(binance_api, timeout=6)
+            if res:
+                data = res.json()
+                for art in data.get('data', {}).get('articles', []):
+                    art_id = f"dir_binance_{art.get('id')}"
+                    title = art.get('title', '')
+                    code = art.get('code', '')
+                    link = f"https://www.binance.com/en/support/announcement/{code}" if code else "https://www.binance.com"
+                    raw_text = f"Binance Direct API Promo / Campaign: {title}\nLink: {link}"
+                    process_item(art_id, raw_text, link, "BINANCE")
+
+            # 2. MEXC Announcements API
+            mexc_api = "https://www.mexc.com/api/support/list?categoryId=19&page=1&pageSize=10"
+            res_mexc = secure_request(mexc_api, timeout=6)
+            if res_mexc:
+                mexc_data = res_mexc.json()
+                for item in mexc_data.get('data', {}).get('result', []):
+                    item_id = f"dir_mexc_{item.get('id')}"
+                    title = item.get('title', '')
+                    link = f"https://www.mexc.com/support/articles/{item.get('id')}"
+                    raw_text = f"MEXC Direct API Promo / Campaign: {title}\nLink: {link}"
+                    process_item(item_id, raw_text, link, "MEXC")
+
+        except Exception as e:
+            print(f"Direct Promos API Error: {e}")
+        
+        time.sleep(1200) # Проверяем каждые 20 минут
+
 # ==================== GLOBAL CRYPTO APIS & RSS ====================
 def fetch_global_crypto_promos():
     sources = [
-        ("https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=48&pageNo=1&pageSize=20", "BINANCE"),
         ("https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=161&pageNo=1&pageSize=20", "BINANCE"),
         ("https://coinmarketcap.com/headlines/news/", "NEWS"),
     ]
 
     while True:
         try:
-            for api_url, topic in sources[:2]:
+            for api_url, topic in sources[:1]:
                 res = secure_request(api_url, timeout=6)
                 if not res: continue
                 data = res.json()
@@ -676,11 +711,11 @@ def handle_calculator(message):
 
         price = 0.0
 
-        # 1. Ищем в нашем глобальном кэше цен со всех бирж
+        # 1. Ищем в глобальном кэше
         if symbol in latest_prices_cache and latest_prices_cache[symbol] > 0:
             price = latest_prices_cache[symbol]
 
-        # 2. Ищем нечетким совпадением в кэше
+        # 2. Нечеткий поиск в кэше
         if price <= 0:
             for cached_sym, cached_price in latest_prices_cache.items():
                 if raw_coin in cached_sym:
@@ -688,7 +723,7 @@ def handle_calculator(message):
                     symbol = cached_sym
                     break
 
-        # 3. Если в кэше нет, запрашиваем у Bybit
+        # 3. Запрос у Bybit
         if price <= 0:
             try:
                 r = requests.get(f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={symbol}", timeout=3).json()
@@ -698,7 +733,7 @@ def handle_calculator(message):
             except:
                 pass
 
-        # 4. Если нет, запрашиваем у MEXC
+        # 4. Запрос у MEXC
         if price <= 0:
             try:
                 r = requests.get(f"https://contract.mexc.com/api/v1/contract/ticker?symbol={symbol}", timeout=3).json()
@@ -708,7 +743,7 @@ def handle_calculator(message):
             except:
                 pass
 
-        # 5. Если нет, запрашиваем у Binance
+        # 5. Запрос у Binance
         if price <= 0:
             try:
                 r = requests.get(f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={symbol}", timeout=3).json()
@@ -718,7 +753,7 @@ def handle_calculator(message):
                 pass
 
         if price <= 0:
-            return  # Если монета не найдена вообще нигде, молчим
+            return  # Если не найдено, молчим
 
         total_usdt = amount * price
         clean_base = symbol.replace('USDT', '')
@@ -758,6 +793,7 @@ if __name__ == "__main__":
     threading.Thread(target=monitor_funding, daemon=True).start()
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     threading.Thread(target=fetch_global_crypto_promos, daemon=True).start()
+    threading.Thread(target=fetch_direct_exchange_promos, daemon=True).start()
     
     print("===> Your service is live 🚀")
     bot.infinity_polling()

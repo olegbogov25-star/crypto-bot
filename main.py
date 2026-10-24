@@ -2,6 +2,7 @@ import os
 import time
 import threading
 import datetime
+import re
 import pytz
 import requests
 import feedparser
@@ -32,7 +33,8 @@ TOPICS = {
     "GATE": 67,     
     "OKX": 2,       
     "FUNDING": 76,  
-    "SPREAD": 77    
+    "SPREAD": 77,
+    "CHAT": 1       # ID топика «Чат» для калькулятора монет
 }
 
 processed_ids = set()
@@ -109,6 +111,9 @@ def normalize_symbol(raw_sym):
         else:
             sym += 'USDT'
     return sym
+
+# Глобальный кэш цен для калькулятора монет
+latest_prices_cache = {}
 
 # ==================== ADVANCED AI & PROMO ANALYZER ====================
 def analyze_text(text):
@@ -190,16 +195,11 @@ def process_item(item_id, raw_text, link, default_topic):
     if target_topic not in TOPICS:
         target_topic = "NEWS"
 
-    # Получаем прямую ссылку на биржу
-    exchange_url = get_exchange_url(target_topic) if target_topic in TOPICS and target_topic not in ["NEWS", "SPREAD", "FUNDING"] else None
+    exchange_url = get_exchange_url(target_topic) if target_topic in TOPICS and target_topic not in ["NEWS", "SPREAD", "FUNDING", "CHAT"] else None
 
     markup = InlineKeyboardMarkup()
-    
-    # Кнопка 1: Открыть биржу / рынок
     if exchange_url and exchange_url.startswith("http"):
         markup.add(InlineKeyboardButton(f"🌐 Биржа ({target_topic})", url=exchange_url))
-    
-    # Кнопка 2: Открыть оригинальный пост в Telegram
     if link and link.startswith("http"):
         markup.add(InlineKeyboardButton("📱 Источник (Telegram)", url=link))
 
@@ -232,12 +232,10 @@ def fetch_telegram_channels_promos():
                     soup = BeautifulSoup(res.text, 'html.parser')
                     messages = soup.find_all('div', class_='tgme_widget_message')
                     
-                    # ОГРАНИЧЕНИЕ: Берем только последние 3 поста для экономии баланса ИИ
                     for msg in messages[-3:]:
                         msg_id_attr = msg.get('data-post', '')
                         if not msg_id_attr: continue
                         
-                        # ЗАЩИТА ОТ СТАРЫХ ПОСТОВ (архивные посты отсекаются)
                         date_elem = msg.find('time', class_='tgme_widget_message_date')
                         if date_elem and date_elem.has_attr('datetime'):
                             post_date_str = date_elem['datetime'][:10]
@@ -442,6 +440,13 @@ def fetch_futures_data():
                 volumes.setdefault(sym, {})['Ourbit'] = float(item.get('vol', 0))
     except Exception: pass
 
+    # Обновляем глобальный кэш цен для калькулятора
+    global latest_prices_cache
+    for sym, ex_dict in prices.items():
+        if ex_dict:
+            # Берем среднюю или первую доступную цену для быстрого расчета
+            latest_prices_cache[sym] = list(ex_dict.values())[0]
+
     return prices, volumes, fundings, funding_times
 
 def format_volume(vol):
@@ -468,8 +473,8 @@ def monitor_spread():
             for sym, ex_data in prices.items():
                 sym_vols = volumes.get(sym, {})
                 
-                # ЖЕСТКИЙ ФИЛЬТР ЛИКВИДНОСТИ: убираем биржи с объемом ниже $500,000
-                valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 500_000}
+                # Обновленный фильтр ликвидности: от $200,000
+                valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 200_000}
 
                 if len(valid_ex_data) < 2:
                     continue
@@ -482,7 +487,8 @@ def monitor_spread():
                 if min_p <= 0: continue
                 spread = ((max_p - min_p) / min_p) * 100
                 
-                if 5.0 <= spread <= 30.0:
+                # Обновленный диапазон спреда: от 7.0% до 30.0%
+                if 7.0 <= spread <= 30.0:
                     current_scanned_syms.add(sym)
 
                     if spread >= 15.0:
@@ -490,7 +496,7 @@ def monitor_spread():
                     elif spread >= 10.0:
                         badge = "🔥 **HIGH SPREAD (>= 10%)**"
                     else:
-                        badge = "⚡ **STRONG SPREAD (>= 5%)**"
+                        badge = "⚡ **STRONG SPREAD (>= 7%)**"
 
                     vol_min = sym_vols.get(min_ex, 0) * 0.01
                     vol_max = sym_vols.get(max_ex, 0) * 0.01
@@ -558,7 +564,7 @@ def monitor_spread():
                 else:
                     ex_data = prices[sym]
                     sym_vols = volumes.get(sym, {})
-                    valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 500_000}
+                    valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 200_000}
                     if len(valid_ex_data) >= 2:
                         curr_min = min(valid_ex_data.values())
                         curr_max = max(valid_ex_data.values())
@@ -653,6 +659,60 @@ def monitor_funding():
             print(f"Funding Monitor Error: {e}")
         
         time.sleep(300)
+
+# ==================== CALCULATOR MESSAGE HANDLER (ТОПИК «Чат» ID=1) ====================
+@bot.message_handler(func=lambda message: message.message_thread_id == TOPICS.get("CHAT"))
+def handle_calculator(message):
+    try:
+        text = message.text.strip()
+        # Ищем паттерн: число + название монеты (например, "1417 zig" или "50 btc")
+        match = re.match(r'^([\d\.]+)\s+([a-zA-Z0-9]+)$', text)
+        if not match:
+            return
+
+        amount = float(match.group(1))
+        raw_coin = match.group(2)
+        symbol = normalize_symbol(raw_coin)
+
+        # Проверяем, есть ли цена в нашем кэше
+        price = latest_prices_cache.get(symbol, 0.0)
+        if price <= 0:
+            # Если прямой цены нет, попробуем запросить быка с Binance API
+            try:
+                r = requests.get(f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={symbol}", timeout=3).json()
+                if 'price' in r:
+                    price = float(r['price'])
+            except:
+                pass
+
+        if price <= 0:
+            bot.reply_to(message, f"❌ Монета `{symbol}` не найдена в активных котировках.", parse_mode="Markdown")
+            return
+
+        total_usdt = amount * price
+        base_sym = symbol.replace('USDT', '')
+
+        # Формируем ответ с кнопкой биржи (например, Binance)
+        exchange_url = get_exchange_url("BINANCE", symbol)
+        markup = InlineKeyboardMarkup()
+        if exchange_url:
+            markup.add(InlineKeyboardButton(f"🌐 {base_sym}", url=exchange_url))
+
+        reply_text = (
+            f"🔍 **{amount:,.0f} {base_sym} ({base_sym})**\n"
+            f"💵 **${total_usdt:,.2f} USDT**"
+        )
+
+        bot.send_message(
+            chat_id=CHAT_ID,
+            message_thread_id=TOPICS.get("CHAT"),
+            text=reply_text,
+            parse_mode="Markdown",
+            reply_to_message_id=message.message_id,
+            reply_markup=markup
+        )
+    except Exception as e:
+        print(f"Calculator Error: {e}")
 
 # ==================== MAIN INITIALIZATION ====================
 if __name__ == "__main__":

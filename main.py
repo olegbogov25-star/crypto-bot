@@ -192,7 +192,7 @@ def process_item(item_id, raw_text, link, default_topic):
     markup = None
     if link and link.startswith("http"):
         markup = InlineKeyboardMarkup()
-        app_button = InlineKeyboardButton(f"📱 Открыть анонс ({target_topic})", url=link)
+        app_button = InlineKeyboardButton(f"🌐 Открыть источник ({target_topic})", url=link)
         markup.add(app_button)
 
     send_to_topic(target_topic, ai_result, reply_markup=markup)
@@ -201,7 +201,7 @@ def process_item(item_id, raw_text, link, default_topic):
 # ==================== TELEGRAM CHANNELS PROMO MONITOR ====================
 def fetch_telegram_channels_promos():
     channels = {
-        "BINANCE": ["Binance_UA_official", "BinanceUkrainian", "BinanceAnnouncements"],
+        "BINANCE": ["Binance_UA_official", "BinanceUkrainian", "binance_announcements"],
         "OKX": ["okx_ru", "okx_campaign_announcement", "okxwalletannouncement", "OKX_Official"],
         "BYBIT": ["bybitukrainian", "bybitukrainiannews", "Bybit_CIS", "BybitAnnouncements"],
         "BITGET": ["BitgetUA", "BitgetENOfficial"],
@@ -228,6 +228,17 @@ def fetch_telegram_channels_promos():
                         msg_id_attr = msg.get('data-post', '')
                         if not msg_id_attr: continue
                         
+                        # ЗАЩИТА ОТ СТАРЫХ ПОСТОВ (архивные старые посты из 2018 и т.д. отсекаются)
+                        date_elem = msg.find('time', class_='tgme_widget_message_date')
+                        if date_elem and date_elem.has_attr('datetime'):
+                            post_date_str = date_elem['datetime'][:10]
+                            try:
+                                post_year = int(post_date_str[:4])
+                                if post_year < 2025:
+                                    continue
+                            except:
+                                pass
+
                         item_id = f"tg_chan_{msg_id_attr.replace('/', '_')}"
                         text_div = msg.find('div', class_='tgme_widget_message_text')
                         if not text_div: continue
@@ -448,7 +459,7 @@ def monitor_spread():
             for sym, ex_data in prices.items():
                 sym_vols = volumes.get(sym, {})
                 
-                # ЖЕСТКИЙ ФИЛЬТР ЛИКВИДНОСТИ: убираем биржи с объемом ниже $500,000, чтобы не было фейковых спредов на мертвых стаканах
+                # ЖЕСТКИЙ ФИЛЬТР ЛИКВИДНОСТИ: убираем биржи с объемом ниже $500,000
                 valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 500_000}
 
                 if len(valid_ex_data) < 2:
@@ -462,7 +473,7 @@ def monitor_spread():
                 if min_p <= 0: continue
                 spread = ((max_p - min_p) / min_p) * 100
                 
-                # Подняли порог спреда от 5% до 30%
+                # Порог спреда от 5% до 30%
                 if 5.0 <= spread <= 30.0:
                     current_scanned_syms.add(sym)
 

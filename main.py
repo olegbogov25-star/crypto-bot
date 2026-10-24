@@ -120,9 +120,9 @@ def analyze_text(text):
     if not OPENROUTER_API_KEY:
         return text
     prompt = f"""
-Ты — профессиональный финансовый аналитик крипто-анонсов, промо-акций, кешбеков и торговых турниров. 
-Найди и структурируй любые активности, лаунчпулы, баунти, раздачи, аирдропы, кешбеки и торговые арены/турниры.
-Ответь строго одним словом "SKIP", только если это чисто техническое обслуживание без бонусов или судебные иски. Любые промо, бонусы и турниры НЕ пропускай!
+Ты — профессиональный финансовый аналитик крипто-анонсов, промо-акций, кешбеков, квизов и торговых турниров. 
+Найди и структурируй любые активности, лаунчпулы, баунти, раздачи, аирдропы, квизы (Quiz), розыгрыши мерча, XP-программы и турниры.
+Ответь строго одним словом "SKIP", только если это чисто техническое обслуживание сервера/биржи без бонусов или юридические судебные иски. Любые квизы, мерч, раздачи, поинты и промо НЕ пропускай!
 Сформируй отчет по форме:
 1. 📌 **Источник / Платформа:**
 2. 🏷 **Тип события / Теги:**
@@ -211,13 +211,13 @@ def process_item(item_id, raw_text, link, default_topic):
 def fetch_telegram_channels_promos():
     channels = {
         "BINANCE": ["Binance_UA_official", "BinanceUkrainian", "binance_announcements", "Binance_Announcements"],
-        "OKX": ["okx_ru", "okx_campaign_announcement", "okxwalletannouncement", "OKX_Official"],
+        "OKX": ["okx_ukraine", "okx_ru", "okx_campaign_announcement", "okxwalletannouncement", "OKX_Official"],
         "BYBIT": ["bybitukrainian", "bybitukrainiannews", "Bybit_CIS", "BybitAnnouncements"],
-        "BITGET": ["BitgetUA", "BitgetENOfficial"],
+        "BITGET": ["BitgetUA", "Bitget_Announcements", "BitgetENOfficial"],
         "MEXC": ["MEXCKraineOfficial", "MEXCofficialNews", "MEXCofficial"],
-        "GATE": ["Gate_Ukrainian", "GateCom_EN"],
+        "GATE": ["Gate_Ukrainian", "Gateio_NewList_News", "GateCom_EN"],
         "KRAKEN": ["kraken_announcements"],
-        "BINGX": ["BingXOfficial", "BingXAnnouncement"],
+        "BINGX": ["BingXOfficial", "BingXAnnouncement", "BingXEnglish", "BingXRussianAnnouncements"],
         "KUCOIN": ["Kucoin_Exchange", "Kucoin_News"],
         "WHITEBIT": ["whitebit_ua_news", "White_Bit"]
     }
@@ -233,7 +233,8 @@ def fetch_telegram_channels_promos():
                     soup = BeautifulSoup(res.text, 'html.parser')
                     messages = soup.find_all('div', class_='tgme_widget_message')
                     
-                    for msg in messages[-3:]:
+                    # Глубина парсинга увеличена до 10 последних постов
+                    for msg in messages[-10:]:
                         msg_id_attr = msg.get('data-post', '')
                         if not msg_id_attr: continue
                         

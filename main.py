@@ -587,7 +587,6 @@ def monitor_spread():
 
             for sym, ex_data in prices.items():
                 sym_vols = volumes.get(sym, {})
-                # Смягчен минимальный объем или фильтр ликвидности при необходимости
                 valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 200_000}
 
                 if len(valid_ex_data) < 2:
@@ -679,7 +678,6 @@ def monitor_spread():
                     minutes = elapsed_sec // 60
                     seconds = elapsed_sec % 60
                     
-                    # Проверяем актуальный последний спред или ставим 0.00%
                     p_min = data.get("min_p", 0)
                     p_max = data.get("max_p", 0)
                     final_spread = 0.0
@@ -759,29 +757,25 @@ def handle_chat_messages(message):
     if not message.text:
         return
     
-    # Обрабатываем только топик «Чат» (или все сообщения, если топик равен 1)
-    if message.message_thread_id != TOPICS.get("CHAT", 1):
-        return
-
     text = message.text.strip()
 
-    # 1. Проверяем математическое выражение (например: 12-18 или 50+25)
+    # 1. Математический калькулятор (поддерживает пробелы и слитно, например: 55.40-53.70 или 53.70+44.80)
     math_pattern = r'^\s*([+-]?\d+(?:\.\d+)?)\s*([+\-])\s*([+-]?\d+(?:\.\d+)?)\s*$'
     match = re.match(math_pattern, text)
+    if not match:
+        no_space_pattern = r'^([+-]?\d+(?:\.\d+)?)([+\-])([+-]?\d+(?:\.\d+)?)$'
+        match = re.match(no_space_pattern, text.replace(" ", ""))
+
     if match:
         try:
             num1 = float(match.group(1))
             op = match.group(2)
             num2 = float(match.group(3))
             
-            if op == '+':
-                result = num1 + num2
-            elif op == '-':
-                result = num1 - num2
-            else:
-                return
+            if op == '+': result = num1 + num2
+            elif op == '-': result = num1 - num2
+            else: return
 
-            # Форматируем вывод красиво
             res_str = f"{result:g}" if isinstance(result, float) and result.is_integer() else f"{result:.4f}".rstrip('0').rstrip('.')
             reply_text = f"🧮 **Калькулятор:**\n`{text} = {res_str}`"
             bot.reply_to(message, reply_text, parse_mode="Markdown")
@@ -789,7 +783,7 @@ def handle_chat_messages(message):
         except Exception as e:
             print(f"Calc error: {e}")
 
-    # 2. Обрабатываем запросы монет (например: "1 zig" или просто "zig")
+    # 2. Обрабатываем запросы монет (например: "1 zig", "1398.08 zig", "10000 kat")
     parts = text.split()
     if not parts:
         return
@@ -808,8 +802,19 @@ def handle_chat_messages(message):
 
     norm_query = normalize_symbol(coin_query)
     
-    if norm_query in latest_prices_cache:
-        price = latest_prices_cache[norm_query]
+    # Ищем цену в глобальном кэше цен
+    price = latest_prices_cache.get(norm_query, 0.0)
+
+    # Если в кэше нет, пробуем быстро дотянуть точечно
+    if price <= 0:
+        base_s = coin_query.upper().replace('USDT', '')
+        try:
+            r = requests.get(f"https://contract.mexc.com/api/v1/contract/ticker?symbol={base_s}_USDT", timeout=3).json()
+            if r.get('success') and r.get('data'):
+                price = float(r['data'].get('lastPrice', 0))
+        except: pass
+
+    if price > 0:
         total_val = price * multiplier
         user_name = message.from_user.first_name or "Трейдер"
         
@@ -825,7 +830,7 @@ def handle_chat_messages(message):
 if __name__ == "__main__":
     print("🚀 Bot starting...")
     
-    # Запускаем фоновый Flask сервер для Render/Heroku
+    # Запускаем фоновый Flask сервер
     threading.Thread(target=run_flask, daemon=True).start()
 
     # Запускаем фоновые потоки мониторинга
@@ -835,7 +840,7 @@ if __name__ == "__main__":
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()
 
-    # Запуск телеграм-бота в бесконечном цикле polling
+    # Запуск бота в бесконечном цикле
     while True:
         try:
             bot.infinity_polling(timeout=60, long_polling_timeout=60)

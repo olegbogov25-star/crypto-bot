@@ -709,11 +709,14 @@ def handle_volume_calculator(message):
 def handle_calculator(message):
     try:
         text = message.text.strip()
-        match = re.match(r'^([\d\.]+)\s+([a-zA-Z0-9]+)$', text)
+        
+        # Поддержка как раздельного написания ("10000 zig"), так и слитного ("1zig", "10000zig")
+        match = re.match(r'^([\d\.\s]+)\s*([a-zA-Z0-9]+)$', text)
         if not match:
             return
 
-        amount = float(match.group(1))
+        amount_str = match.group(1).replace(' ', '')
+        amount = float(amount_str)
         raw_coin = match.group(2).upper()
         symbol = normalize_symbol(raw_coin)
 

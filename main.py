@@ -267,10 +267,8 @@ def fetch_telegram_channels_promos():
 
 # ==================== DIRECT EXCHANGE PROMOS API PARSER ====================
 def fetch_direct_exchange_promos():
-    """Прямой опрос системных API бирж для мггоновенного отлова промо-акций и турниров"""
     while True:
         try:
-            # 1. Binance Announcements API
             binance_api = "https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=48&pageNo=1&pageSize=10"
             res = secure_request(binance_api, timeout=6)
             if res:
@@ -283,7 +281,6 @@ def fetch_direct_exchange_promos():
                     raw_text = f"Binance Direct API Promo / Campaign: {title}\nLink: {link}"
                     process_item(art_id, raw_text, link, "BINANCE")
 
-            # 2. MEXC Announcements API
             mexc_api = "https://www.mexc.com/api/support/list?categoryId=19&page=1&pageSize=10"
             res_mexc = secure_request(mexc_api, timeout=6)
             if res_mexc:
@@ -294,11 +291,9 @@ def fetch_direct_exchange_promos():
                     link = f"https://www.mexc.com/support/articles/{item.get('id')}"
                     raw_text = f"MEXC Direct API Promo / Campaign: {title}\nLink: {link}"
                     process_item(item_id, raw_text, link, "MEXC")
-
         except Exception as e:
             print(f"Direct Promos API Error: {e}")
-        
-        time.sleep(1200) # Проверяем каждые 20 минут
+        time.sleep(1200)
 
 # ==================== GLOBAL CRYPTO APIS & RSS ====================
 def fetch_global_crypto_promos():
@@ -339,7 +334,7 @@ def fetch_global_crypto_promos():
             print(f"Global Promos Monitor Error: {e}")
         time.sleep(900)
 
-# ==================== FUTURES DATA & LIQUIDITY FETCHING ====================
+# ==================== FUTURES & SPOT DATA FETCHING ====================
 def fetch_futures_data():
     prices, volumes, fundings, funding_times = {}, {}, {}, {}
     
@@ -475,7 +470,24 @@ def fetch_futures_data():
                 volumes.setdefault(sym, {})['Ourbit'] = float(item.get('vol', 0))
     except Exception: pass
 
-    # Обновляем глобальный кэш цен для калькулятора
+    # Подтягиваем SPOT рынки для щитков и редких монет (Binance Spot & MEXC Spot)
+    try:
+        r = requests.get("https://api.binance.com/api/v3/ticker/price", timeout=5).json()
+        for item in r:
+            sym = normalize_symbol(item['symbol'])
+            if sym and sym not in latest_prices_cache:
+                prices.setdefault(sym, {})['BinanceSpot'] = float(item['price'])
+    except Exception: pass
+
+    try:
+        r = requests.get("https://www.mexc.com/open/api/v2/market/ticker", timeout=5).json().get('data', [])
+        for item in r:
+            sym = normalize_symbol(item.get('symbol', ''))
+            if sym and 'symbol' in item:
+                prices.setdefault(sym, {})['MEXCSpot'] = float(item.get('close', 0))
+    except Exception: pass
+
+    # Обновляем глобальный кэш цен для калькулятора (включая щитки со спота)
     global latest_prices_cache
     for sym, ex_dict in prices.items():
         if ex_dict:
@@ -506,8 +518,6 @@ def monitor_spread():
 
             for sym, ex_data in prices.items():
                 sym_vols = volumes.get(sym, {})
-                
-                # Порог ликвидности: от $200,000
                 valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 200_000}
 
                 if len(valid_ex_data) < 2:
@@ -521,7 +531,6 @@ def monitor_spread():
                 if min_p <= 0: continue
                 spread = ((max_p - min_p) / min_p) * 100
                 
-                # Диапазон спреда: от 7.0% до 30.0%
                 if 7.0 <= spread <= 30.0:
                     current_scanned_syms.add(sym)
 
@@ -546,7 +555,6 @@ def monitor_spread():
                     max_fund = sym_funds.get(max_ex, 0.0)
 
                     sorted_exs = sorted(valid_ex_data.keys(), key=lambda ex: sym_vols.get(ex, 0), reverse=True)
-                    
                     overview_list = []
                     for ex in sorted_exs:
                         p = valid_ex_data[ex]
@@ -590,40 +598,8 @@ def monitor_spread():
                                 "min_p": min_p,
                                 "max_p": max_p
                             }
-            
-            expired_syms = []
-            for sym in list(active_spreads.keys()):
-                if sym not in current_scanned_syms or sym not in prices:
-                    expired_syms.append((sym, 0.0))
-                else:
-                    ex_data = prices[sym]
-                    sym_vols = volumes.get(sym, {})
-                    valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 200_000}
-                    if len(valid_ex_data) >= 2:
-                        curr_min = min(valid_ex_data.values())
-                        curr_max = max(valid_ex_data.values())
-                        if curr_min > 0:
-                            curr_spread = ((curr_max - curr_min) / curr_min) * 100
-                            if curr_spread < 1.0:
-                                expired_syms.append((sym, curr_spread))
-
-            for sym, final_spread in expired_syms:
-                data = active_spreads.pop(sym, None)
-                if data:
-                    duration = int(time.time() - data["start_time"])
-                    mins = duration // 60
-                    secs = duration % 60
-                    time_str = f"{mins}:{secs:02d}"
-                    
-                    aligned_msg = (
-                        f"✅ `[{sym}]` prices aligned in `{time_str}` (финальный спред: `{final_spread:.2f}%`)\n"
-                        f"📌 **Финальные цены:** `{data['min_ex']}`: `${data['min_p']}` | `{data['max_ex']}`: `${data['max_p']}`"
-                    )
-                    send_to_topic("SPREAD", aligned_msg, reply_to_message_id=data["msg_id"])
-
         except Exception as e:
             print(f"Spread Monitor Error: {e}")
-        
         time.sleep(15)
 
 def monitor_funding():
@@ -635,7 +611,6 @@ def monitor_funding():
 
             for symbol, ex_rates in all_funding.items():
                 if len(ex_rates) < 2: continue
-                
                 min_ex = min(ex_rates, key=ex_rates.get)
                 max_ex = max(ex_rates, key=ex_rates.get)
                 funding_spread = ex_rates[max_ex] - ex_rates[min_ex]
@@ -658,7 +633,6 @@ def monitor_funding():
                         overview_list.append(f"🔹 [{ex}]({url}): `{r:.2f}%` (⏱ {countdown_str})")
                     
                     overview = "\n".join(overview_list)
-
                     msg = (
                         f"🔥 **FUNDING ARBITRAGE / HIGH RATE (>= ±1.0%)**\n"
                         f"🪙 **#{symbol}** (Spread: `{funding_spread:.2f}%`)\n\n"
@@ -677,30 +651,51 @@ def monitor_funding():
                     else:
                         msg_id = send_to_topic("FUNDING", msg)
                         if msg_id:
-                            active_fundings[symbol] = {
-                                "msg_id": msg_id,
-                                "last_rates_str": rates_key,
-                                "last_text": msg
-                            }
-
-            for symbol in [s for s in list(active_fundings.keys()) if s not in current_active_symbols]:
-                data = active_fundings.pop(symbol, None)
-                if data:
-                    norm_msg = data["last_text"] + f"\n\n✅ **Фандинг вернулся в норму в {get_kyiv_date_time()} (Киев)**"
-                    edit_topic_message("FUNDING", data["msg_id"], norm_msg)
-
+                            active_fundings[symbol] = {"msg_id": msg_id, "last_rates_str": rates_key, "last_text": msg}
         except Exception as e:
             print(f"Funding Monitor Error: {e}")
-        
         time.sleep(300)
 
-# ==================== UNIVERSAL CALCULATOR MESSAGE HANDLER ====================
+# ==================== HANDLERS: VOLUME CALCULATOR & COIN PRICE ====================
+@bot.message_handler(func=lambda message: message.text and message.text.startswith('/vol'))
+def handle_volume_calculator(message):
+    """Калькулятор стоимости 1K объема по команде /vol [затраты] [объем]"""
+    try:
+        parts = message.text.strip().split()
+        if len(parts) < 3:
+            bot.send_message(message.chat.id, "⚠️ **Формат команды:** `/vol [затраты_usdt] [объем_в_тысячах]`\nПример: `/vol 52.5 11`", parse_mode="Markdown")
+            return
+
+        cost = float(parts[1])
+        volume_k = float(parts[2])
+
+        if volume_k <= 0:
+            return
+
+        cost_per_1k = cost / volume_k
+
+        reply_text = (
+            f"📊 **Расчет стоимости объема:**\n"
+            f"💵 **Затраты:** `${cost:,.2f}`\n"
+            f"📈 **Объем:** `{volume_k * 1,000:,.0f}` (`{volume_k}K`)\n"
+            f"💎 **Цена за 1K объема:** **`${cost_per_1k:,.2f}`**"
+        )
+
+        bot.send_message(
+            chat_id=message.chat.id,
+            message_thread_id=getattr(message, 'message_thread_id', None),
+            text=reply_text,
+            parse_mode="Markdown",
+            reply_to_message_id=message.message_id
+        )
+    except Exception as e:
+        print(f"Volume Calculator Error: {e}")
+
 @bot.message_handler(func=lambda message: message.text and not message.text.startswith('/'))
 def handle_calculator(message):
+    """Универсальный калькулятор монет (для нормальных монеток и щитков)"""
     try:
         text = message.text.strip()
-        
-        # Проверяем формат "число + монета" (например, "1 btc", "1417 zig", "10 zec")
         match = re.match(r'^([\d\.]+)\s+([a-zA-Z0-9]+)$', text)
         if not match:
             return
@@ -711,11 +706,10 @@ def handle_calculator(message):
 
         price = 0.0
 
-        # 1. Ищем в глобальном кэше
+        # 1. Поиск в кэше со всех бирж и спота
         if symbol in latest_prices_cache and latest_prices_cache[symbol] > 0:
             price = latest_prices_cache[symbol]
 
-        # 2. Нечеткий поиск в кэше
         if price <= 0:
             for cached_sym, cached_price in latest_prices_cache.items():
                 if raw_coin in cached_sym:
@@ -723,42 +717,29 @@ def handle_calculator(message):
                     symbol = cached_sym
                     break
 
-        # 3. Запрос у Bybit
+        # 2. Прямой запрос к Binance Spot API для щитков
         if price <= 0:
             try:
-                r = requests.get(f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={symbol}", timeout=3).json()
-                lst = r.get('result', {}).get('list', [])
-                if lst and 'lastPrice' in lst[0]:
-                    price = float(lst[0]['lastPrice'])
-            except:
-                pass
-
-        # 4. Запрос у MEXC
-        if price <= 0:
-            try:
-                r = requests.get(f"https://contract.mexc.com/api/v1/contract/ticker?symbol={symbol}", timeout=3).json()
-                data = r.get('data', {})
-                if 'lastPrice' in data:
-                    price = float(data['lastPrice'])
-            except:
-                pass
-
-        # 5. Запрос у Binance
-        if price <= 0:
-            try:
-                r = requests.get(f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={symbol}", timeout=3).json()
+                r = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}", timeout=3).json()
                 if 'price' in r:
                     price = float(r['price'])
-            except:
-                pass
+            except: pass
+
+        # 3. Прямой запрос к CoinGecko API (для редких щитков)
+        if price <= 0:
+            try:
+                cg = requests.get(f"https://api.coingecko.com/api/v3/simple/price?ids={raw_coin.lower()}&vs_currencies=usdt", timeout=3).json()
+                if raw_coin.lower() in cg and 'usdt' in cg[raw_coin.lower()]:
+                    price = float(cg[raw_coin.lower()]['usdt'])
+            except: pass
 
         if price <= 0:
-            return  # Если не найдено, молчим
+            return
 
         total_usdt = amount * price
         clean_base = symbol.replace('USDT', '')
 
-        exchange_url = get_exchange_url("BINANCE", symbol) or f"https://www.bybit.com/trade/usdt/{symbol}"
+        exchange_url = get_exchange_url("BINANCE", symbol) or f"https://www.binance.com/en/trade/{clean_base}_USDT"
         markup = InlineKeyboardMarkup()
         if exchange_url:
             markup.add(InlineKeyboardButton(f"🌐 Биржа ({clean_base})", url=exchange_url))

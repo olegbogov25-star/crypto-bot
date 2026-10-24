@@ -190,16 +190,18 @@ def process_item(item_id, raw_text, link, default_topic):
     if target_topic not in TOPICS:
         target_topic = "NEWS"
 
-    # Корректная генерация ссылки: если биржа известна — берем её веб-версию, иначе оставляем ссылку на пост
-    direct_url = get_exchange_url(target_topic) if target_topic in TOPICS and target_topic not in ["NEWS", "SPREAD", "FUNDING"] else None
-    if not direct_url:
-        direct_url = link
+    # Получаем прямую ссылку на биржу
+    exchange_url = get_exchange_url(target_topic) if target_topic in TOPICS and target_topic not in ["NEWS", "SPREAD", "FUNDING"] else None
 
-    markup = None
-    if direct_url and direct_url.startswith("http"):
-        markup = InlineKeyboardMarkup()
-        app_button = InlineKeyboardButton(f"🌐 Открыть источник ({target_topic})", url=direct_url)
-        markup.add(app_button)
+    markup = InlineKeyboardMarkup()
+    
+    # Кнопка 1: Открыть биржу / рынок
+    if exchange_url and exchange_url.startswith("http"):
+        markup.add(InlineKeyboardButton(f"🌐 Биржа ({target_topic})", url=exchange_url))
+    
+    # Кнопка 2: Открыть оригинальный пост в Telegram
+    if link and link.startswith("http"):
+        markup.add(InlineKeyboardButton("📱 Источник (Telegram)", url=link))
 
     send_to_topic(target_topic, ai_result, reply_markup=markup)
     time.sleep(1)

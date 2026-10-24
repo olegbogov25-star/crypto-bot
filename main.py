@@ -166,7 +166,6 @@ def web_chart():
                 lineWidth: 2,
             });
 
-            // Демо-данные с нарастающей историей или заглушка для реального потока
             const initialData = [
                 { time: Math.floor(Date.now() / 1000) - 300, value: 7.2 },
                 { time: Math.floor(Date.now() / 1000) - 240, value: 7.8 },
@@ -493,13 +492,14 @@ def fetch_global_crypto_promos():
             print(f"Global Promos Monitor Error: {e}")
         time.sleep(900)
 
-# ==================== FUTURES & SPOT DATA FETCHING ====================
+# ==================== FUTURES & SPOT DATA FETCHING (OPTIMIZED & SAFE) ====================
 def fetch_futures_data():
     global latest_prices_cache
     prices, volumes, fundings, funding_times = {}, {}, {}, {}
     
+    # 1. Binance
     try:
-        r = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=5).json()
+        r = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=3).json()
         for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym:
@@ -508,7 +508,7 @@ def fetch_futures_data():
     except Exception: pass
 
     try:
-        r = requests.get("https://fapi.binance.com/fapi/v1/premiumIndex", timeout=5).json()
+        r = requests.get("https://fapi.binance.com/fapi/v1/premiumIndex", timeout=3).json()
         for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym:
@@ -517,8 +517,9 @@ def fetch_futures_data():
                 if next_time > 0: funding_times.setdefault(sym, {})['Binance'] = next_time
     except Exception: pass
 
+    # 2. Bybit
     try:
-        r = requests.get("https://api.bybit.com/v5/market/tickers?category=linear", timeout=5).json().get('result', {}).get('list', [])
+        r = requests.get("https://api.bybit.com/v5/market/tickers?category=linear", timeout=3).json().get('result', {}).get('list', [])
         for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym:
@@ -531,8 +532,9 @@ def fetch_futures_data():
                     if next_time > 0: funding_times.setdefault(sym, {})['Bybit'] = next_time
     except Exception: pass
 
+    # 3. OKX
     try:
-        r = requests.get("https://www.okx.com/api/v5/market/tickers?instType=SWAP", timeout=5).json().get('data', [])
+        r = requests.get("https://www.okx.com/api/v5/market/tickers?instType=SWAP", timeout=3).json().get('data', [])
         for item in r:
             sym = normalize_symbol(item['instId'])
             if sym:
@@ -541,7 +543,7 @@ def fetch_futures_data():
     except Exception: pass
 
     try:
-        r = requests.get("https://api.okx.com/api/v5/public/funding-rate-all", timeout=5).json().get('data', [])
+        r = requests.get("https://api.okx.com/api/v5/public/funding-rate-all", timeout=3).json().get('data', [])
         for item in r:
             sym = normalize_symbol(item['instId'])
             if sym and item.get('fundingRate'):
@@ -550,8 +552,9 @@ def fetch_futures_data():
                 if next_time > 0: funding_times.setdefault(sym, {})['OKX'] = next_time
     except Exception: pass
 
+    # 4. Gate.io
     try:
-        r = requests.get("https://api.gateio.ws/api/v4/futures/usdt/tickers", timeout=5).json()
+        r = requests.get("https://api.gateio.ws/api/v4/futures/usdt/tickers", timeout=3).json()
         for item in r:
             sym = normalize_symbol(item['contract'])
             if sym:
@@ -563,8 +566,9 @@ def fetch_futures_data():
                     if next_time > 0: funding_times.setdefault(sym, {})['Gate'] = next_time
     except Exception: pass
 
+    # 5. Bitget
     try:
-        r = requests.get("https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES", timeout=5).json().get('data', [])
+        r = requests.get("https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES", timeout=3).json().get('data', [])
         for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym:
@@ -576,8 +580,9 @@ def fetch_futures_data():
                     if next_time > 0: funding_times.setdefault(sym, {})['Bitget'] = next_time
     except Exception: pass
 
+    # 6. MEXC
     try:
-        r = requests.get("https://contract.mexc.com/api/v1/contract/ticker", timeout=5).json().get('data', [])
+        r = requests.get("https://contract.mexc.com/api/v1/contract/ticker", timeout=3).json().get('data', [])
         for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym:
@@ -589,8 +594,9 @@ def fetch_futures_data():
                     if next_time > 0: funding_times.setdefault(sym, {})['MEXC'] = next_time
     except Exception: pass
 
+    # 7. BingX
     try:
-        r = requests.get("https://open-api.bingx.com/openApi/swap/v2/quote/ticker", timeout=5).json().get('data', [])
+        r = requests.get("https://open-api.bingx.com/openApi/swap/v2/quote/ticker", timeout=3).json().get('data', [])
         for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym:
@@ -599,7 +605,7 @@ def fetch_futures_data():
     except Exception: pass
 
     try:
-        r = requests.get("https://open-api.bingx.com/openApi/swap/v2/quote/premiumIndex", timeout=5).json().get('data', [])
+        r = requests.get("https://open-api.bingx.com/openApi/swap/v2/quote/premiumIndex", timeout=3).json().get('data', [])
         for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym and 'lastFundingRate' in item:
@@ -608,8 +614,9 @@ def fetch_futures_data():
                 if next_time > 0: funding_times.setdefault(sym, {})['BingX'] = next_time
     except Exception: pass
 
+    # 8. KuCoin
     try:
-        r = requests.get("https://api-futures.kucoin.com/api/v1/contracts/active", timeout=5).json().get('data', [])
+        r = requests.get("https://api-futures.kucoin.com/api/v1/contracts/active", timeout=3).json().get('data', [])
         for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym and 'lastTradePrice' in item:
@@ -621,47 +628,13 @@ def fetch_futures_data():
                     if next_time > 0: funding_times.setdefault(sym, {})['KuCoin'] = next_time
     except Exception: pass
 
+    # Spot for quick price lookup
     try:
-        r = requests.get("https://api.ourbit.com/api/v1/futures/market/tickers", timeout=5).json().get('data', [])
-        for item in r:
-            sym = normalize_symbol(item.get('symbol', ''))
-            price_val = float(item.get('close', item.get('lastPrice', 0)))
-            vol_val = float(item.get('vol', item.get('turnover24h', 0)))
-            if sym and price_val > 0:
-                prices.setdefault(sym, {})['Ourbit'] = price_val
-                volumes.setdefault(sym, {})['Ourbit'] = vol_val
-    except Exception: pass
-
-    try:
-        r = requests.get("https://api.binance.com/api/v3/ticker/price", timeout=5).json()
+        r = requests.get("https://api.binance.com/api/v3/ticker/price", timeout=3).json()
         for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym:
                 prices.setdefault(sym, {})['BinanceSpot'] = float(item['price'])
-    except Exception: pass
-
-    try:
-        r = requests.get("https://www.mexc.com/open/api/v2/market/ticker", timeout=5).json().get('data', [])
-        for item in r:
-            sym = normalize_symbol(item.get('symbol', ''))
-            if sym:
-                prices.setdefault(sym, {})['MEXCSpot'] = float(item.get('close', 0))
-    except Exception: pass
-
-    try:
-        r = requests.get("https://api.gateio.ws/api/v4/spot/tickers", timeout=5).json()
-        for item in r:
-            sym = normalize_symbol(item.get('currency_pair', ''))
-            if sym and 'last' in item:
-                prices.setdefault(sym, {})['GateSpot'] = float(item['last'])
-    except Exception: pass
-
-    try:
-        r = requests.get("https://api.kucoin.com/api/v1/market/allTickers", timeout=5).json().get('data', {}).get('ticker', [])
-        for item in r:
-            sym = normalize_symbol(item.get('symbol', ''))
-            if sym and 'last' in item:
-                prices.setdefault(sym, {})['KuCoinSpot'] = float(item['last'])
     except Exception: pass
 
     for sym, ex_dict in prices.items():
@@ -683,9 +656,10 @@ def format_countdown(target_timestamp):
     minutes = int((diff % 3600) // 60)
     return f"{hours}ч {minutes:02d}м"
 
-# ==================== SPREAD MONITOR WITH PERSISTENT ALIGNED TRACKING ====================
+# ==================== SPREAD MONITOR (WITH LOGGING) ====================
 def monitor_spread():
     global active_spreads
+    print("🟢 Spread Monitor started (Threshold: $50k volume, Spread >= 7.0%)")
     while True:
         try:
             prices, volumes, fundings, _ = fetch_futures_data()
@@ -693,11 +667,14 @@ def monitor_spread():
             curr_time_str = get_kyiv_time()
 
             current_scanned_syms = set()
+            scanned_count = 0
+            max_spread_seen = 0.0
 
             for sym, ex_data in prices.items():
+                scanned_count += 1
                 sym_vols = volumes.get(sym, {})
-                # ОБНОВЛЕННЫЙ ПОРОГ ЛИКВИДНОСТИ: $100,000
-                valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 100_000}
+                # ОБНОВЛЕННЫЙ ПОРОГ ЛИКВИДНОСТИ: $50,000
+                valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 50_000}
 
                 if len(valid_ex_data) < 2:
                     continue
@@ -709,6 +686,9 @@ def monitor_spread():
                 
                 if min_p <= 0: continue
                 spread = ((max_p - min_p) / min_p) * 100
+                
+                if spread > max_spread_seen:
+                    max_spread_seen = spread
                 
                 if 7.0 <= spread <= 30.0:
                     current_scanned_syms.add(sym)
@@ -784,6 +764,9 @@ def monitor_spread():
                             }
                             save_active_spreads(active_spreads)
 
+            # Консольный лог для отслеживания работы бота
+            print(f"[{curr_time_str}] Scanned {scanned_count} pairs. Max spread found: {max_spread_seen:.2f}%")
+
             # Проверяем спреды, которые были активны, но теперь сошлись (< 7.0%)
             for sym in list(active_spreads.keys()):
                 if sym not in current_scanned_syms:
@@ -810,7 +793,7 @@ def monitor_spread():
                     save_active_spreads(active_spreads)
 
         except Exception as e:
-            print(f"Spread Monitor Error: {e}")
+            print(f"❌ Spread Monitor Error: {e}")
         time.sleep(15)
 
 def monitor_funding():
@@ -873,7 +856,6 @@ def handle_chat_messages(message):
     
     text = message.text.strip()
 
-    # 0. Обработка команды /vol [затраты] [объем в тысячах]
     if text.lower().startswith('/vol') or text.lower().startswith('vol'):
         nums = re.findall(r'\d+(?:\.\d+)?', text)
         if len(nums) >= 2:
@@ -894,7 +876,6 @@ def handle_chat_messages(message):
             except Exception as e:
                 print(f"Vol calc error: {e}")
 
-    # 1. Математический калькулятор
     math_pattern = r'^\s*([+-]?\d+(?:\.\d+)?)\s*([+\-])\s*([+-]?\d+(?:\.\d+)?)\s*$'
     match = re.match(math_pattern, text)
     if not match:
@@ -913,12 +894,11 @@ def handle_chat_messages(message):
 
             res_str = f"{result:g}" if isinstance(result, float) and result.is_integer() else f"{result:.4f}".rstrip('0').rstrip('.')
             reply_text = f"🧮 **Калькулятор:**\n`{text} = {res_str}`"
-            bot.reply_to(message, reply_text, parse_Mode="Markdown")
+            bot.reply_to(message, reply_text, parse_mode="Markdown")
             return
         except Exception as e:
             print(f"Calc error: {e}")
 
-    # 2. Обрабатываем запросы монет
     cleaned_text = re.sub(r'(\d)\s+(\d)', r'\1\2', text)
     parts = cleaned_text.split()
     

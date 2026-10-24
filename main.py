@@ -759,7 +759,7 @@ def handle_chat_messages(message):
     
     text = message.text.strip()
 
-    # 1. Математический калькулятор (поддерживает пробелы и слитно, например: 55.40-53.70 или 53.70+44.80)
+    # 1. Математический калькулятор (минус/плюс, поддерживает пробелы и слитно, например: 53.6-51.9)
     math_pattern = r'^\s*([+-]?\d+(?:\.\d+)?)\s*([+\-])\s*([+-]?\d+(?:\.\d+)?)\s*$'
     match = re.match(math_pattern, text)
     if not match:
@@ -783,29 +783,34 @@ def handle_chat_messages(message):
         except Exception as e:
             print(f"Calc error: {e}")
 
-    # 2. Обрабатываем запросы монет (например: "1 zig", "1398.08 zig", "10000 kat")
-    parts = text.split()
-    if not parts:
-        return
+    # 2. Обрабатываем запросы монет (например: "10 000 zig", "10000zig", "1398.08 zig", "1 zig")
+    cleaned_text = re.sub(r'(\d)\s+(\d)', r'\1\2', text)
+    parts = cleaned_text.split()
     
     multiplier = 1.0
     coin_query = ""
 
     if len(parts) == 2:
         try:
-            multiplier = float(parts[0])
+            multiplier = float(parts[0].replace(',', '.'))
             coin_query = parts[1]
         except ValueError:
             coin_query = parts[0]
     else:
-        coin_query = parts[0]
+        m_join = re.match(r'^([\d\.]+)([a-zA-Z]+)$', text.replace(" ", ""))
+        if m_join:
+            try:
+                multiplier = float(m_join.group(1))
+                coin_query = m_join.group(2)
+            except:
+                coin_query = text
+        else:
+            coin_query = text
 
     norm_query = normalize_symbol(coin_query)
-    
-    # Ищем цену в глобальном кэше цен
     price = latest_prices_cache.get(norm_query, 0.0)
 
-    # Если в кэше нет, пробуем быстро дотянуть точечно
+    # Если в кэше нет, пробуем дотянуть точечно
     if price <= 0:
         base_s = coin_query.upper().replace('USDT', '')
         try:
@@ -816,10 +821,7 @@ def handle_chat_messages(message):
 
     if price > 0:
         total_val = price * multiplier
-        user_name = message.from_user.first_name or "Трейдер"
-        
         reply_msg = (
-            f"👤 **{user_name}**\n"
             f"{multiplier:g} {coin_query.upper()}\n"
             f"🔍 `{price}` USDT\n"
             f"💵 **${total_val:,.2f} USDT**"

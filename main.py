@@ -759,25 +759,21 @@ def handle_chat_messages(message):
     
     text = message.text.strip()
 
-    # 0. Обработка команды /vol [цена1] [цена2] (или просто через пробелы/запятые)
+    # 0. Обработка команды /vol [затраты] [объем в тысячах] (как на скриншоте)
     if text.lower().startswith('/vol') or text.lower().startswith('vol'):
         nums = re.findall(r'\d+(?:\.\d+)?', text)
         if len(nums) >= 2:
             try:
-                p1 = float(nums[0])
-                p2 = float(nums[1])
-                # Расчет: общая сумма траты за комиссию общего объема и на 1К объема
-                total_spend = p1 + p2
-                fee_rate = 0.0004  # Средняя тейкер комиссия 0.04%
-                commission = total_spend * fee_rate
-                spend_per_1k = (total_spend / 1000) if total_spend > 0 else 0
+                spend = float(nums[0])
+                vol_k = float(nums[1])
+                total_volume = vol_k * 1000
+                price_per_1k = spend / vol_k if vol_k > 0 else 0
 
                 reply_vol = (
-                    f"📊 **Расчет по VOL:**\n"
-                    f"🔹 Значения: `{p1}` и `{p2}`\n"
-                    f"💰 Общая сумма траты: `{total_spend:,.4f}` USDT\n"
-                    f"🧾 Комиссия (~0.04%): `{commission:,.4f}` USDT\n"
-                    f"⚡ Затраты на 1К объема: `{spend_per_1k:,.4f}` USDT"
+                    f"📊 **Расчет стоимости объема:**\n"
+                    f"💵 Затраты: `${spend:,.2f}`\n"
+                    f"📈 Объем: `{int(total_volume):,}` (`{vol_k:.1f}K`)\n"
+                    f"💎 Цена за 1К объема:\n`${price_per_1k:,.2f}`"
                 )
                 bot.reply_to(message, reply_vol, parse_mode="Markdown")
                 return

@@ -79,7 +79,7 @@ def secure_request(url, timeout=10):
         return None
 
 # ==================== LINK GENERATORS ====================
-def get_exchange_url(exchange, symbol):
+def get_exchange_url(exchange, symbol="BTCUSDT"):
     base_sym = symbol.replace('USDT', '')
     links = {
         "Binance": f"https://www.binance.com/en/futures/{base_sym}USDT",
@@ -94,7 +94,7 @@ def get_exchange_url(exchange, symbol):
         "Kraken": f"https://futures.kraken.com",
         "Ourbit": f"https://www.ourbit.com/futures/trade/{base_sym}_USDT"
     }
-    return links.get(exchange, "https://google.com")
+    return links.get(exchange, "https://www.binance.com")
 
 def normalize_symbol(raw_sym):
     if not raw_sym:
@@ -190,9 +190,14 @@ def process_item(item_id, raw_text, link, default_topic):
         target_topic = "NEWS"
 
     markup = None
-    if link and link.startswith("http"):
+    # Генерируем прямую ссылку на приложение/биржу вместо сырой ссылки на тг-пост
+    direct_url = get_exchange_url(target_topic) if target_topic in TOPICS and target_topic not in ["NEWS", "SPREAD", "FUNDING"] else link
+    if not direct_url or direct_url == "https://google.com":
+        direct_url = link
+
+    if direct_url and direct_url.startswith("http"):
         markup = InlineKeyboardMarkup()
-        app_button = InlineKeyboardButton(f"🌐 Открыть источник ({target_topic})", url=link)
+        app_button = InlineKeyboardButton(f"📱 Открыть приложение ({target_topic})", url=direct_url)
         markup.add(app_button)
 
     send_to_topic(target_topic, ai_result, reply_markup=markup)
@@ -224,11 +229,12 @@ def fetch_telegram_channels_promos():
                     soup = BeautifulSoup(res.text, 'html.parser')
                     messages = soup.find_all('div', class_='tgme_widget_message')
                     
-                    for msg in messages[-15:]:
+                    # ОГРАНИЧЕНИЕ: Берем только 3 последних поста, чтобы не тратить баланс ИИ при редеплое
+                    for msg in messages[-3:]:
                         msg_id_attr = msg.get('data-post', '')
                         if not msg_id_attr: continue
                         
-                        # ЗАЩИТА ОТ СТАРЫХ ПОСТОВ (архивные старые посты из 2018 и т.д. отсекаются)
+                        # ЗАЩИТА ОТ СТАРЫХ ПОСТОВ
                         date_elem = msg.find('time', class_='tgme_widget_message_date')
                         if date_elem and date_elem.has_attr('datetime'):
                             post_date_str = date_elem['datetime'][:10]
@@ -459,7 +465,6 @@ def monitor_spread():
             for sym, ex_data in prices.items():
                 sym_vols = volumes.get(sym, {})
                 
-                # ЖЕСТКИЙ ФИЛЬТР ЛИКВИДНОСТИ: убираем биржи с объемом ниже $500,000
                 valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 500_000}
 
                 if len(valid_ex_data) < 2:
@@ -473,7 +478,6 @@ def monitor_spread():
                 if min_p <= 0: continue
                 spread = ((max_p - min_p) / min_p) * 100
                 
-                # Порог спреда от 5% до 30%
                 if 5.0 <= spread <= 30.0:
                     current_scanned_syms.add(sym)
 

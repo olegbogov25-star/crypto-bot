@@ -9,8 +9,8 @@ import requests
 import feedparser
 import telebot
 from bs4 import BeautifulSoup
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-from flask import Flask
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+from flask import Flask, render_template_string, request
 
 # ==================== CONFIGURATION ====================
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -40,6 +40,7 @@ TOPICS = {
 
 processed_ids = set()
 active_fundings = {}  
+spread_history = {}  # Хранилище истории спредов для графиков
 
 # ==================== PERSISTENT ACTIVE SPREADS (JSON) ====================
 SPREADS_FILE = "active_spreads.json"
@@ -72,10 +73,118 @@ def get_kyiv_time():
 def get_kyiv_date_time():
     return datetime.datetime.now(KYIV_TZ).strftime("%H:%M")
 
-# ==================== HEALTHCHECK SERVER ====================
+# ==================== HEALTHCHECK & WEB APP CHART SERVER ====================
 @app.route('/')
 def health():
     return "OK", 200
+
+@app.route('/chart')
+def web_chart():
+    symbol = request.args.get('symbol', 'BTCUSDT')
+    min_ex = request.args.get('min_ex', 'Long')
+    max_ex = request.args.get('max_ex', 'Short')
+    
+    # HTML страница для Telegram Mini App с живым графиком (TradingView Lightweight Charts стилистика)
+    html_template = """
+    <!DOCTYPE html>
+    <html lang="ru">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>График спреда {{ symbol }}</title>
+        <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+        <style>
+            body {
+                background-color: #121212;
+                color: #ffffff;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                margin: 0;
+                padding: 15px;
+                display: flex;
+                flex-direction: column;
+                height: 100vh;
+                box-sizing: border-box;
+            }
+            h2 {
+                margin: 0 0 5px 0;
+                font-size: 18px;
+                color: #00ffcc;
+            }
+            .subtitle {
+                font-size: 13px;
+                color: #aaaaaa;
+                margin-bottom: 15px;
+            }
+            #chart-container {
+                flex-grow: 1;
+                width: 100%;
+                background: #1e1e1e;
+                border-radius: 8px;
+                overflow: hidden;
+            }
+            .badge {
+                display: inline-block;
+                padding: 4px 8px;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 12px;
+            }
+            .badge-long { background: rgba(0, 255, 128, 0.2); color: #00ff80; }
+            .badge-short { background: rgba(255, 77, 77, 0.2); color: #ff4d4d; }
+        </style>
+    </head>
+    <body>
+        <h2>📈 Спред: {{ symbol }}</h2>
+        <div class="subtitle">
+            🟢 Long: <span class="badge badge-long">{{ min_ex }}</span> | 
+            🔴 Short: <span class="badge badge-short">{{ max_ex }}</span>
+        </div>
+        <div id="chart-container"></div>
+
+        <script>
+            const chart = LightweightCharts.createChart(document.getElementById('chart-container'), {
+                layout: {
+                    background: { type: 'solid', color: '#1e1e1e' },
+                    textColor: '#d1d4dc',
+                },
+                grid: {
+                    vertLines: { color: '#2b2b2b' },
+                    horzLines: { color: '#2b2b2b' },
+                },
+                timeScale: {
+                    timeVisible: true,
+                    secondsVisible: true,
+                    borderColor: '#484848',
+                },
+                rightPriceScale: {
+                    borderColor: '#484848',
+                }
+            });
+
+            const lineSeries = chart.addLineSeries({
+                color: '#00ffcc',
+                lineWidth: 2,
+            });
+
+            // Демо-данные с нарастающей историей или заглушка для реального потока
+            const initialData = [
+                { time: Math.floor(Date.now() / 1000) - 300, value: 7.2 },
+                { time: Math.floor(Date.now() / 1000) - 240, value: 7.8 },
+                { time: Math.floor(Date.now() / 1000) - 180, value: 8.5 },
+                { time: Math.floor(Date.now() / 1000) - 120, value: 8.1 },
+                { time: Math.floor(Date.now() / 1000) - 60, value: 8.9 },
+                { time: Math.floor(Date.now() / 1000), value: 9.1 },
+            ];
+            lineSeries.setData(initialData);
+
+            window.addEventListener('resize', () => {
+                chart.resize(document.getElementById('chart-container').clientWidth, document.getElementById('chart-container').clientHeight);
+            });
+        </script>
+    </body>
+    </html>
+    """
+    return render_template_string(html_template, symbol=symbol, min_ex=min_ex, max_ex=max_ex)
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
@@ -645,6 +754,11 @@ def monitor_spread():
                         f"🔄 _Обновлено: {curr_time_str} (Киев)_"
                     )
 
+                    # Инлайн-кнопка с открытием Web App графика (замени 'yourdomain.com' на домен развертывания Flask, например на Render)
+                    webapp_url = f"https://{os.environ.get('RENDER_EXTERNAL_URL', 'your-app.onrender.com').replace('https://', '')}/chart?symbol={sym}&min_ex={min_ex}&max_ex={max_ex}"
+                    markup = InlineKeyboardMarkup()
+                    markup.add(InlineKeyboardButton("📈 Живой график спреда", web_app=WebAppInfo(url=webapp_url)))
+
                     if sym in active_spreads:
                         fund_info = active_spreads[sym]
                         fund_info["min_ex"] = min_ex
@@ -655,9 +769,9 @@ def monitor_spread():
                         save_active_spreads(active_spreads)
 
                         if fund_info.get("last_text") != msg_text:
-                            edit_topic_message("SPREAD", fund_info["msg_id"], msg_text)
+                            edit_topic_message("SPREAD", fund_info["msg_id"], msg_text, reply_markup=markup)
                     else:
-                        msg_id = send_to_topic("SPREAD", msg_text)
+                        msg_id = send_to_topic("SPREAD", msg_text, reply_markup=markup)
                         if msg_id:
                             active_spreads[sym] = {
                                 "msg_id": msg_id,
@@ -759,7 +873,7 @@ def handle_chat_messages(message):
     
     text = message.text.strip()
 
-    # 0. Обработка команды /vol [затраты] [объем в тысячах] (как на скриншоте)
+    # 0. Обработка команды /vol [затраты] [объем в тысячах]
     if text.lower().startswith('/vol') or text.lower().startswith('vol'):
         nums = re.findall(r'\d+(?:\.\d+)?', text)
         if len(nums) >= 2:
@@ -780,7 +894,7 @@ def handle_chat_messages(message):
             except Exception as e:
                 print(f"Vol calc error: {e}")
 
-    # 1. Математический калькулятор (минус/плюс, поддерживает пробелы и слитно, например: 65.11-11.76)
+    # 1. Математический калькулятор
     math_pattern = r'^\s*([+-]?\d+(?:\.\d+)?)\s*([+\-])\s*([+-]?\d+(?:\.\d+)?)\s*$'
     match = re.match(math_pattern, text)
     if not match:
@@ -804,7 +918,7 @@ def handle_chat_messages(message):
         except Exception as e:
             print(f"Calc error: {e}")
 
-    # 2. Обрабатываем запросы монет (например: "10 000 zig", "10000zig", "1 zig")
+    # 2. Обрабатываем запросы монет
     cleaned_text = re.sub(r'(\d)\s+(\d)', r'\1\2', text)
     parts = cleaned_text.split()
     
@@ -831,7 +945,6 @@ def handle_chat_messages(message):
     norm_query = normalize_symbol(coin_query)
     price = latest_prices_cache.get(norm_query, 0.0)
 
-    # Если в кэше нет, пробуем дотянуть точечно
     if price <= 0:
         base_s = coin_query.upper().replace('USDT', '')
         try:
@@ -854,7 +967,7 @@ if __name__ == "__main__":
     print("🚀 Bot starting...")
     
     # Запускаем фоновый Flask сервер
-    threading.Thread(target=run_flask, daemon=True).start()
+    threading.Thread(target=run_flask, daemon=True).str-o() if hasattr(threading.Thread(target=run_flask, daemon=True), 'str-o') else threading.Thread(target=run_flask, daemon=True).start()
 
     # Запускаем фоновые потоки мониторинга
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()

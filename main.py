@@ -696,7 +696,8 @@ def monitor_spread():
 
             for sym, ex_data in prices.items():
                 sym_vols = volumes.get(sym, {})
-                valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 200_000}
+                # ОБНОВЛЕННЫЙ ПОРОГ ЛИКВИДНОСТИ: $100,000
+                valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 100_000}
 
                 if len(valid_ex_data) < 2:
                     continue
@@ -754,7 +755,6 @@ def monitor_spread():
                         f"🔄 _Обновлено: {curr_time_str} (Киев)_"
                     )
 
-                    # Инлайн-кнопка с открытием Web App графика (замени 'yourdomain.com' на домен развертывания Flask, например на Render)
                     webapp_url = f"https://{os.environ.get('RENDER_EXTERNAL_URL', 'your-app.onrender.com').replace('https://', '')}/chart?symbol={sym}&min_ex={min_ex}&max_ex={max_ex}"
                     markup = InlineKeyboardMarkup()
                     markup.add(InlineKeyboardButton("📈 Живой график спреда", web_app=WebAppInfo(url=webapp_url)))
@@ -913,7 +913,7 @@ def handle_chat_messages(message):
 
             res_str = f"{result:g}" if isinstance(result, float) and result.is_integer() else f"{result:.4f}".rstrip('0').rstrip('.')
             reply_text = f"🧮 **Калькулятор:**\n`{text} = {res_str}`"
-            bot.reply_to(message, reply_text, parse_mode="Markdown")
+            bot.reply_to(message, reply_text, parse_Mode="Markdown")
             return
         except Exception as e:
             print(f"Calc error: {e}")
@@ -967,7 +967,7 @@ if __name__ == "__main__":
     print("🚀 Bot starting...")
     
     # Запускаем фоновый Flask сервер
-    threading.Thread(target=run_flask, daemon=True).str-o() if hasattr(threading.Thread(target=run_flask, daemon=True), 'str-o') else threading.Thread(target=run_flask, daemon=True).start()
+    threading.Thread(target=run_flask, daemon=True).start()
 
     # Запускаем фоновые потоки мониторинга
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()

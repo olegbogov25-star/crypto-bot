@@ -444,7 +444,6 @@ def fetch_futures_data():
     global latest_prices_cache
     for sym, ex_dict in prices.items():
         if ex_dict:
-            # Берем среднюю или первую доступную цену для быстрого расчета
             latest_prices_cache[sym] = list(ex_dict.values())[0]
 
     return prices, volumes, fundings, funding_times
@@ -473,7 +472,7 @@ def monitor_spread():
             for sym, ex_data in prices.items():
                 sym_vols = volumes.get(sym, {})
                 
-                # Обновленный фильтр ликвидности: от $200,000
+                # Порог ликвидности: от $200,000
                 valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 200_000}
 
                 if len(valid_ex_data) < 2:
@@ -487,7 +486,7 @@ def monitor_spread():
                 if min_p <= 0: continue
                 spread = ((max_p - min_p) / min_p) * 100
                 
-                # Обновленный диапазон спреда: от 7.0% до 30.0%
+                # Диапазон спреда: от 7.0% до 30.0%
                 if 7.0 <= spread <= 30.0:
                     current_scanned_syms.add(sym)
 
@@ -660,12 +659,13 @@ def monitor_funding():
         
         time.sleep(300)
 
-# ==================== CALCULATOR MESSAGE HANDLER (ТОПИК «Чат» ID=1) ====================
-@bot.message_handler(func=lambda message: message.message_thread_id == TOPICS.get("CHAT"))
+# ==================== UNIVERSAL CALCULATOR MESSAGE HANDLER ====================
+@bot.message_handler(func=lambda message: message.text and not message.text.startswith('/'))
 def handle_calculator(message):
     try:
         text = message.text.strip()
-        # Ищем паттерн: число + название монеты (например, "1417 zig" или "50 btc")
+        
+        # Проверяем формат "число + монета" (например, "1 btc" или "1417 zig")
         match = re.match(r'^([\d\.]+)\s+([a-zA-Z0-9]+)$', text)
         if not match:
             return
@@ -674,10 +674,11 @@ def handle_calculator(message):
         raw_coin = match.group(2)
         symbol = normalize_symbol(raw_coin)
 
-        # Проверяем, есть ли цена в нашем кэше
+        # 1. Сначала ищем цену в нашем глобальном кэше
         price = latest_prices_cache.get(symbol, 0.0)
+
+        # 2. Если в кэше нет, делаем быстрый прямой запрос к публичному API Binance
         if price <= 0:
-            # Если прямой цены нет, попробуем запросить быка с Binance API
             try:
                 r = requests.get(f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={symbol}", timeout=3).json()
                 if 'price' in r:
@@ -686,26 +687,32 @@ def handle_calculator(message):
                 pass
 
         if price <= 0:
-            bot.reply_to(message, f"❌ Монета `{symbol}` не найдена в активных котировках.", parse_mode="Markdown")
-            return
+            try:
+                r = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}", timeout=3).json()
+                if 'price' in r:
+                    price = float(r['price'])
+            except:
+                pass
+
+        if price <= 0:
+            return  # Если цены нет вообще нигде, молчим
 
         total_usdt = amount * price
         base_sym = symbol.replace('USDT', '')
 
-        # Формируем ответ с кнопкой биржи (например, Binance)
         exchange_url = get_exchange_url("BINANCE", symbol)
         markup = InlineKeyboardMarkup()
         if exchange_url:
-            markup.add(InlineKeyboardButton(f"🌐 {base_sym}", url=exchange_url))
+            markup.add(InlineKeyboardButton(f"🌐 Биржа ({base_sym})", url=exchange_url))
 
         reply_text = (
-            f"🔍 **{amount:,.0f} {base_sym} ({base_sym})**\n"
+            f"🔍 **{amount:,.4f} {base_sym}**\n"
             f"💵 **${total_usdt:,.2f} USDT**"
         )
 
         bot.send_message(
-            chat_id=CHAT_ID,
-            message_thread_id=TOPICS.get("CHAT"),
+            chat_id=message.chat.id,
+            message_thread_id=getattr(message, 'message_thread_id', None),
             text=reply_text,
             parse_mode="Markdown",
             reply_to_message_id=message.message_id,

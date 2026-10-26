@@ -770,6 +770,8 @@ def cmd_vol(message):
 
 @bot.message_handler(func=lambda message: True)
 def handle_chat_messages(message):
+    if not message.text:
+        return
     text = message.text.strip()
     
     # 1. Калькулятор спреда (вычитание вида 61.66-52.50)
@@ -787,16 +789,21 @@ def handle_chat_messages(message):
     if text.startswith('/'):
         return
 
-    # 2. Обработка связки "количество + монета" (например: 1400 zig, 500 btc)
-    amount_token_match = re.search(r'^([\d.]+)\s+([a-zA-Z0-9_-]+)$', text)
+    # 2. УНИВЕРСАЛЬНЫЙ КАЛЬКУЛЯТОР МОНЕТ/ЩИТКОВ (например: 1400 zig, 500.5 btc, 1000000 pepe)
+    amount_token_match = re.search(r'^([\d\s,.]+)\s+([a-zA-Z0-9_-]+)$', text)
     if amount_token_match:
         try:
-            amount = float(amount_token_match.group(1))
+            raw_amount_str = amount_token_match.group(1).replace(' ', '').replace(',', '')
+            amount = float(raw_amount_str)
             raw_tkn = amount_token_match.group(2)
             sym = normalize_symbol(raw_tkn)
             
             prices, volumes, _, _ = fetch_futures_data()
             sym_prices = prices.get(sym, {})
+            
+            if not sym_prices:
+                prices, volumes, _, _ = fetch_futures_data()
+                sym_prices = prices.get(sym, {})
             
             if sym_prices:
                 avg_price = list(sym_prices.values())[0]
@@ -817,9 +824,9 @@ def handle_chat_messages(message):
                 bot.reply_to(message, "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
                 return
         except Exception as e:
-            print(f"Amount-Token calc error: {e}")
+            print(f"Universal Amount-Token calc error: {e}")
 
-    # 3. Обычный поиск тикера монеты (если ввели просто 'zig' или 'BTC')
+    # 3. Обычный поиск тикера монеты (если ввели просто 'zig', 'BTC', 'pepe')
     if len(text) > 15:
         return
         

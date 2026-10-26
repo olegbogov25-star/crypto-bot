@@ -755,3 +755,14 @@ def format_countdown(target_timestamp):
     hours = int(diff // 3600)
     minutes = int((diff % 3600) // 60)
     return f"{hours}ч {minutes:02d}м"
+
+# ==================== MAIN STARTUP & THREADING ====================
+if __name__ == "__main__":
+    # Запускаем фоновые потоки для мониторинга каналов и промо-акций
+    threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
+    threading.Thread(target=fetch_direct_exchange_promos, daemon=True).start()
+    threading.Thread(target=fetch_global_crypto_promos, daemon=True).start()
+
+    # Запускаем Flask-сервер (Render требует слушать 0.0.0.0 и порт из переменной окружения)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)

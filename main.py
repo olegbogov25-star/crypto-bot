@@ -742,7 +742,7 @@ def monitor_spread():
         time.sleep(30)
 
 # ==================== TELEGRAM COMMANDS & CHAT HANDLERS ====================
-@bot.message_handler(commands=['vol', 'volume', 'voll'])
+@bot.message_handler(commands=['vol', 'volume'])
 def cmd_vol(message):
     if message.message_thread_id != TOPICS.get("CHAT"):
         return
@@ -765,7 +765,7 @@ def cmd_vol(message):
         except Exception:
             pass
             
-    bot.reply_to(message, "ℹ️ Использование команды: `/voll [затраты] [объем]` (например: `/voll 52.5 11`)", parse_mode="Markdown")
+    bot.reply_to(message, "ℹ️ Использование команды: `/vol [затраты] [объем]` (например: `/vol 52.5 11`)", parse_mode="Markdown")
 
 @bot.message_handler(func=lambda message: message.message_thread_id == TOPICS.get("CHAT"))
 def handle_chat_messages(message):
@@ -783,7 +783,7 @@ def handle_chat_messages(message):
         except Exception:
             pass
 
-    # 2. Если это запрос монеты — ищем по ценам
+    # 2. Если это тикер монеты — ищем по ценам
     if text.startswith('/') or len(text) > 15:
         return
         

@@ -743,30 +743,13 @@ def fetch_token_prices_on_demand(sym):
 
     return ex_prices, ex_vols
 
-def format_volume(vol):
-    if vol >= 1_000_000: return f"${vol / 1_000_000:.1f}M (24h)"
-    elif vol >= 1_000: return f"${vol / 1_000:.1f}K (24h)"
-    else: return f"${vol:.0f} (24h)"
-
-def format_countdown(target_timestamp):
-    if not target_timestamp: return "N/A"
-    diff = target_timestamp - time.time()
-    if diff <= 0: return "0ч 00м"
-    hours = int(diff // 3600)
-    minutes = int((diff % 3600) // 60)
-    return f"{hours}ч {minutes:02d}м"
-
 # ==================== MAIN STARTUP & THREADING ====================
 if __name__ == "__main__":
-    # 1. Запуск мониторинга Telegram-каналов
+    # Запускаем все фоновые потоки мониторинга каналов, сайтов и RSS
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
-    
-    # 2. Запуск парсеров сайтов и официальных API бирж
     threading.Thread(target=fetch_direct_exchange_promos, daemon=True).start()
-    
-    # 3. Запуск глобальных крипто-агрегаторов и RSS
     threading.Thread(target=fetch_global_crypto_promos, daemon=True).start()
 
-    # 4. Запуск Flask-сервера для веб-приложения и графиков спредов
+    # Запускаем Flask-сервер для графиков спредов и веб-приложения
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)

@@ -21,6 +21,7 @@ ADMIN_IDS = [1043209905]
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 app = Flask(__name__)
 
+# Топики (Kraken и WhiteBit удалены, добавлен WEB3)
 TOPICS = {
     "NEWS": 2, 
     "MEXC": 68,       
@@ -29,13 +30,12 @@ TOPICS = {
     "BITGET": 69,    
     "BINGX": 70,    
     "KUCOIN": 71,   
-    "WHITEBIT": 72, 
-    "KRAKEN": 73,   
     "GATE": 67,       
     "OKX": 2,         
     "FUNDING": 76,  
     "SPREAD": 77,
-    "CHAT": 1       # ID топика «Чат» для калькулятора, /vol и запросов монет
+    "WEB3": 78,       # Топик для Web3-активностей (OKX & Binance Wallet)
+    "CHAT": 1         # ID топика «Чат» для калькулятора, /vol и запросов монет
 }
 
 processed_ids = set()
@@ -223,8 +223,6 @@ def get_exchange_url(exchange, symbol="BTCUSDT"):
         "MEXC": f"https://futures.mexc.com/exchange/{base_sym}_USDT",
         "BINGX": f"https://bingx.com/en/futures/forward/{base_sym}USDT",
         "KUCOIN": f"https://www.kucoin.com/futures/trade/{base_sym}USDTM",
-        "WHITEBIT": f"https://whitebit.com/trade/{base_sym}_USDT?type=futures",
-        "KRAKEN": f"https://futures.kraken.com",
         "OURBIT": f"https://www.ourbit.com/futures/trade/{base_sym}_USDT"
     }
     return links.get(ex_upper, None)
@@ -249,9 +247,9 @@ def analyze_text(text):
     if not OPENROUTER_API_KEY:
         return text
     prompt = f"""
-Ты — профессиональный финансовый аналитик крипто-анонсов, промо-акций, кешбеков, квизов и торговых турниров. 
-Найди и структурируй любые активности, лаунчпулы, баунти, раздачи, аирдропы, квизы (Quiz), розыгрыши мерча, XP-программы и турниры.
-Ответь строго одним словом "SKIP", только если это чисто техническое обслуживание сервера/биржи без бонусов или юридические судебные иски. Любые квизы, мерч, раздачи, поинты и промо НЕ пропускай!
+Ты — профессиональный финансовый аналитик крипто-анонсов, промо-акций, кешбеков, квизов, торговых турниров и Web3 аирдропов. 
+Найди и структурируй любые активности, лаунчпулы, баунти, раздачи, аирдропы, квизы (Quiz), розыгрыши мерча, XP-программы, турниры и Web3-квесты.
+Ответь строго одним словом "SKIP", только если это чисто техническое обслуживание сервера/биржи без бонусов или юридические судебные иски. Любые квизы, мерч, раздачи, поинты, Web3 и промо НЕ пропускай!
 Сформируй отчет по форме:
 1. 📌 **Источник / Платформа:**
 2. 🏷 **Тип события / Теги:**
@@ -308,7 +306,7 @@ def process_item(item_id, raw_text, link, default_topic):
     if target_topic not in TOPICS:
         target_topic = "NEWS"
 
-    exchange_url = get_exchange_url(target_topic) if target_topic in TOPICS and target_topic not in ["NEWS", "SPREAD", "FUNDING", "CHAT"] else None
+    exchange_url = get_exchange_url(target_topic) if target_topic in TOPICS and target_topic not in ["NEWS", "SPREAD", "FUNDING", "WEB3", "CHAT"] else None
 
     markup = InlineKeyboardMarkup()
     if exchange_url and exchange_url.startswith("http"):
@@ -328,10 +326,8 @@ def fetch_telegram_channels_promos():
         "BITGET": ["BitgetUA", "Bitget_Announcements", "BitgetENOfficial"],
         "MEXC": ["MEXCKraineOfficial", "MEXCofficialNews", "MEXCofficial"],
         "GATE": ["Gate_Ukrainian", "Gateio_NewList_News", "GateCom_EN"],
-        "KRAKEN": ["kraken_announcements"],
         "BINGX": ["BingXOfficial", "BingXAnnouncement", "BingXEnglish", "BingXRussianAnnouncements"],
-        "KUCOIN": ["Kucoin_Exchange", "Kucoin_News"],
-        "WHITEBIT": ["whitebit_ua_news", "White_Bit"]
+        "KUCOIN": ["Kucoin_Exchange", "Kucoin_News"]
     }
     
     while True:
@@ -381,17 +377,22 @@ def fetch_telegram_channels_promos():
 def fetch_direct_exchange_promos():
     while True:
         try:
-            binance_api = "https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=48&pageNo=1&pageSize=10"
-            res = secure_request(binance_api, timeout=6)
-            if res:
-                data = res.json()
-                for art in data.get('data', {}).get('articles', []):
-                    art_id = f"dir_binance_{art.get('id')}"
-                    title = art.get('title', '')
-                    code = art.get('code', '')
-                    link = f"https://www.binance.com/en/support/announcement/{code}" if code else "https://www.binance.com"
-                    raw_text = f"Binance Direct API Promo / Campaign: {title}\nLink: {link}"
-                    process_item(art_id, raw_text, link, "BINANCE")
+            binance_apis = [
+                ("https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=48&pageNo=1&pageSize=10", "BINANCE"),
+                ("https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=161&pageNo=1&pageSize=10", "BINANCE"),
+                ("https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=379&pageNo=1&pageSize=10", "WEB3")
+            ]
+            for api_url, top_name in binance_apis:
+                res = secure_request(api_url, timeout=6)
+                if res:
+                    data = res.json()
+                    for art in data.get('data', {}).get('articles', []):
+                        art_id = f"dir_binance_{art.get('id')}"
+                        title = art.get('title', '')
+                        code = art.get('code', '')
+                        link = f"https://www.binance.com/en/support/announcement/{code}" if code else "https://www.binance.com"
+                        raw_text = f"Binance Direct API Promo / Campaign: {title}\nLink: {link}"
+                        process_item(art_id, raw_text, link, top_name)
 
             mexc_api = "https://www.mexc.com/api/support/list?categoryId=19&page=1&pageSize=10"
             res_mexc = secure_request(mexc_api, timeout=6)
@@ -404,13 +405,30 @@ def fetch_direct_exchange_promos():
                     raw_text = f"MEXC Direct API Promo / Campaign: {title}\nLink: {link}"
                     process_item(item_id, raw_text, link, "MEXC")
 
+            web3_sources = [
+                ("OKX", "https://www.okx.com/en/web3/discover/cryptopedia", "a"),
+                ("BINANCE", "https://www.binance.com/en/web3", "a")
+            ]
+            for w_ex, w_url, w_tag in web3_sources:
+                w_res = secure_request(w_url, timeout=8)
+                if w_res:
+                    w_soup = BeautifulSoup(w_res.text, 'html.parser')
+                    for el in w_soup.find_all(w_tag, limit=10):
+                        w_title = el.get_text(strip=True)
+                        if len(w_title) < 20: continue
+                        w_link = el.get('href', '')
+                        if w_link and not w_link.startswith('http'):
+                            if w_ex == "OKX": w_link = f"https://www.okx.com{w_link}"
+                        item_id = f"web3_{w_ex.lower()}_{abs(hash(w_title))}"
+                        raw_text = f"Web3 Wallet Quest / Airdrop [{w_ex} Wallet]: {w_title}\nLink: {w_link if w_link else w_url}"
+                        process_item(item_id, raw_text, w_link if w_link else w_url, "WEB3")
+
             websites = [
                 ("OKX", "https://www.okx.com/help/section/announcements-latest-promotions", "a"),
                 ("BITGET", "https://www.bitget.com/support/articles/latest-activities", "a"),
                 ("BITGET_EVENTS", "https://www.bitget.com/events", "a"),
                 ("GATE", "https://www.gate.io/articlelist/ann", "a"),
-                ("KUCOIN", "https://www.kucoin.com/news/categories/promotion", "a"),
-                ("WHITEBIT", "https://blog.whitebit.com/category/events/", "h2")
+                ("KUCOIN", "https://www.kucoin.com/news/categories/promotion", "a")
             ]
 
             for ex_name, site_url, tag in websites:
@@ -720,7 +738,6 @@ def fetch_token_prices_on_demand(sym):
             ex_vols['Bitget'] = float(r[0].get('quoteVolume', 0))
     except: pass
 
-    # Если через прямой запрос ничего не нашлось, проверяем общий кэш
     if not ex_prices and sym in latest_prices_cache:
         ex_prices['Общий кэш'] = latest_prices_cache[sym]
 

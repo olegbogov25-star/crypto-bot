@@ -744,9 +744,6 @@ def monitor_spread():
 # ==================== TELEGRAM COMMANDS & CHAT HANDLERS ====================
 @bot.message_handler(commands=['vol', 'volume'])
 def cmd_vol(message):
-    if message.message_thread_id != TOPICS.get("CHAT"):
-        return
-    
     args = message.text.split()
     if len(args) >= 3:
         try:
@@ -767,11 +764,11 @@ def cmd_vol(message):
             
     bot.reply_to(message, "ℹ️ Использование команды: `/vol [затраты] [объем]` (например: `/vol 52.5 11`)", parse_mode="Markdown")
 
-@bot.message_handler(func=lambda message: message.message_thread_id == TOPICS.get("CHAT"))
+@bot.message_handler(func=lambda message: True)
 def handle_chat_messages(message):
     text = message.text.strip()
     
-    # 1. Проверяем, не математический ли это пример (калькулятор спреда вроде 61.66-52.50)
+    # 1. Проверяем калькулятор спреда (вычитание вида 61.66-52.50)
     calc_match = re.search(r'^([\d.]+)\s*-\s*([\d.]+)$', text)
     if calc_match:
         try:
@@ -783,7 +780,7 @@ def handle_chat_messages(message):
         except Exception:
             pass
 
-    # 2. Если это тикер монеты — ищем по ценам
+    # 2. Если это не тикер монеты — пропускаем
     if text.startswith('/') or len(text) > 15:
         return
         
@@ -820,6 +817,6 @@ if __name__ == "__main__":
     threading.Thread(target=fetch_global_crypto_promos, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()
 
-    # Запуск бота на получение сообщений (команды и чат)
+    # Запуск бота на получение сообщений
     print("🤖 Telegram bot polling started...")
     bot.infinity_polling(skip_pending=True)

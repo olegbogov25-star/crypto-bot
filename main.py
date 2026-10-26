@@ -741,6 +741,40 @@ def monitor_spread():
         
         time.sleep(30)
 
+# ==================== TELEGRAM COMMANDS & CHAT HANDLERS ====================
+@bot.message_handler(commands=['vol', 'volume'])
+def cmd_vol(message):
+    if message.message_thread_id != TOPICS.get("CHAT"):
+        return
+    bot.reply_to(message, "📊 Бот работает в штатном режиме. Порог ликвидности сканера спредов: **$100,000**.")
+
+@bot.message_handler(func=lambda message: message.message_thread_id == TOPICS.get("CHAT"))
+def handle_chat_messages(message):
+    text = message.text.strip()
+    
+    # Калькулятор или запросы монет прямо в топике «Чат»
+    if text.startswith('/') or len(text) > 15:
+        return
+    
+    sym = normalize_symbol(text)
+    if not sym:
+        return
+        
+    prices, volumes, fundings, _ = fetch_futures_data()
+    sym_prices = prices.get(sym, {})
+    if not sym_prices:
+        return
+        
+    sorted_exs = sorted(sym_prices.keys(), key=lambda ex: sym_prices[ex])
+    lines = [f"🪙 **Монета: #{sym}**\n"]
+    for ex in sorted_exs:
+        p = sym_prices[ex]
+        v = format_volume(volumes.get(sym, {}).get(ex, 0))
+        url = get_exchange_url(ex, sym)
+        lines.append(f"🔹 [{ex}]({url}): `${p}` ({v})")
+        
+    bot.reply_to(message, "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
+
 # ==================== MAIN START ====================
 if __name__ == "__main__":
     print("🚀 Bot starting...")
@@ -749,12 +783,12 @@ if __name__ == "__main__":
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
 
-    # Запускаем мониторы в фоновых потоках
+    # Запускаем фоновые потоки сканеров промо и спредов
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     threading.Thread(target=fetch_direct_exchange_promos, daemon=True).start()
     threading.Thread(target=fetch_global_crypto_promos, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()
 
-    # Бесконечный цикл для поддержания работы основного потока
-    while True:
-        time.sleep(1)
+    # Запуск бота на получение сообщений (команды и чат)
+    print("🤖 Telegram bot polling started...")
+    bot.infinity_polling(skip_pending=True)

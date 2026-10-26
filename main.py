@@ -627,7 +627,7 @@ def fetch_futures_data():
 
     return prices, volumes, fundings, funding_times
 
-# ==================== УНИВЕРСАЛЬНЫЙ ПОИСК ЦЕНЫ МОНЕТЫ СО ВСЕХ БИРЖ (SPOT + FUTURES) ====================
+# ==================== УНИВЕРСАЛЬНЫЙ ПОИСК ЦЕНЫ И СТАКАНОВ МОНЕТ (SPOT + FUTURES) ====================
 def fetch_token_prices_on_demand(sym):
     base_sym = sym.replace('USDT', '')
     ex_prices = {}
@@ -635,9 +635,10 @@ def fetch_token_prices_on_demand(sym):
 
     # 1. Binance (Spot + Futures)
     try:
-        r = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={base_sym}USDT", timeout=2).json()
-        if 'price' in r:
-            ex_prices['Binance Spot'] = float(r['price'])
+        r = requests.get(f"https://api.binance.com/api/v3/ticker/24hr?symbol={base_sym}USDT", timeout=2).json()
+        if 'lastPrice' in r:
+            ex_prices['Binance Spot'] = float(r['lastPrice'])
+            ex_vols['Binance Spot'] = float(r.get('quoteVolume', 0))
     except: pass
     try:
         r = requests.get(f"https://fapi.binance.com/fapi/v1/ticker/24hr?symbol={base_sym}USDT", timeout=2).json()
@@ -646,7 +647,14 @@ def fetch_token_prices_on_demand(sym):
             ex_vols['Binance'] = float(r.get('quoteVolume', 0))
     except: pass
 
-    # 2. Bybit
+    # 2. Bybit (Spot + Futures)
+    try:
+        r = requests.get(f"https://api.bybit.com/v5/market/tickers?category=spot&symbol={base_sym}USDT", timeout=2).json()
+        lst = r.get('result', {}).get('list', [])
+        if lst:
+            ex_prices['Bybit Spot'] = float(lst[0]['lastPrice'])
+            ex_vols['Bybit Spot'] = float(lst[0].get('turnover24h', 0))
+    except: pass
     try:
         r = requests.get(f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={base_sym}USDT", timeout=2).json()
         lst = r.get('result', {}).get('list', [])
@@ -655,21 +663,28 @@ def fetch_token_prices_on_demand(sym):
             ex_vols['Bybit'] = float(lst[0].get('turnover24h', 0))
     except: pass
 
-    # 3. MEXC
+    # 3. MEXC (Spot + Futures)
+    try:
+        r = requests.get(f"https://api.mexc.com/api/v3/ticker/24hr?symbol={base_sym}USDT", timeout=2).json()
+        if 'lastPrice' in r:
+            ex_prices['MEXC Spot'] = float(r['lastPrice'])
+            ex_vols['MEXC Spot'] = float(r.get('quoteVolume', 0))
+    except: pass
     try:
         r = requests.get(f"https://contract.mexc.com/api/v1/contract/ticker?symbol={base_sym}_USDT", timeout=2).json()
         data = r.get('data', {})
         if 'lastPrice' in data:
             ex_prices['MEXC'] = float(data['lastPrice'])
-            ex_vols['MEXC'] = float(data.get('amount24h', 0))
-    except: pass
-    try:
-        r = requests.get(f"https://api.mexc.com/api/v3/ticker/price?symbol={base_sym}USDT", timeout=2).json()
-        if 'price' in r:
-            ex_prices['MEXC Spot'] = float(r['price'])
+            ex_vols['MEXC'] = float(data.get('amount24h', 0)) * float(data['lastPrice'])
     except: pass
 
-    # 4. Gate.io
+    # 4. Gate.io (Spot + Futures)
+    try:
+        r = requests.get(f"https://api.gateio.ws/api/v4/spot/tickers?currency_pair={base_sym}_USDT", timeout=2).json()
+        if isinstance(r, list) and len(r) > 0:
+            ex_prices['Gate Spot'] = float(r[0]['last'])
+            ex_vols['Gate Spot'] = float(r[0].get('quote_volume', 0))
+    except: pass
     try:
         r = requests.get(f"https://api.gateio.ws/api/v4/futures/usdt/tickers?contract={base_sym}_USDT", timeout=2).json()
         if isinstance(r, list) and len(r) > 0:
@@ -677,15 +692,37 @@ def fetch_token_prices_on_demand(sym):
             ex_vols['Gate'] = float(r[0].get('total_size', 0)) * float(r[0]['last'])
     except: pass
 
-    # 5. KuCoin
+    # 5. OKX (Spot + Swap)
     try:
-        r = requests.get(f"https://api-futures.kucoin.com/api/v1/binding/contract?symbol={base_sym}USDTM", timeout=2).json()
-        # запасной универсальный запрос
+        r = requests.get(f"https://www.okx.com/api/v5/market/ticker?instId={base_sym}-USDT", timeout=2).json().get('data', [])
+        if r:
+            ex_prices['OKX Spot'] = float(r[0]['last'])
+            ex_vols['OKX Spot'] = float(r[0].get('volCcy24h', 0))
+    except: pass
+    try:
+        r = requests.get(f"https://www.okx.com/api/v5/market/ticker?instId={base_sym}-USDT-SWAP", timeout=2).json().get('data', [])
+        if r:
+            ex_prices['OKX'] = float(r[0]['last'])
+            ex_vols['OKX'] = float(r[0].get('volCcy24h', 0))
     except: pass
 
-    # Если через прямой поиск ничего не нашлось, ищем в общем кэше
+    # 6. Bitget (Spot + Futures)
+    try:
+        r = requests.get(f"https://api.bitget.com/api/v2/spot/market/tickers?symbol={base_sym}USDT", timeout=2).json().get('data', [])
+        if r:
+            ex_prices['Bitget Spot'] = float(r[0]['close'])
+            ex_vols['Bitget Spot'] = float(r[0].get('usdtVol', 0))
+    except: pass
+    try:
+        r = requests.get(f"https://api.bitget.com/api/v2/mix/market/ticker?symbol={base_sym}USDT&productType=USDT-FUTURES", timeout=2).json().get('data', [])
+        if r:
+            ex_prices['Bitget'] = float(r[0]['lastPr'])
+            ex_vols['Bitget'] = float(r[0].get('quoteVolume', 0))
+    except: pass
+
+    # Если через прямой запрос ничего не нашлось, проверяем общий кэш
     if not ex_prices and sym in latest_prices_cache:
-        ex_prices['Биржи (Общий кэш)'] = latest_prices_cache[sym]
+        ex_prices['Общий кэш'] = latest_prices_cache[sym]
 
     return ex_prices, ex_vols
 
@@ -719,7 +756,6 @@ def monitor_spread():
             for sym, ex_data in prices.items():
                 scanned_count += 1
                 sym_vols = volumes.get(sym, {})
-                # ОБНОВЛЕННЫЙ ПОРОГ ЛИКВИДНОСТИ: $100,000
                 valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 100_000}
 
                 if len(valid_ex_data) < 2:
@@ -781,7 +817,6 @@ def monitor_spread():
                         f"🔄 _Обновлено: {curr_time_str} (Киев)_"
                     )
 
-                    # --- БЕЗОПАСНАЯ ГЕНЕРАЦИЯ WEBAPP URL ---
                     render_url = os.environ.get('RENDER_EXTERNAL_URL', '').strip()
                     if not render_url:
                         render_url = "https://your-app.onrender.com"
@@ -802,6 +837,67 @@ def monitor_spread():
             print(f"❌ Monitor Spread Error: {e}")
         
         time.sleep(30)
+
+# ==================== FUNDING MONITOR (ВЕРНУЛ ОБРАТНО ДЛЯ ТОПИКА 76) ====================
+def monitor_funding():
+    print("🟢 Funding Monitor started (Topic 76)")
+    while True:
+        try:
+            _, volumes, fundings, funding_times = fetch_futures_data()
+            curr_time_str = get_kyiv_time()
+
+            # Собираем самые интересные ставки фандинга (положительные или отрицательные > 0.05% или в топ ликвидности)
+            funding_list = []
+            for sym, ex_funds in fundings.items():
+                sym_vols = volumes.get(sym, {})
+                for ex, rate in ex_funds.items():
+                    if abs(rate) >= 0.05:  # Уведомляем если ставка заметная
+                        vol = sym_vols.get(ex, 0)
+                        if vol >= 100_000:  # Ликвидность от $100k
+                            next_t = funding_times.get(sym, {}).get(ex, 0)
+                            countdown = format_countdown(next_t)
+                            url = get_exchange_url(ex, sym)
+                            funding_list.append({
+                                'sym': sym,
+                                'ex': ex,
+                                'rate': rate,
+                                'vol': vol,
+                                'countdown': countdown,
+                                'url': url
+                            })
+
+            # Сортируем по абсолютной величине ставки
+            funding_list.sort(key=lambda x: abs(x['rate']), reverse=True)
+
+            # Отправляем топ аномалий фандинга (чтобы не спамить, берем топ-5 самых ярких)
+            sent_count = 0
+            for item in funding_list[:5]:
+                sym = item['sym']
+                ex = item['ex']
+                rate = item['rate']
+                countdown = item['countdown']
+                url = item['url']
+                v_str = format_volume(item['vol'])
+
+                emoji = "🚀" if rate > 0 else "🔻"
+                msg_text = (
+                    f"💰 **Funding Alert | #{sym}**\n"
+                    f"🏦 Биржа: [{ex}]({url})\n"
+                    f"{emoji} Ставка: `{rate:+.4f}%`\n"
+                    f"⏳ До выплаты: `{countdown}`\n"
+                    f"📊 Ликвидность: `{v_str}`\n\n"
+                    f"🔄 _Обновлено: {curr_time_str} (Киев)_"
+                )
+                send_to_topic("FUNDING", msg_text)
+                sent_count += 1
+                if sent_count >= 3:
+                    break
+
+        except Exception as e:
+            print(f"❌ Funding Monitor Error: {e}")
+        
+        # Проверяем фандинг раз в 30 минут
+        time.sleep(1800)
 
 # ==================== TELEGRAM COMMANDS & CHAT HANDLERS ====================
 @bot.message_handler(commands=['vol', 'volume'])
@@ -860,7 +956,7 @@ def handle_chat_messages(message):
             raw_tkn = amount_token_match.group(2)
             sym = normalize_symbol(raw_tkn)
             
-            # Точечный запрос цен со всех бирж для конкретной монеты
+            # Динамический точечный запрос цен со всех спотов и фьючерсов бирж
             sym_prices, sym_vols = fetch_token_prices_on_demand(sym)
             
             if sym_prices:
@@ -872,11 +968,11 @@ def handle_chat_messages(message):
                     f"📦 Количество: `{amount:,.4f}`",
                     f"💵 Текущая цена: `${avg_price}`",
                     f"💰 **Общая стоимость:** `~${total_usd:,.2f} USD`\n",
-                    "📝 **Цены на биржах:**"
+                    "📝 **Цены на биржах (Spot & Futures):**"
                 ]
                 for ex, p in sorted(sym_prices.items(), key=lambda x: x[1]):
                     v = format_volume(sym_vols.get(ex, 0))
-                    url = get_exchange_url(ex, sym)
+                    url = get_exchange_url(ex.replace(' Spot', ''), sym)
                     lines.append(f"🔹 [{ex}]({url}): `${p}` ({v})")
                 
                 bot.reply_to(message, "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
@@ -897,11 +993,11 @@ def handle_chat_messages(message):
         return
         
     sorted_exs = sorted(sym_prices.keys(), key=lambda ex: sym_prices[ex])
-    lines = [f"🪙 **Монета: #{sym}**\n"]
+    lines = [f"🪙 **Монета: #{sym} (Spot & Futures)**\n"]
     for ex in sorted_exs:
         p = sym_prices[ex]
         v = format_volume(sym_vols.get(ex, 0))
-        url = get_exchange_url(ex, sym)
+        url = get_exchange_url(ex.replace(' Spot', ''), sym)
         lines.append(f"🔹 [{ex}]({url}): `${p}` ({v})")
         
     bot.reply_to(message, "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
@@ -914,11 +1010,12 @@ if __name__ == "__main__":
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
 
-    # Запускаем фоновые потоки сканеров промо и спредов
+    # Запускаем фоновые потоки сканеров промо, спредов и фандинга
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     threading.Thread(target=fetch_direct_exchange_promos, daemon=True).start()
     threading.Thread(target=fetch_global_crypto_promos, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()
+    threading.Thread(target=monitor_funding, daemon=True).start()  # Фандинг-сканер запущен для топика 76
 
     # Запуск бота на получение сообщений
     print("🤖 Telegram bot polling started...")

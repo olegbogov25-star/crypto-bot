@@ -789,8 +789,8 @@ def handle_chat_messages(message):
     if text.startswith('/'):
         return
 
-    # 2. УНИВЕРСАЛЬНЫЙ КАЛЬКУЛЯТОР МОНЕТ/ЩИТКОВ (например: 1400 zig, 500.5 btc, 1000000 pepe)
-    amount_token_match = re.search(r'^([\d\s,.]+)\s+([a-zA-Z0-9_-]+)$', text)
+    # 2. УНИВЕРСАЛЬНЫЙ КАЛЬКУЛЯТОР МОНЕТ (работает СЛИТНО и НЕ СЛИТНО: 1400zig, 1400 zig, 500.5btc)
+    amount_token_match = re.search(r'^([\d\s,.]+?)\s*([a-zA-Z0-9_-]+)$', text)
     if amount_token_match:
         try:
             raw_amount_str = amount_token_match.group(1).replace(' ', '').replace(',', '')

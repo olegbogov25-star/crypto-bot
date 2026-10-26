@@ -749,12 +749,16 @@ def cmd_vol(message):
         try:
             cost = float(args[1])
             volume = float(args[2])
+            if volume <= 0:
+                raise ValueError
+            
             cost_per_1k = (cost / volume) * 1000
+            vol_display = f"{volume:,.1f} ({volume/1000:.2f}K)" if volume < 1000 else f"{volume:,.0f} ({volume/1000:.1f}K)"
             
             response_text = (
                 f"📊 **Расчет стоимости объема:**\n"
                 f"💵 Затраты: `${cost:.2f}`\n"
-                f"📈 Объем: `{volume:,.0f} ({volume/1000:.1f}K)`\n"
+                f"📈 Объем: `{vol_display}`\n"
                 f"💎 Цена за 1K объема:\n`$ {cost_per_1k:.2f}`"
             )
             bot.reply_to(message, response_text, parse_mode="Markdown")
@@ -768,7 +772,7 @@ def cmd_vol(message):
 def handle_chat_messages(message):
     text = message.text.strip()
     
-    # 1. Проверяем калькулятор спреда (вычитание вида 61.66-52.50)
+    # 1. Калькулятор спреда (вычитание вида 61.66-52.50)
     calc_match = re.search(r'^([\d.]+)\s*-\s*([\d.]+)$', text)
     if calc_match:
         try:
@@ -780,15 +784,50 @@ def handle_chat_messages(message):
         except Exception:
             pass
 
-    # 2. Если это не тикер монеты — пропускаем
-    if text.startswith('/') or len(text) > 15:
+    if text.startswith('/'):
+        return
+
+    # 2. Обработка связки "количество + монета" (например: 1400 zig, 500 btc)
+    amount_token_match = re.search(r'^([\d.]+)\s+([a-zA-Z0-9_-]+)$', text)
+    if amount_token_match:
+        try:
+            amount = float(amount_token_match.group(1))
+            raw_tkn = amount_token_match.group(2)
+            sym = normalize_symbol(raw_tkn)
+            
+            prices, volumes, _, _ = fetch_futures_data()
+            sym_prices = prices.get(sym, {})
+            
+            if sym_prices:
+                avg_price = list(sym_prices.values())[0]
+                total_usd = amount * avg_price
+                
+                lines = [
+                    f"🪙 **Расчет по монете: #{sym}**",
+                    f"📦 Количество: `{amount:,.4f}`",
+                    f"💵 Текущая цена: `${avg_price}`",
+                    f"💰 **Общая стоимость:** `~${total_usd:,.2f} USD`\n",
+                    "📝 **Цены на биржах:**"
+                ]
+                for ex, p in sorted(sym_prices.items(), key=lambda x: x[1]):
+                    v = format_volume(volumes.get(sym, {}).get(ex, 0))
+                    url = get_exchange_url(ex, sym)
+                    lines.append(f"🔹 [{ex}]({url}): `${p}` ({v})")
+                
+                bot.reply_to(message, "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
+                return
+        except Exception as e:
+            print(f"Amount-Token calc error: {e}")
+
+    # 3. Обычный поиск тикера монеты (если ввели просто 'zig' или 'BTC')
+    if len(text) > 15:
         return
         
     sym = normalize_symbol(text)
     if not sym:
         return
         
-    prices, volumes, fundings, _ = fetch_futures_data()
+    prices, volumes, _, _ = fetch_futures_data()
     sym_prices = prices.get(sym, {})
     if not sym_prices:
         return

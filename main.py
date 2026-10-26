@@ -23,16 +23,16 @@ app = Flask(__name__)
 
 TOPICS = {
     "NEWS": 2, 
-    "MEXC": 68,     
-    "BYBIT": 4,     
+    "MEXC": 68,      
+    "BYBIT": 4,      
     "BINANCE": 3,    
     "BITGET": 69,    
     "BINGX": 70,    
     "KUCOIN": 71,   
     "WHITEBIT": 72, 
     "KRAKEN": 73,   
-    "GATE": 67,     
-    "OKX": 2,       
+    "GATE": 67,      
+    "OKX": 2,        
     "FUNDING": 76,  
     "SPREAD": 77,
     "CHAT": 1       # ID топика «Чат» для калькулятора, /vol и запросов монет
@@ -84,7 +84,6 @@ def web_chart():
     min_ex = request.args.get('min_ex', 'Long')
     max_ex = request.args.get('max_ex', 'Short')
     
-    # HTML страница для Telegram Mini App с живым графиком (TradingView Lightweight Charts стилистика)
     html_template = """
     <!DOCTYPE html>
     <html lang="ru">
@@ -296,23 +295,6 @@ def send_to_topic(topic_name, text, reply_to_message_id=None, reply_markup=None)
             print(f"❌ Send Error ({topic_name}): {e}")
     return None
 
-def edit_topic_message(topic_name, message_id, text, reply_markup=None):
-    if CHAT_ID and message_id:
-        try:
-            bot.edit_message_text(
-                chat_id=CHAT_ID,
-                message_id=message_id,
-                text=text,
-                parse_mode="Markdown",
-                disable_web_page_preview=True,
-                reply_markup=reply_markup
-            )
-            time.sleep(0.3)
-            return True
-        except Exception as e:
-            print(f"❌ Edit Error ({topic_name}): {e}")
-    return False
-
 def process_item(item_id, raw_text, link, default_topic):
     if item_id in processed_ids:
         return
@@ -425,6 +407,7 @@ def fetch_direct_exchange_promos():
             websites = [
                 ("OKX", "https://www.okx.com/help/section/announcements-latest-promotions", "a"),
                 ("BITGET", "https://www.bitget.com/support/articles/latest-activities", "a"),
+                ("BITGET_EVENTS", "https://www.bitget.com/events", "a"),
                 ("GATE", "https://www.gate.io/articlelist/ann", "a"),
                 ("KUCOIN", "https://www.kucoin.com/news/categories/promotion", "a"),
                 ("WHITEBIT", "https://blog.whitebit.com/category/events/", "h2")
@@ -439,15 +422,16 @@ def fetch_direct_exchange_promos():
                     title = el.get_text(strip=True)
                     if len(title) < 15: continue
                     link = el.get('href', '')
+                    clean_ex = ex_name.replace("_EVENTS", "")
                     if link and not link.startswith('http'):
-                        if ex_name == "OKX": link = f"https://www.okx.com{link}"
-                        elif ex_name == "BITGET": link = f"https://www.bitget.com{link}"
-                        elif ex_name == "GATE": link = f"https://www.gate.io{link}"
-                        elif ex_name == "KUCOIN": link = f"https://www.kucoin.com{link}"
+                        if clean_ex == "OKX": link = f"https://www.okx.com{link}"
+                        elif clean_ex == "BITGET": link = f"https://www.bitget.com{link}"
+                        elif clean_ex == "GATE": link = f"https://www.gate.io{link}"
+                        elif clean_ex == "KUCOIN": link = f"https://www.kucoin.com{link}"
                     
                     item_id = f"web_{ex_name.lower()}_{abs(hash(title))}"
-                    raw_text = f"Official Website Announcement [{ex_name}]: {title}\nLink: {link if link else site_url}"
-                    process_item(item_id, raw_text, link if link else site_url, ex_name)
+                    raw_text = f"Official Website Announcement [{clean_ex}]: {title}\nLink: {link if link else site_url}"
+                    process_item(item_id, raw_text, link if link else site_url, clean_ex)
 
         except Exception as e:
             print(f"Direct Promos Website/API Error: {e}")
@@ -659,7 +643,7 @@ def format_countdown(target_timestamp):
 # ==================== SPREAD MONITOR (WITH LOGGING) ====================
 def monitor_spread():
     global active_spreads
-    print("🟢 Spread Monitor started (Threshold: $50k volume, Spread >= 7.0%)")
+    print("🟢 Spread Monitor started (Threshold: $100k volume, Spread >= 7.0%)")
     while True:
         try:
             prices, volumes, fundings, _ = fetch_futures_data()
@@ -673,8 +657,8 @@ def monitor_spread():
             for sym, ex_data in prices.items():
                 scanned_count += 1
                 sym_vols = volumes.get(sym, {})
-                # ОБНОВЛЕННЫЙ ПОРОГ ЛИКВИДНОСТИ: $50,000
-                valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 50_000}
+                # ОБНОВЛЕННЫЙ ПОРОГ ЛИКВИДНОСТИ: $100,000
+                valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 100_000}
 
                 if len(valid_ex_data) < 2:
                     continue
@@ -735,231 +719,42 @@ def monitor_spread():
                         f"🔄 _Обновлено: {curr_time_str} (Киев)_"
                     )
 
-                    webapp_url = f"https://{os.environ.get('RENDER_EXTERNAL_URL', 'your-app.onrender.com').replace('https://', '')}/chart?symbol={sym}&min_ex={min_ex}&max_ex={max_ex}"
+                    # --- БЕЗОПАСНАЯ ГЕНЕРАЦИЯ WEBAPP URL ---
+                    render_url = os.environ.get('RENDER_EXTERNAL_URL', '').strip()
+                    if not render_url:
+                        render_url = "https://your-app.onrender.com"
+                    elif not render_url.startswith('http'):
+                        render_url = f"https://{render_url}"
+                    
+                    webapp_url = f"{render_url}/chart?symbol={sym}&min_ex={min_ex}&max_ex={max_ex}"
+                    
                     markup = InlineKeyboardMarkup()
-                    markup.add(InlineKeyboardButton("📈 Живой график спреда", web_app=WebAppInfo(url=webapp_url)))
+                    try:
+                        markup.add(InlineKeyboardButton("📈 Живой график спреда", web_app=WebAppInfo(url=webapp_url)))
+                    except Exception as btn_err:
+                        print(f"⚠️ WebApp Button Error: {btn_err}")
 
-                    if sym in active_spreads:
-                        fund_info = active_spreads[sym]
-                        fund_info["min_ex"] = min_ex
-                        fund_info["max_ex"] = max_ex
-                        fund_info["min_p"] = min_p
-                        fund_info["max_p"] = max_p
-                        fund_info["last_text"] = msg_text
-                        save_active_spreads(active_spreads)
-
-                        if fund_info.get("last_text") != msg_text:
-                            edit_topic_message("SPREAD", fund_info["msg_id"], msg_text, reply_markup=markup)
-                    else:
-                        msg_id = send_to_topic("SPREAD", msg_text, reply_markup=markup)
-                        if msg_id:
-                            active_spreads[sym] = {
-                                "msg_id": msg_id,
-                                "start_time": current_time,
-                                "last_text": msg_text,
-                                "min_ex": min_ex,
-                                "max_ex": max_ex,
-                                "min_p": min_p,
-                                "max_p": max_p
-                            }
-                            save_active_spreads(active_spreads)
-
-            # Консольный лог для отслеживания работы бота
-            print(f"[{curr_time_str}] Scanned {scanned_count} pairs. Max spread found: {max_spread_seen:.2f}%")
-
-            # Проверяем спреды, которые были активны, но теперь сошлись (< 7.0%)
-            for sym in list(active_spreads.keys()):
-                if sym not in current_scanned_syms:
-                    data = active_spreads[sym]
-                    elapsed_sec = int(current_time - data["start_time"])
-                    minutes = elapsed_sec // 60
-                    seconds = elapsed_sec % 60
-                    
-                    p_min = data.get("min_p", 0)
-                    p_max = data.get("max_p", 0)
-                    final_spread = 0.0
-                    if p_min > 0:
-                        final_spread = ((p_max - p_min) / p_min) * 100
-
-                    alignment_msg = (
-                        f"✅ **[{sym}] prices aligned**\n"
-                        f"⏱ Сходился: **{minutes:02d}:{seconds:02d}** (финальный спред: `{final_spread:.2f}%`)\n\n"
-                        f"📌 **Финальные цены:**\n"
-                        f"{data['min_ex']}: `${p_min}` | {data['max_ex']}: `${p_max}`"
-                    )
-                    send_to_topic("SPREAD", alignment_msg)
-                    
-                    del active_spreads[sym]
-                    save_active_spreads(active_spreads)
+                    send_to_topic("SPREAD", msg_text, reply_markup=markup)
 
         except Exception as e:
-            print(f"❌ Spread Monitor Error: {e}")
-        time.sleep(15)
+            print(f"❌ Monitor Spread Error: {e}")
+        
+        time.sleep(30)
 
-def monitor_funding():
-    while True:
-        try:
-            _, volumes_cache, all_funding, funding_times = fetch_futures_data()
-            curr_time_str = get_kyiv_time()
-
-            for symbol, ex_rates in all_funding.items():
-                if len(ex_rates) < 2: continue
-                min_ex = min(ex_rates, key=ex_rates.get)
-                max_ex = max(ex_rates, key=ex_rates.get)
-                funding_spread = ex_rates[max_ex] - ex_rates[min_ex]
-                
-                if any(abs(rate) >= 1.0 for rate in ex_rates.values()) or funding_spread >= 1.0:
-                    rates_key = "_".join([f"{ex}:{rate:.2f}" for ex, rate in sorted(ex_rates.items())])
-                    
-                    sym_vols = volumes_cache.get(symbol, {})
-                    vol_min = sym_vols.get(min_ex, 50000) * 0.01
-                    vol_max = sym_vols.get(max_ex, 50000) * 0.01
-                    max_pos_usdt = int(min(vol_min, vol_max, 50000))
-                    if max_pos_usdt < 100: max_pos_usdt = 100
-
-                    sym_times = funding_times.get(symbol, {})
-                    overview_list = []
-                    for ex, r in sorted(ex_rates.items(), key=lambda x: x[1], reverse=True):
-                        url = get_exchange_url(ex, symbol)
-                        countdown_str = format_countdown(sym_times.get(ex, 0))
-                        overview_list.append(f"🔹 [{ex}]({url}): `{r:.2f}%` (⏱ {countdown_str})")
-                    
-                    overview = "\n".join(overview_list)
-                    msg = (
-                        f"🔥 **FUNDING ARBITRAGE / HIGH RATE (>= ±1.0%)**\n"
-                        f"🪙 **#{symbol}** (Spread: `{funding_spread:.2f}%`)\n\n"
-                        f"💰 **Доступный объем позиции:** `~${max_pos_usdt:,} USDT`\n\n"
-                        f"📊 **All Exchanges Rates & Timers:**\n{overview}\n\n"
-                        f"🔄 _Данные обновлены в {curr_time_str} (Киев)_"
-                    )
-
-                    if symbol in active_fundings:
-                        fund_data = active_fundings[symbol]
-                        if fund_data["last_rates_str"] != rates_key:
-                            success = edit_topic_message("FUNDING", fund_data["msg_id"], msg)
-                            if success:
-                                fund_data["last_rates_str"] = rates_key
-                                fund_data["last_text"] = msg
-                    else:
-                        msg_id = send_to_topic("FUNDING", msg)
-                        if msg_id:
-                            active_fundings[symbol] = {"msg_id": msg_id, "last_rates_str": rates_key, "last_text": msg}
-        except Exception as e:
-            print(f"Funding Monitor Error: {e}")
-        time.sleep(60)
-
-# ==================== CHAT BOT HANDLER (CALCULATOR, /VOL & COINS) ====================
-@bot.message_handler(func=lambda message: True)
-def handle_chat_messages(message):
-    if not message.text:
-        return
-    
-    text = message.text.strip()
-
-    if text.lower().startswith('/vol') or text.lower().startswith('vol'):
-        nums = re.findall(r'\d+(?:\.\d+)?', text)
-        if len(nums) >= 2:
-            try:
-                spend = float(nums[0])
-                vol_k = float(nums[1])
-                total_volume = vol_k * 1000
-                price_per_1k = spend / vol_k if vol_k > 0 else 0
-
-                reply_vol = (
-                    f"📊 **Расчет стоимости объема:**\n"
-                    f"💵 Затраты: `${spend:,.2f}`\n"
-                    f"📈 Объем: `{int(total_volume):,}` (`{vol_k:.1f}K`)\n"
-                    f"💎 Цена за 1К объема:\n`${price_per_1k:,.2f}`"
-                )
-                bot.reply_to(message, reply_vol, parse_mode="Markdown")
-                return
-            except Exception as e:
-                print(f"Vol calc error: {e}")
-
-    math_pattern = r'^\s*([+-]?\d+(?:\.\d+)?)\s*([+\-])\s*([+-]?\d+(?:\.\d+)?)\s*$'
-    match = re.match(math_pattern, text)
-    if not match:
-        no_space_pattern = r'^([+-]?\d+(?:\.\d+)?)([+\-])([+-]?\d+(?:\.\d+)?)$'
-        match = re.match(no_space_pattern, text.replace(" ", ""))
-
-    if match:
-        try:
-            num1 = float(match.group(1))
-            op = match.group(2)
-            num2 = float(match.group(3))
-            
-            if op == '+': result = num1 + num2
-            elif op == '-': result = num1 - num2
-            else: return
-
-            res_str = f"{result:g}" if isinstance(result, float) and result.is_integer() else f"{result:.4f}".rstrip('0').rstrip('.')
-            reply_text = f"🧮 **Калькулятор:**\n`{text} = {res_str}`"
-            bot.reply_to(message, reply_text, parse_mode="Markdown")
-            return
-        except Exception as e:
-            print(f"Calc error: {e}")
-
-    cleaned_text = re.sub(r'(\d)\s+(\d)', r'\1\2', text)
-    parts = cleaned_text.split()
-    
-    multiplier = 1.0
-    coin_query = ""
-
-    if len(parts) == 2:
-        try:
-            multiplier = float(parts[0].replace(',', '.'))
-            coin_query = parts[1]
-        except ValueError:
-            coin_query = parts[0]
-    else:
-        m_join = re.match(r'^([\d\.]+)([a-zA-Z]+)$', text.replace(" ", ""))
-        if m_join:
-            try:
-                multiplier = float(m_join.group(1))
-                coin_query = m_join.group(2)
-            except:
-                coin_query = text
-        else:
-            coin_query = text
-
-    norm_query = normalize_symbol(coin_query)
-    price = latest_prices_cache.get(norm_query, 0.0)
-
-    if price <= 0:
-        base_s = coin_query.upper().replace('USDT', '')
-        try:
-            r = requests.get(f"https://contract.mexc.com/api/v1/contract/ticker?symbol={base_s}_USDT", timeout=3).json()
-            if r.get('success') and r.get('data'):
-                price = float(r['data'].get('lastPrice', 0))
-        except: pass
-
-    if price > 0:
-        total_val = price * multiplier
-        reply_msg = (
-            f"{multiplier:g} {coin_query.upper()}\n"
-            f"🔍 `{price}` USDT\n"
-            f"💵 **${total_val:,.2f} USDT**"
-        )
-        bot.reply_to(message, reply_msg, parse_mode="Markdown")
-
-# ==================== MAIN INITIALIZATION ====================
+# ==================== MAIN START ====================
 if __name__ == "__main__":
     print("🚀 Bot starting...")
     
-    # Запускаем фоновый Flask сервер
-    threading.Thread(target=run_flask, daemon=True).start()
+    # Запускаем Flask в отдельном потоке для healthcheck и WebApp
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
 
-    # Запускаем фоновые потоки мониторинга
+    # Запускаем мониторы в фоновых потоках
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     threading.Thread(target=fetch_direct_exchange_promos, daemon=True).start()
     threading.Thread(target=fetch_global_crypto_promos, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()
-    threading.Thread(target=monitor_funding, daemon=True).start()
 
-    # Запуск бота в бесконечном цикле
+    # Бесконечный цикл для поддержания работы основного потока
     while True:
-        try:
-            bot.infinity_polling(timeout=60, long_polling_timeout=60)
-        except Exception as err:
-            print(f"❌ Telegram Bot Polling Error: {err}")
-            time.sleep(15)
+        time.sleep(1)

@@ -783,7 +783,7 @@ def handle_chat_messages(message):
         except Exception:
             pass
 
-    # 2. Если это тикер монеты — ищем по ценам
+    # 2. Если это запрос монеты — ищем по ценам
     if text.startswith('/') or len(text) > 15:
         return
         

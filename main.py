@@ -627,6 +627,68 @@ def fetch_futures_data():
 
     return prices, volumes, fundings, funding_times
 
+# ==================== УНИВЕРСАЛЬНЫЙ ПОИСК ЦЕНЫ МОНЕТЫ СО ВСЕХ БИРЖ (SPOT + FUTURES) ====================
+def fetch_token_prices_on_demand(sym):
+    base_sym = sym.replace('USDT', '')
+    ex_prices = {}
+    ex_vols = {}
+
+    # 1. Binance (Spot + Futures)
+    try:
+        r = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={base_sym}USDT", timeout=2).json()
+        if 'price' in r:
+            ex_prices['Binance Spot'] = float(r['price'])
+    except: pass
+    try:
+        r = requests.get(f"https://fapi.binance.com/fapi/v1/ticker/24hr?symbol={base_sym}USDT", timeout=2).json()
+        if 'lastPrice' in r:
+            ex_prices['Binance'] = float(r['lastPrice'])
+            ex_vols['Binance'] = float(r.get('quoteVolume', 0))
+    except: pass
+
+    # 2. Bybit
+    try:
+        r = requests.get(f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={base_sym}USDT", timeout=2).json()
+        lst = r.get('result', {}).get('list', [])
+        if lst:
+            ex_prices['Bybit'] = float(lst[0]['lastPrice'])
+            ex_vols['Bybit'] = float(lst[0].get('turnover24h', 0))
+    except: pass
+
+    # 3. MEXC
+    try:
+        r = requests.get(f"https://contract.mexc.com/api/v1/contract/ticker?symbol={base_sym}_USDT", timeout=2).json()
+        data = r.get('data', {})
+        if 'lastPrice' in data:
+            ex_prices['MEXC'] = float(data['lastPrice'])
+            ex_vols['MEXC'] = float(data.get('amount24h', 0))
+    except: pass
+    try:
+        r = requests.get(f"https://api.mexc.com/api/v3/ticker/price?symbol={base_sym}USDT", timeout=2).json()
+        if 'price' in r:
+            ex_prices['MEXC Spot'] = float(r['price'])
+    except: pass
+
+    # 4. Gate.io
+    try:
+        r = requests.get(f"https://api.gateio.ws/api/v4/futures/usdt/tickers?contract={base_sym}_USDT", timeout=2).json()
+        if isinstance(r, list) and len(r) > 0:
+            ex_prices['Gate'] = float(r[0]['last'])
+            ex_vols['Gate'] = float(r[0].get('total_size', 0)) * float(r[0]['last'])
+    except: pass
+
+    # 5. KuCoin
+    try:
+        r = requests.get(f"https://api-futures.kucoin.com/api/v1/binding/contract?symbol={base_sym}USDTM", timeout=2).json()
+        # запасной универсальный запрос
+    except: pass
+
+    # Если через прямой поиск ничего не нашлось, ищем в общем кэше
+    if not ex_prices and sym in latest_prices_cache:
+        ex_prices['Биржи (Общий кэш)'] = latest_prices_cache[sym]
+
+    return ex_prices, ex_vols
+
 def format_volume(vol):
     if vol >= 1_000_000: return f"${vol / 1_000_000:.1f}M (24h)"
     elif vol >= 1_000: return f"${vol / 1_000:.1f}K (24h)"
@@ -798,12 +860,8 @@ def handle_chat_messages(message):
             raw_tkn = amount_token_match.group(2)
             sym = normalize_symbol(raw_tkn)
             
-            prices, volumes, _, _ = fetch_futures_data()
-            sym_prices = prices.get(sym, {})
-            
-            if not sym_prices:
-                prices, volumes, _, _ = fetch_futures_data()
-                sym_prices = prices.get(sym, {})
+            # Точечный запрос цен со всех бирж для конкретной монеты
+            sym_prices, sym_vols = fetch_token_prices_on_demand(sym)
             
             if sym_prices:
                 avg_price = list(sym_prices.values())[0]
@@ -817,7 +875,7 @@ def handle_chat_messages(message):
                     "📝 **Цены на биржах:**"
                 ]
                 for ex, p in sorted(sym_prices.items(), key=lambda x: x[1]):
-                    v = format_volume(volumes.get(sym, {}).get(ex, 0))
+                    v = format_volume(sym_vols.get(ex, 0))
                     url = get_exchange_url(ex, sym)
                     lines.append(f"🔹 [{ex}]({url}): `${p}` ({v})")
                 
@@ -834,8 +892,7 @@ def handle_chat_messages(message):
     if not sym:
         return
         
-    prices, volumes, _, _ = fetch_futures_data()
-    sym_prices = prices.get(sym, {})
+    sym_prices, sym_vols = fetch_token_prices_on_demand(sym)
     if not sym_prices:
         return
         
@@ -843,7 +900,7 @@ def handle_chat_messages(message):
     lines = [f"🪙 **Монета: #{sym}**\n"]
     for ex in sorted_exs:
         p = sym_prices[ex]
-        v = format_volume(volumes.get(sym, {}).get(ex, 0))
+        v = format_volume(sym_vols.get(ex, 0))
         url = get_exchange_url(ex, sym)
         lines.append(f"🔹 [{ex}]({url}): `${p}` ({v})")
         

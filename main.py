@@ -756,6 +756,7 @@ def monitor_spread():
             for sym, ex_data in prices.items():
                 scanned_count += 1
                 sym_vols = volumes.get(sym, {})
+                # Порог ликвидности: $100,000
                 valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 100_000}
 
                 if len(valid_ex_data) < 2:
@@ -838,65 +839,62 @@ def monitor_spread():
         
         time.sleep(30)
 
-# ==================== FUNDING MONITOR (ВЕРНУЛ ОБРАТНО ДЛЯ ТОПИКА 76) ====================
+# ==================== FUNDING MONITOR (СВОДНЫЙ ФОРМАТ + ВИЛКА ОТ 0.5%) ====================
 def monitor_funding():
-    print("🟢 Funding Monitor started (Topic 76)")
+    print("🟢 Funding Monitor started (Topic 76, Spread >= 0.5%)")
     while True:
         try:
             _, volumes, fundings, funding_times = fetch_futures_data()
             curr_time_str = get_kyiv_time()
 
-            # Собираем самые интересные ставки фандинга (положительные или отрицательные > 0.05% или в топ ликвидности)
-            funding_list = []
             for sym, ex_funds in fundings.items():
                 sym_vols = volumes.get(sym, {})
-                for ex, rate in ex_funds.items():
-                    if abs(rate) >= 0.05:  # Уведомляем если ставка заметная
-                        vol = sym_vols.get(ex, 0)
-                        if vol >= 100_000:  # Ликвидность от $100k
-                            next_t = funding_times.get(sym, {}).get(ex, 0)
-                            countdown = format_countdown(next_t)
-                            url = get_exchange_url(ex, sym)
-                            funding_list.append({
-                                'sym': sym,
-                                'ex': ex,
-                                'rate': rate,
-                                'vol': vol,
-                                'countdown': countdown,
-                                'url': url
-                            })
+                
+                # Фильтруем биржи с ликвидностью от $100k
+                valid_ex_funds = {ex: rate for ex, rate in ex_funds.items() if sym_vols.get(ex, 0) >= 100_000}
+                if len(valid_ex_funds) < 2:
+                    continue
 
-            # Сортируем по абсолютной величине ставки
-            funding_list.sort(key=lambda x: abs(x['rate']), reverse=True)
+                max_ex = max(valid_ex_funds, key=valid_ex_funds.get)
+                min_ex = min(valid_ex_funds, key=valid_ex_funds.get)
+                max_rate = valid_ex_funds[max_ex]
+                min_rate = valid_ex_funds[min_ex]
+                
+                # Арбитражная вилка фандинга между биржами
+                funding_spread = abs(max_rate - min_rate)
+                
+                # Порог вилки фандинга от 0.5%
+                if funding_spread >= 0.5:
+                    vol_min = sym_vols.get(min_ex, 0) * 0.01
+                    vol_max = sym_vols.get(max_ex, 0) * 0.01
+                    max_pos_usdt = int(min(vol_min, vol_max))
+                    if max_pos_usdt < 100: max_pos_usdt = 100
 
-            # Отправляем топ аномалий фандинга (чтобы не спамить, берем топ-5 самых ярких)
-            sent_count = 0
-            for item in funding_list[:5]:
-                sym = item['sym']
-                ex = item['ex']
-                rate = item['rate']
-                countdown = item['countdown']
-                url = item['url']
-                v_str = format_volume(item['vol'])
+                    rates_list = []
+                    sorted_exs = sorted(valid_ex_funds.keys(), key=lambda ex: sym_vols.get(ex, 0), reverse=True)
+                    for ex in sorted_exs:
+                        r = valid_ex_funds[ex]
+                        next_t = funding_times.get(sym, {}).get(ex, 0)
+                        countdown = format_countdown(next_t)
+                        url = get_exchange_url(ex, sym)
+                        rates_list.append(f"🔹 [{ex}]({url}): `{r:+.2f}%` (⏱ `{countdown}`)")
 
-                emoji = "🚀" if rate > 0 else "🔻"
-                msg_text = (
-                    f"💰 **Funding Alert | #{sym}**\n"
-                    f"🏦 Биржа: [{ex}]({url})\n"
-                    f"{emoji} Ставка: `{rate:+.4f}%`\n"
-                    f"⏳ До выплаты: `{countdown}`\n"
-                    f"📊 Ликвидность: `{v_str}`\n\n"
-                    f"🔄 _Обновлено: {curr_time_str} (Киев)_"
-                )
-                send_to_topic("FUNDING", msg_text)
-                sent_count += 1
-                if sent_count >= 3:
-                    break
+                    rates_overview = "\n".join(rates_list)
+
+                    msg_text = (
+                        f"🔥 **FUNDING ARBITRAGE / HIGH SPREAD (>= 0.5%)**\n"
+                        f"🪙 **#{sym} (Spread: `{funding_spread:.2f}%`)**\n\n"
+                        f"💰 **Доступный объем позиции:** `~${max_pos_usdt:,} USDT`\n\n"
+                        f"📊 **All Exchanges Rates & Timers:**\n{rates_overview}\n\n"
+                        f"🔄 _Данные обновлены в {curr_time_str} (Киев)_"
+                    )
+                    
+                    send_to_topic("FUNDING", msg_text)
+                    time.sleep(2)
 
         except Exception as e:
             print(f"❌ Funding Monitor Error: {e}")
         
-        # Проверяем фандинг раз в 30 минут
         time.sleep(1800)
 
 # ==================== TELEGRAM COMMANDS & CHAT HANDLERS ====================
@@ -956,7 +954,6 @@ def handle_chat_messages(message):
             raw_tkn = amount_token_match.group(2)
             sym = normalize_symbol(raw_tkn)
             
-            # Динамический точечный запрос цен со всех спотов и фьючерсов бирж
             sym_prices, sym_vols = fetch_token_prices_on_demand(sym)
             
             if sym_prices:
@@ -980,7 +977,7 @@ def handle_chat_messages(message):
         except Exception as e:
             print(f"Universal Amount-Token calc error: {e}")
 
-    # 3. Обычный поиск тикера монеты (если ввели просто 'zig', 'BTC', 'pepe')
+    # 3. Обычный поиск тикера монеты
     if len(text) > 15:
         return
         
@@ -1015,7 +1012,7 @@ if __name__ == "__main__":
     threading.Thread(target=fetch_direct_exchange_promos, daemon=True).start()
     threading.Thread(target=fetch_global_crypto_promos, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()
-    threading.Thread(target=monitor_funding, daemon=True).start()  # Фандинг-сканер запущен для топика 76
+    threading.Thread(target=monitor_funding, daemon=True).start()  # Сканер фандинга (вилка от 0.5%)
 
     # Запуск бота на получение сообщений
     print("🤖 Telegram bot polling started...")

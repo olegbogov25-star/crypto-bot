@@ -742,20 +742,51 @@ def monitor_spread():
         time.sleep(30)
 
 # ==================== TELEGRAM COMMANDS & CHAT HANDLERS ====================
-@bot.message_handler(commands=['vol', 'volume'])
+@bot.message_handler(commands=['vol', 'volume', 'voll'])
 def cmd_vol(message):
     if message.message_thread_id != TOPICS.get("CHAT"):
         return
-    bot.reply_to(message, "📊 Бот работает в штатном режиме. Порог ликвидности сканера спредов: **$100,000**.")
+    
+    args = message.text.split()
+    if len(args) >= 3:
+        try:
+            cost = float(args[1])
+            volume = float(args[2])
+            cost_per_1k = (cost / volume) * 1000
+            
+            response_text = (
+                f"📊 **Расчет стоимости объема:**\n"
+                f"💵 Затраты: `${cost:.2f}`\n"
+                f"📈 Объем: `{volume:,.0f} ({volume/1000:.1f}K)`\n"
+                f"💎 Цена за 1K объема:\n`$ {cost_per_1k:.2f}`"
+            )
+            bot.reply_to(message, response_text, parse_mode="Markdown")
+            return
+        except Exception:
+            pass
+            
+    bot.reply_to(message, "ℹ️ Использование команды: `/voll [затраты] [объем]` (например: `/voll 52.5 11`)", parse_mode="Markdown")
 
 @bot.message_handler(func=lambda message: message.message_thread_id == TOPICS.get("CHAT"))
 def handle_chat_messages(message):
     text = message.text.strip()
     
-    # Калькулятор или запросы монет прямо в топике «Чат»
+    # 1. Проверяем, не математический ли это пример (калькулятор спреда вроде 61.66-52.50)
+    calc_match = re.search(r'^([\d.]+)\s*-\s*([\d.]+)$', text)
+    if calc_match:
+        try:
+            val1 = float(calc_match.group(1))
+            val2 = float(calc_match.group(2))
+            res = val1 - val2
+            bot.reply_to(message, f"🧮 **Калькулятор:**\n{val1} - {val2} = `{res:.2f}`", parse_mode="Markdown")
+            return
+        except Exception:
+            pass
+
+    # 2. Если это тикер монеты — ищем по ценам
     if text.startswith('/') or len(text) > 15:
         return
-    
+        
     sym = normalize_symbol(text)
     if not sym:
         return

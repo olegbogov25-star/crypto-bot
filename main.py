@@ -758,11 +758,15 @@ def format_countdown(target_timestamp):
 
 # ==================== MAIN STARTUP & THREADING ====================
 if __name__ == "__main__":
-    # Запускаем фоновые потоки для мониторинга каналов и промо-акций
+    # 1. Запуск мониторинга Telegram-каналов
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
+    
+    # 2. Запуск парсеров сайтов и официальных API бирж
     threading.Thread(target=fetch_direct_exchange_promos, daemon=True).start()
+    
+    # 3. Запуск глобальных крипто-агрегаторов и RSS
     threading.Thread(target=fetch_global_crypto_promos, daemon=True).start()
 
-    # Запускаем Flask-сервер (Render требует слушать 0.0.0.0 и порт из переменной окружения)
+    # 4. Запуск Flask-сервера для веб-приложения и графиков спредов
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)

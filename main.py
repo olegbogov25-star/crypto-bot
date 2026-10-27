@@ -30,7 +30,6 @@ TOPICS = {
     "BITGET": 69,    
     "BINGX": 70,    
     "KUCOIN": 71,   
-    "WHITEBIT": 72, 
     "KRAKEN": 73,   
     "GATE": 67,      # Точный ID топика Gate
     "OKX": 6,        # Точный ID топика OKX
@@ -235,7 +234,6 @@ def get_exchange_url(exchange, symbol="BTCUSDT"):
         "MEXC": f"https://futures.mexc.com/exchange/{base_sym}_USDT",
         "BINGX": f"https://bingx.com/en/futures/forward/{base_sym}USDT",
         "KUCOIN": f"https://www.kucoin.com/futures/trade/{base_sym}USDTM",
-        "WHITEBIT": f"https://whitebit.com/trade/{base_sym}_USDT?type=futures",
         "KRAKEN": f"https://futures.kraken.com",
         "OURBIT": f"https://www.ourbit.com/futures/trade/{base_sym}_USDT"
     }
@@ -335,15 +333,14 @@ def process_item(item_id, raw_text, link, default_topic):
 def fetch_telegram_channels_promos():
     channels = {
         "BINANCE": ["Binance_UA_official", "BinanceUkrainian", "binance_announcements", "Binance_Announcements"],
-        "OKX": ["okx_ukraine", "okx_ru", "okx_campaign_announcement", "okxwalletannouncement", "OKX_Official"],
+        "OKX": ["okx_ukraine", "okx_ru", "OKXAnnouncements", "okx_campaign_announcement", "okxwalletannouncement", "OKX_Official"],
         "BYBIT": ["bybitukrainian", "bybitukrainiannews", "Bybit_CIS", "BybitAnnouncements"],
         "BITGET": ["BitgetUA", "Bitget_Announcements", "BitgetENOfficial"],
         "MEXC": ["MEXCKraineOfficial", "MEXCofficialNews", "MEXCofficial"],
-        "GATE": ["Gate_Ukrainian", "Gateio_NewList_News", "GateCom_EN"],
-        "KRAKEN": ["kraken_announcements"],
+        "GATE": ["GateioOfficialNews", "GateCom_EN", "Gate_Ukrainian"],
         "BINGX": ["BingXOfficial", "BingXAnnouncement", "BingXEnglish", "BingXRussianAnnouncements"],
         "KUCOIN": ["Kucoin_Exchange", "Kucoin_News"],
-        "WHITEBIT": ["whitebit_ua_news", "White_Bit"]
+        "KRAKEN": ["kraken_announcements"]
     }
     
     while True:
@@ -389,12 +386,11 @@ def fetch_telegram_channels_promos():
             print(f"Telegram Channels Monitor Error: {e}")
             time.sleep(60)
 
-# ==================== DIRECT EXCHANGE WEBSITES, APIS & WEB3 SCRAPER (УСИЛЕННЫЙ) ====================
+# ==================== DIRECT EXCHANGE WEBSITES, APIS & WEB3 SCRAPER ====================
 def fetch_direct_exchange_promos():
     print("🟢 Direct Exchange Websites & APIs Scraper started...")
     while True:
         try:
-            # 1. Binance Direct APIs
             binance_apis = [
                 ("https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=48&pageNo=1&pageSize=1", "BINANCE"),
                 ("https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=161&pageNo=1&pageSize=1", "BINANCE"),
@@ -416,7 +412,6 @@ def fetch_direct_exchange_promos():
                     except Exception as json_err:
                         print(f"⚠️ Binance API JSON decode error: {json_err}")
 
-            # 2. MEXC Direct API
             mexc_api = "https://www.mexc.com/api/support/list?categoryId=19&page=1&pageSize=1"
             res_mexc = secure_request(mexc_api, timeout=8)
             if res_mexc:
@@ -432,7 +427,6 @@ def fetch_direct_exchange_promos():
                 except Exception as json_err:
                     print(f"⚠️ MEXC API JSON decode error: {json_err}")
 
-            # 3. Web3 Wallet Quests (OKX Cryptopedia & Binance Web3)
             web3_sources = [
                 ("OKX", "https://www.okx.com/en/web3/discover/cryptopedia", "a"),
                 ("BINANCE", "https://www.binance.com/en/web3", "a")
@@ -451,13 +445,11 @@ def fetch_direct_exchange_promos():
                         raw_text = f"Web3 Wallet Quest / Airdrop [{w_ex} Wallet]: {w_title}\nLink: {w_link if w_link else w_url}"
                         process_item(item_id, raw_text, w_link if w_link else w_url, "WEB3")
 
-            # 4. Официальные сайты бирж (Усиленный поиск через заголовки, div и a)
             websites = [
                 ("OKX", "https://www.okx.com/help/section/announcements-latest-promotions", ["a", "h3"]),
                 ("BITGET", "https://www.bitget.com/support/articles/latest-activities", ["a", "h3"]),
                 ("GATE", "https://www.gate.io/articlelist/ann", ["a", "h3"]),
-                ("KUCOIN", "https://www.kucoin.com/news/categories/promotion", ["a", "h3"]),
-                ("WHITEBIT", "https://blog.whitebit.com/category/events/", ["h2", "a"])
+                ("KUCOIN", "https://www.kucoin.com/news/categories/promotion", ["a", "h3"])
             ]
 
             for ex_name, site_url, tags in websites:

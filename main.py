@@ -21,6 +21,7 @@ ADMIN_IDS = [1043209905]
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 app = Flask(__name__)
 
+# ТОЧНЫЕ ID ТОПИКОВ (GATE: 67, OKX: 6)
 TOPICS = {
     "NEWS": 2, 
     "MEXC": 68,      
@@ -31,8 +32,8 @@ TOPICS = {
     "KUCOIN": 71,   
     "WHITEBIT": 72, 
     "KRAKEN": 73,   
-    "GATE": 67,      
-    "OKX": 2,        
+    "GATE": 67,      # Точный ID топика Gate
+    "OKX": 6,        # Точный ID топика OKX
     "FUNDING": 76,  
     "SPREAD": 77,
     "WEB3": 78,     # Топик для Web3-активностей
@@ -331,7 +332,7 @@ def fetch_telegram_channels_promos():
         "MEXC": ["MEXCKraineOfficial", "MEXCofficialNews", "MEXCofficial"],
         "GATE": ["Gate_Ukrainian", "Gateio_NewList_News", "GateCom_EN"],
         "KRAKEN": ["kraken_announcements"],
-        "BINGX": ["BingXOfficial", "BingXAnnouncement", "BingXEnglish", "BingXRussianAnnouncements"],
+        "BINGX": ["BingXOfficial", "BingXAnnouncement", "BingXEnglish", "BingXRussianAnnouncements"], # Официальные каналы BingX
         "KUCOIN": ["Kucoin_Exchange", "Kucoin_News"],
         "WHITEBIT": ["whitebit_ua_news", "White_Bit"]
     }
@@ -473,7 +474,7 @@ def fetch_direct_exchange_promos():
 
         except Exception as e:
             print(f"Direct Promos Website/API Error: {e}")
-        time.sleep(600) # Проверка сайтов каждые 10 минут
+        time.sleep(600)
 
 # ==================== GLOBAL CRYPTO APIS & RSS ====================
 def fetch_global_crypto_promos():

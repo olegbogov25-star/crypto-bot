@@ -206,6 +206,7 @@ def secure_request(url, timeout=10):
         if response.status_code == 200:
             return response
         else:
+            print(f"⚠️ Site returned status {response.status_code} for {url}")
             return None
     except Exception as e:
         print(f"❌ Secure Request Error ({url}): {e}")
@@ -346,7 +347,7 @@ def fetch_telegram_channels_promos():
                     soup = BeautifulSoup(res.text, 'html.parser')
                     messages = soup.find_all('div', class_='tgme_widget_message')
                     
-                    # БЕРЕМ ТОЛЬКО 1 ПОСЛЕДНИЙ ПОСТ ДЛЯ ИСКЛЮЧЕНИЯ ФЛУДА
+                    # БЕРЕМ ТОЛЬКО 1 ПОСЛЕДНИЙ ПОСТ
                     for msg in messages[-1:]:
                         msg_id_attr = msg.get('data-post', '')
                         if not msg_id_attr: continue
@@ -383,7 +384,7 @@ def fetch_telegram_channels_promos():
 def fetch_direct_exchange_promos():
     while True:
         try:
-            # 1. Binance Direct APIs (Официальные разделы + Web3)[cite: 3]
+            # 1. Binance Direct APIs
             binance_apis = [
                 ("https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=48&pageNo=1&pageSize=1", "BINANCE"),
                 ("https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=161&pageNo=1&pageSize=1", "BINANCE"),
@@ -392,28 +393,34 @@ def fetch_direct_exchange_promos():
             for api_url, top_name in binance_apis:
                 res = secure_request(api_url, timeout=6)
                 if res:
-                    data = res.json()
-                    for art in data.get('data', {}).get('articles', [])[:1]:
-                        art_id = f"dir_binance_{art.get('id')}"
-                        title = art.get('title', '')
-                        code = art.get('code', '')
-                        link = f"https://www.binance.com/en/support/announcement/{code}" if code else "https://www.binance.com"
-                        raw_text = f"Binance Direct API Promo / Campaign: {title}\nLink: {link}"
-                        process_item(art_id, raw_text, link, top_name)
+                    try:
+                        data = res.json()
+                        for art in data.get('data', {}).get('articles', [])[:1]:
+                            art_id = f"dir_binance_{art.get('id')}"
+                            title = art.get('title', '')
+                            code = art.get('code', '')
+                            link = f"https://www.binance.com/en/support/announcement/{code}" if code else "https://www.binance.com"
+                            raw_text = f"Binance Direct API Promo / Campaign: {title}\nLink: {link}"
+                            process_item(art_id, raw_text, link, top_name)
+                    except Exception as json_err:
+                        print(f"⚠️ Binance API JSON decode error: {json_err}")
 
-            # 2. MEXC Direct API[cite: 3]
+            # 2. MEXC Direct API
             mexc_api = "https://www.mexc.com/api/support/list?categoryId=19&page=1&pageSize=1"
             res_mexc = secure_request(mexc_api, timeout=6)
             if res_mexc:
-                mexc_data = res_mexc.json()
-                for item in mexc_data.get('data', {}).get('result', [])[:1]:
-                    item_id = f"dir_mexc_{item.get('id')}"
-                    title = item.get('title', '')
-                    link = f"https://www.mexc.com/support/articles/{item.get('id')}"
-                    raw_text = f"MEXC Direct API Promo / Campaign: {title}\nLink: {link}"
-                    process_item(item_id, raw_text, link, "MEXC")
+                try:
+                    mexc_data = res_mexc.json()
+                    for item in mexc_data.get('data', {}).get('result', [])[:1]:
+                        item_id = f"dir_mexc_{item.get('id')}"
+                        title = item.get('title', '')
+                        link = f"https://www.mexc.com/support/articles/{item.get('id')}"
+                        raw_text = f"MEXC Direct API Promo / Campaign: {title}\nLink: {link}"
+                        process_item(item_id, raw_text, link, "MEXC")
+                except Exception as json_err:
+                    print(f"⚠️ MEXC API JSON decode error: {json_err}")
 
-            # 3. Web3 Wallet Quests (OKX Cryptopedia & Binance Web3)[cite: 3]
+            # 3. Web3 Wallet Quests (OKX Cryptopedia & Binance Web3)
             web3_sources = [
                 ("OKX", "https://www.okx.com/en/web3/discover/cryptopedia", "a"),
                 ("BINANCE", "https://www.binance.com/en/web3", "a")
@@ -432,7 +439,7 @@ def fetch_direct_exchange_promos():
                         raw_text = f"Web3 Wallet Quest / Airdrop [{w_ex} Wallet]: {w_title}\nLink: {w_link if w_link else w_url}"
                         process_item(item_id, raw_text, w_link if w_link else w_url, "WEB3")
 
-            # 4. Официальные сайты бирж[cite: 3]
+            # 4. Официальные сайты бирж
             websites = [
                 ("OKX", "https://www.okx.com/help/section/announcements-latest-promotions", "a"),
                 ("BITGET", "https://www.bitget.com/support/articles/latest-activities", "a"),
@@ -478,15 +485,18 @@ def fetch_global_crypto_promos():
             for api_url, topic in sources[:1]:
                 res = secure_request(api_url, timeout=6)
                 if not res: continue
-                data = res.json()
-                articles = data.get('data', {}).get('articles', [])
-                for art in articles[:1]:
-                    art_id = f"global_api_{art.get('id')}"
-                    title = art.get('title', '')
-                    code = art.get('code', '')
-                    link = f"https://www.binance.com/en/support/announcement/{code}" if code else "https://www.binance.com"
-                    raw_text = f"Global Official Announcement / Event: {title}\nLink: {link}"
-                    process_item(art_id, raw_text, link, topic)
+                try:
+                    data = res.json()
+                    articles = data.get('data', {}).get('articles', [])
+                    for art in articles[:1]:
+                        art_id = f"global_api_{art.get('id')}"
+                        title = art.get('title', '')
+                        code = art.get('code', '')
+                        link = f"https://www.binance.com/en/support/announcement/{code}" if code else "https://www.binance.com"
+                        raw_text = f"Global Official Announcement / Event: {title}\nLink: {link}"
+                        process_item(art_id, raw_text, link, topic)
+                except Exception as json_err:
+                    print(f"⚠️ Global API JSON decode error: {json_err}")
 
             rss_feeds = ["https://cointelegraph.com/rss", "https://cryptopotato.com/feed/"]
             for feed_url in rss_feeds:
@@ -749,7 +759,6 @@ def fetch_token_prices_on_demand(sym):
             ex_vols['Bitget'] = float(r[0].get('quoteVolume', 0))
     except: pass
 
-    # Если через прямой запрос ничего не нашлось, проверяем общий кэш
     if not ex_prices and sym in latest_prices_cache:
         ex_prices['Общий кэш'] = latest_prices_cache[sym]
 
@@ -781,7 +790,6 @@ def monitor_spread():
 
             for sym, ex_data in prices.items():
                 sym_vols = volumes.get(sym, {})
-                # Порог ликвидности: $100,000[cite: 3]
                 valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 100_000}
 
                 if len(valid_ex_data) < 2:
@@ -798,7 +806,6 @@ def monitor_spread():
                 if spread > max_spread_seen:
                     max_spread_seen = spread
                 
-                # Фильтр спреда от 7.0% до 30.0%[cite: 3]
                 if 7.0 <= spread <= 30.0:
                     if spread >= 15.0:
                         badge = "🔥🔥🔥 **MEGA SPREAD (>= 15%)**"
@@ -863,7 +870,7 @@ def monitor_spread():
         
         time.sleep(30)
 
-# ==================== FUNDING MONITOR (СВОДНЫЙ ФОРМАТ + ВИЛКА ОТ 0.5%) ====================
+# ==================== FUNDING MONITOR ====================
 def monitor_funding():
     print("🟢 Funding Monitor started (Topic 76, Spread >= 0.5%)")
     while True:
@@ -874,7 +881,6 @@ def monitor_funding():
             for sym, ex_funds in fundings.items():
                 sym_vols = volumes.get(sym, {})
                 
-                # Фильтруем биржи с ликвидностью от $100k[cite: 3]
                 valid_ex_funds = {ex: rate for ex, rate in ex_funds.items() if sym_vols.get(ex, 0) >= 100_000}
                 if len(valid_ex_funds) < 2:
                     continue
@@ -884,10 +890,8 @@ def monitor_funding():
                 max_rate = valid_ex_funds[max_ex]
                 min_rate = valid_ex_funds[min_ex]
                 
-                # Арбитражная вилка фандинга между биржами
                 funding_spread = abs(max_rate - min_rate)
                 
-                # Порог вилки фандинга от 0.5%[cite: 3]
                 if funding_spread >= 0.5:
                     vol_min = sym_vols.get(min_ex, 0) * 0.01
                     vol_max = sym_vols.get(max_ex, 0) * 0.01
@@ -921,10 +925,9 @@ def monitor_funding():
         
         time.sleep(1800)
 
-# ==================== TELEGRAM COMMANDОВ И КАЛЬКУЛЯТОРОВ ====================
+# ==================== TELEGRAM COMMANDS & CALCULATORS ====================
 @bot.message_handler(commands=['vol', 'volume'])
 def cmd_vol(message):
-    # ИСПРАВЛЕННЫЙ ПАРСИНГ АРГУМЕНТОВ ДЛЯ /vol
     text = message.text.strip()
     parts = re.findall(r'[\d.,]+', text)
     if len(parts) >= 2:
@@ -934,8 +937,10 @@ def cmd_vol(message):
             if volume <= 0:
                 raise ValueError
             
+            # ИСПРАВЛЕННЫЙ РАСЧЕТ: Цена за 1K объема (если объем в штуках/монетах или в сотнях)
             cost_per_1k = (cost / volume) * 1000
-            vol_display = f"{volume:,.1f} ({volume/1000:.2f}K)" if volume < 1000 else f"{volume:,.0f} ({volume/1000:.1f}K)"
+            
+            vol_display = f"{volume:,.1f} ({volume/1000:.2f}K)" if volume >= 1000 else f"{volume:,.1f}"
             
             response_text = (
                 f"📊 **Расчет стоимости объема:**\n"
@@ -948,7 +953,7 @@ def cmd_vol(message):
         except Exception as e:
             print(f"❌ /vol error: {e}")
             
-    bot.reply_to(message, "ℹ️ Использование команды: `/vol [затраты] [объем]` (например: `/vol 52.5 11`)", parse_mode="Markdown")
+    bot.reply_to(message, "ℹ️ Использование команды: `/vol [затраты] [объем]` (например: `/vol 52.5 11000`)", parse_mode="Markdown")
 
 @bot.message_handler(func=lambda message: True)
 def handle_chat_messages(message):
@@ -956,7 +961,6 @@ def handle_chat_messages(message):
         return
     text = message.text.strip()
     
-    # 1. Калькулятор спреда (вычитание вида 61.66-52.50)[cite: 3]
     calc_match = re.search(r'^([\d.]+)\s*-\s*([\d.]+)$', text)
     if calc_match:
         try:
@@ -971,7 +975,6 @@ def handle_chat_messages(message):
     if text.startswith('/'):
         return
 
-    # 2. УНИВЕРСАЛЬНЫЙ КАЛЬКУЛЯТОР МОНЕТ (СЛИТНО и НЕ СЛИТНО: 1400zig, 1.400 ZEC)[cite: 3]
     amount_token_match = re.search(r'^([\d\s,.]+?)\s*([a-zA-Z0-9_-]+)$', text)
     if amount_token_match:
         try:
@@ -1003,7 +1006,6 @@ def handle_chat_messages(message):
         except Exception as e:
             print(f"Universal Amount-Token calc error: {e}")
 
-    # 3. Обычный поиск тикера монеты[cite: 3]
     if len(text) > 15:
         return
         
@@ -1029,17 +1031,15 @@ def handle_chat_messages(message):
 if __name__ == "__main__":
     print("🚀 Bot starting...")
     
-    # Запускаем Flask в отдельном потоке для healthcheck и WebApp[cite: 3]
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
 
-    # Запускаем фоновые потоки сканеров промо, спредов и фандинга[cite: 3]
+    # Запускаем фоновые потоки сканеров
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     threading.Thread(target=fetch_direct_exchange_promos, daemon=True).start()
     threading.Thread(target=fetch_global_crypto_promos, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()
-    threading.Thread(target=monitor_funding, daemon=True).start()  # Сканер фандинга (вилка от 0.5%)[cite: 3]
+    threading.Thread(target=monitor_funding, daemon=True).start()
 
-    # Запуск бота на получение сообщений[cite: 3]
     print("🤖 Telegram bot polling started...")
     bot.infinity_polling(skip_pending=True)

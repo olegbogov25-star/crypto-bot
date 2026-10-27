@@ -4,6 +4,7 @@ import threading
 import datetime
 import json
 import re
+import random
 import pytz
 import requests
 import feedparser
@@ -21,7 +22,6 @@ ADMIN_IDS = [1043209905]
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 app = Flask(__name__)
 
-# ТОЧНЫЕ ID ТОПИКОВ (GATE: 67, OKX: 6)
 TOPICS = {
     "NEWS": 2, 
     "MEXC": 68,      
@@ -190,20 +190,29 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# ==================== SECURE REQUESTS ====================
-BROWSER_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1",
-    "Cache-Control": "max-age=0"
-}
+# ==================== SECURE REQUESTS & ROTATING HEADERS ====================
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2.1 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64; rv:124.0) Gecko/20100101 Firefox/124.0",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148"
+]
+
+def get_random_headers():
+    return {
+        "User-Agent": random.choice(USER_AGENTS),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache"
+    }
 
 def secure_request(url, timeout=12):
     try:
-        response = requests.get(url, headers=BROWSER_HEADERS, timeout=timeout)
+        response = requests.get(url, headers=get_random_headers(), timeout=timeout)
         if response.status_code == 200:
             return response
         else:
@@ -332,7 +341,7 @@ def fetch_telegram_channels_promos():
         "MEXC": ["MEXCKraineOfficial", "MEXCofficialNews", "MEXCofficial"],
         "GATE": ["Gate_Ukrainian", "Gateio_NewList_News", "GateCom_EN"],
         "KRAKEN": ["kraken_announcements"],
-        "BINGX": ["BingXOfficial", "BingXAnnouncement", "BingXEnglish", "BingXRussianAnnouncements"], # Официальные каналы BingX
+        "BINGX": ["BingXOfficial", "BingXAnnouncement", "BingXEnglish", "BingXRussianAnnouncements"],
         "KUCOIN": ["Kucoin_Exchange", "Kucoin_News"],
         "WHITEBIT": ["whitebit_ua_news", "White_Bit"]
     }
@@ -396,13 +405,14 @@ def fetch_direct_exchange_promos():
                 if res:
                     try:
                         data = res.json()
-                        for art in data.get('data', {}).get('articles', [])[:1]:
-                            art_id = f"dir_binance_{art.get('id')}"
-                            title = art.get('title', '')
-                            code = art.get('code', '')
-                            link = f"https://www.binance.com/en/support/announcement/{code}" if code else "https://www.binance.com"
-                            raw_text = f"Binance Direct API Promo / Campaign: {title}\nLink: {link}"
-                            process_item(art_id, raw_text, link, top_name)
+                        if isinstance(data, dict):
+                            for art in data.get('data', {}).get('articles', [])[:1]:
+                                art_id = f"dir_binance_{art.get('id')}"
+                                title = art.get('title', '')
+                                code = art.get('code', '')
+                                link = f"https://www.binance.com/en/support/announcement/{code}" if code else "https://www.binance.com"
+                                raw_text = f"Binance Direct API Promo / Campaign: {title}\nLink: {link}"
+                                process_item(art_id, raw_text, link, top_name)
                     except Exception as json_err:
                         print(f"⚠️ Binance API JSON decode error: {json_err}")
 
@@ -412,12 +422,13 @@ def fetch_direct_exchange_promos():
             if res_mexc:
                 try:
                     mexc_data = res_mexc.json()
-                    for item in mexc_data.get('data', {}).get('result', [])[:1]:
-                        item_id = f"dir_mexc_{item.get('id')}"
-                        title = item.get('title', '')
-                        link = f"https://www.mexc.com/support/articles/{item.get('id')}"
-                        raw_text = f"MEXC Direct API Promo / Campaign: {title}\nLink: {link}"
-                        process_item(item_id, raw_text, link, "MEXC")
+                    if isinstance(mexc_data, dict):
+                        for item in mexc_data.get('data', {}).get('result', [])[:1]:
+                            item_id = f"dir_mexc_{item.get('id')}"
+                            title = item.get('title', '')
+                            link = f"https://www.mexc.com/support/articles/{item.get('id')}"
+                            raw_text = f"MEXC Direct API Promo / Campaign: {title}\nLink: {link}"
+                            process_item(item_id, raw_text, link, "MEXC")
                 except Exception as json_err:
                     print(f"⚠️ MEXC API JSON decode error: {json_err}")
 
@@ -490,14 +501,15 @@ def fetch_global_crypto_promos():
                 if not res: continue
                 try:
                     data = res.json()
-                    articles = data.get('data', {}).get('articles', [])
-                    for art in articles[:1]:
-                        art_id = f"global_api_{art.get('id')}"
-                        title = art.get('title', '')
-                        code = art.get('code', '')
-                        link = f"https://www.binance.com/en/support/announcement/{code}" if code else "https://www.binance.com"
-                        raw_text = f"Global Official Announcement / Event: {title}\nLink: {link}"
-                        process_item(art_id, raw_text, link, topic)
+                    if isinstance(data, dict):
+                        articles = data.get('data', {}).get('articles', [])
+                        for art in articles[:1]:
+                            art_id = f"global_api_{art.get('id')}"
+                            title = art.get('title', '')
+                            code = art.get('code', '')
+                            link = f"https://www.binance.com/en/support/announcement/{code}" if code else "https://www.binance.com"
+                            raw_text = f"Global Official Announcement / Event: {title}\nLink: {link}"
+                            process_item(art_id, raw_text, link, topic)
                 except Exception as json_err:
                     print(f"⚠️ Global API JSON decode error: {json_err}")
 
@@ -675,21 +687,19 @@ def fetch_token_prices_on_demand(sym):
     ex_prices = {}
     ex_vols = {}
 
-    # 1. Binance (Spot + Futures)
     try:
         r = requests.get(f"https://api.binance.com/api/v3/ticker/24hr?symbol={base_sym}USDT", timeout=2).json()
-        if 'lastPrice' in r:
+        if isinstance(r, dict) and 'lastPrice' in r:
             ex_prices['Binance Spot'] = float(r['lastPrice'])
             ex_vols['Binance Spot'] = float(r.get('quoteVolume', 0))
     except: pass
     try:
         r = requests.get(f"https://fapi.binance.com/fapi/v1/ticker/24hr?symbol={base_sym}USDT", timeout=2).json()
-        if 'lastPrice' in r:
+        if isinstance(r, dict) and 'lastPrice' in r:
             ex_prices['Binance'] = float(r['lastPrice'])
             ex_vols['Binance'] = float(r.get('quoteVolume', 0))
     except: pass
 
-    # 2. Bybit (Spot + Futures)
     try:
         r = requests.get(f"https://api.bybit.com/v5/market/tickers?category=spot&symbol={base_sym}USDT", timeout=2).json()
         lst = r.get('result', {}).get('list', [])
@@ -705,22 +715,20 @@ def fetch_token_prices_on_demand(sym):
             ex_vols['Bybit'] = float(lst[0].get('turnover24h', 0))
     except: pass
 
-    # 3. MEXC (Spot + Futures)
     try:
         r = requests.get(f"https://api.mexc.com/api/v3/ticker/24hr?symbol={base_sym}USDT", timeout=2).json()
-        if 'lastPrice' in r:
+        if isinstance(r, dict) and 'lastPrice' in r:
             ex_prices['MEXC Spot'] = float(r['lastPrice'])
             ex_vols['MEXC Spot'] = float(r.get('quoteVolume', 0))
     except: pass
     try:
         r = requests.get(f"https://contract.mexc.com/api/v1/contract/ticker?symbol={base_sym}_USDT", timeout=2).json()
         data = r.get('data', {})
-        if 'lastPrice' in data:
+        if isinstance(data, dict) and 'lastPrice' in data:
             ex_prices['MEXC'] = float(data['lastPrice'])
             ex_vols['MEXC'] = float(data.get('amount24h', 0)) * float(data['lastPrice'])
     except: pass
 
-    # 4. Gate.io (Spot + Futures)
     try:
         r = requests.get(f"https://api.gateio.ws/api/v4/spot/tickers?currency_pair={base_sym}_USDT", timeout=2).json()
         if isinstance(r, list) and len(r) > 0:
@@ -734,7 +742,6 @@ def fetch_token_prices_on_demand(sym):
             ex_vols['Gate'] = float(r[0].get('total_size', 0)) * float(r[0]['last'])
     except: pass
 
-    # 5. OKX (Spot + Swap)
     try:
         r = requests.get(f"https://www.okx.com/api/v5/market/ticker?instId={base_sym}-USDT", timeout=2).json().get('data', [])
         if r:
@@ -748,7 +755,6 @@ def fetch_token_prices_on_demand(sym):
             ex_vols['OKX'] = float(r[0].get('volCcy24h', 0))
     except: pass
 
-    # 6. Bitget (Spot + Futures)
     try:
         r = requests.get(f"https://api.bitget.com/api/v2/spot/market/tickers?symbol={base_sym}USDT", timeout=2).json().get('data', [])
         if r:
@@ -783,7 +789,7 @@ def format_countdown(target_timestamp):
 # ==================== SPREAD MONITOR (LOGGING & WEB APP) ====================
 def monitor_spread():
     global active_spreads
-    print("🟢 Spread Monitor started (Threshold: $100k volume, Spread >= 7.0%)")
+    print("🟢 Spread Monitor started (Threshold: $50k volume, Spread >= 5.0%)")
     while True:
         try:
             prices, volumes, fundings, _ = fetch_futures_data()
@@ -792,7 +798,7 @@ def monitor_spread():
 
             for sym, ex_data in prices.items():
                 sym_vols = volumes.get(sym, {})
-                valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 100_000}
+                valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 50_000}
 
                 if len(valid_ex_data) < 2:
                     continue
@@ -805,13 +811,13 @@ def monitor_spread():
                 if min_p <= 0: continue
                 spread = ((max_p - min_p) / min_p) * 100
                 
-                if 7.0 <= spread <= 30.0:
+                if 5.0 <= spread <= 30.0:
                     if spread >= 15.0:
                         badge = "🔥🔥🔥 **MEGA SPREAD (>= 15%)**"
                     elif spread >= 10.0:
                         badge = "🔥 **HIGH SPREAD (>= 10%)**"
                     else:
-                        badge = "⚡ **STRONG SPREAD (>= 7%)**"
+                        badge = "⚡ **STRONG SPREAD (>= 5%)**"
 
                     vol_min = sym_vols.get(min_ex, 0) * 0.01
                     vol_max = sym_vols.get(max_ex, 0) * 0.01
@@ -847,18 +853,20 @@ def monitor_spread():
                     )
 
                     render_url = os.environ.get('RENDER_EXTERNAL_URL', '').strip()
-                    if not render_url:
-                        render_url = "https://your-app.onrender.com"
-                    elif not render_url.startswith('http'):
-                        render_url = f"https://{render_url}"
-                    
-                    webapp_url = f"{render_url}/chart?symbol={sym}&min_ex={min_ex}&max_ex={max_ex}"
-                    
                     markup = InlineKeyboardMarkup()
-                    try:
-                        markup.add(InlineKeyboardButton("📈 Живой график спреда", web_app=WebAppInfo(url=webapp_url)))
-                    except Exception as btn_err:
-                        print(f"⚠️ WebApp Button Error: {btn_err}")
+                    
+                    if render_url:
+                        if not render_url.startswith('http'):
+                            render_url = f"https://{render_url}"
+                        webapp_url = f"{render_url}/chart?symbol={sym}&min_ex={min_ex}&max_ex={max_ex}"
+                        try:
+                            markup.add(InlineKeyboardButton("📈 Живой график спреда", web_app=WebAppInfo(url=webapp_url)))
+                        except Exception:
+                            pass
+                    
+                    if not markup.keyboard:
+                        fallback_url = render_url if render_url else "https://t.me"
+                        markup.add(InlineKeyboardButton("📈 Открыть график спреда", url=fallback_url))
 
                     send_to_topic("SPREAD", msg_text, reply_markup=markup)
 
@@ -878,7 +886,7 @@ def monitor_funding():
 
             for sym, ex_funds in fundings.items():
                 sym_vols = volumes.get(sym, {})
-                valid_ex_funds = {ex: rate for ex, rate in ex_funds.items() if sym_vols.get(ex, 0) >= 100_000}
+                valid_ex_funds = {ex: rate for ex, rate in ex_funds.items() if sym_vols.get(ex, 0) >= 50_000}
                 if len(valid_ex_funds) < 2:
                     continue
 
@@ -926,21 +934,16 @@ def monitor_funding():
 @bot.message_handler(commands=['vol', 'volume'])
 def cmd_vol(message):
     text = message.text.strip()
-    
-    # Продвинутый поиск чисел: понимает и слитные (11000), и раздельные (11 000) варианты написания объема
     cleaned_text = text.replace(',', '.')
     numbers = re.findall(r'\d+(?:\.\d+)?', cleaned_text)
     
     if len(numbers) >= 2:
         try:
             cost = float(numbers[0])
-            
-            # Если чисел больше двух (например: /vol 52.5 11 000), склеиваем второе и третье в единый объем
             if len(numbers) >= 3 and len(numbers[2]) <= 3:
                 volume = float(numbers[1] + numbers[2])
             else:
                 volume = float(numbers[1])
-                # Если объем введен маленьким числом (например 11), автоматически превращаем в 11k (11000)
                 if volume < 1000 and volume > 0:
                     volume = volume * 1000
             

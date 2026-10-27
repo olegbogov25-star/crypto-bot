@@ -337,7 +337,7 @@ def fetch_telegram_channels_promos():
         "BYBIT": ["bybitukrainian", "bybitukrainiannews", "Bybit_CIS", "BybitAnnouncements"],
         "BITGET": ["BitgetUA", "Bitget_Announcements", "BitgetENOfficial"],
         "MEXC": ["MEXCKraineOfficial", "MEXCofficialNews", "MEXCofficial"],
-        "GATE": ["GateioOfficialNews", "GateCom_EN", "Gate_Ukrainian"],
+        "GATE": ["GateioOfficialNews", "GateCom_EN", "Gate_Ukrainian", "Gateio_NewList_News"],
         "BINGX": ["BingXOfficial", "BingXAnnouncement", "BingXEnglish", "BingXRussianAnnouncements"],
         "KUCOIN": ["Kucoin_Exchange", "Kucoin_News"],
         "KRAKEN": ["kraken_announcements"]

@@ -47,7 +47,6 @@ spread_history = {}  # Хранилище истории спредов для �
 SPREADS_FILE = "active_spreads.json"
 
 def load_active_spreads():
-    """Загружает активные спреды из файла при старте бота"""
     if os.path.exists(SPREADS_FILE):
         try:
             with open(SPREADS_FILE, "r", encoding="utf-8") as f:
@@ -57,7 +56,6 @@ def load_active_spreads():
     return {}
 
 def save_active_spreads(spreads_dict):
-    """Сохраняет актуальные активные спреды на диск"""
     try:
         with open(SPREADS_FILE, "w", encoding="utf-8") as f:
             json.dump(spreads_dict, f, ensure_ascii=False, indent=4)
@@ -241,6 +239,8 @@ def normalize_symbol(raw_sym):
     if not raw_sym:
         return ""
     sym = raw_sym.upper().replace('_', '').replace('-', '').replace('/', '')
+    if sym.startswith('XBT'):
+        sym = 'BTC' + sym[3:]
     if sym.endswith('USDTM'):
         sym = sym[:-1]
     if not sym.endswith('USDT'):

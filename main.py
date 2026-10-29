@@ -47,6 +47,7 @@ spread_history = {}  # Хранилище истории спредов для �
 SPREADS_FILE = "active_spreads.json"
 
 def load_active_spreads():
+    """Загружает активные спреды из файла при старте бота"""
     if os.path.exists(SPREADS_FILE):
         try:
             with open(SPREADS_FILE, "r", encoding="utf-8") as f:
@@ -56,6 +57,7 @@ def load_active_spreads():
     return {}
 
 def save_active_spreads(spreads_dict):
+    """Сохраняет актуальные активные спреды на диск"""
     try:
         with open(SPREADS_FILE, "w", encoding="utf-8") as f:
             json.dump(spreads_dict, f, ensure_ascii=False, indent=4)
@@ -213,8 +215,10 @@ def secure_request(url, timeout=12):
         if response.status_code == 200:
             return response
         else:
+            print(f"⚠️ Site returned status {response.status_code} for {url}")
             return None
-    except Exception:
+    except Exception as e:
+        print(f"❌ Secure Request Error ({url}): {e}")
         return None
 
 # ==================== LINK GENERATORS ====================
@@ -239,8 +243,6 @@ def normalize_symbol(raw_sym):
     if not raw_sym:
         return ""
     sym = raw_sym.upper().replace('_', '').replace('-', '').replace('/', '')
-    if sym.startswith('XBT'):
-        sym = 'BTC' + sym[3:]
     if sym.endswith('USDTM'):
         sym = sym[:-1]
     if not sym.endswith('USDT'):
@@ -280,7 +282,8 @@ def analyze_text(text):
             timeout=15
         )
         return res.json()['choices'][0]['message']['content'].strip()
-    except Exception:
+    except Exception as e:
+        print(f"AI Error: {e}")
         return text
 
 def send_to_topic(topic_name, text, reply_to_message_id=None, reply_markup=None):
@@ -406,8 +409,8 @@ def fetch_direct_exchange_promos():
                                 link = f"https://www.binance.com/en/support/announcement/{code}" if code else "https://www.binance.com"
                                 raw_text = f"Binance Direct API Promo / Campaign: {title}\nLink: {link}"
                                 process_item(art_id, raw_text, link, top_name)
-                    except Exception:
-                        pass
+                    except Exception as json_err:
+                        print(f"⚠️ Binance API JSON decode error: {json_err}")
 
             mexc_api = "https://www.mexc.com/api/support/list?categoryId=19&page=1&pageSize=1"
             res_mexc = secure_request(mexc_api, timeout=8)
@@ -421,8 +424,8 @@ def fetch_direct_exchange_promos():
                             link = f"https://www.mexc.com/support/articles/{item.get('id')}"
                             raw_text = f"MEXC Direct API Promo / Campaign: {title}\nLink: {link}"
                             process_item(item_id, raw_text, link, "MEXC")
-                except Exception:
-                    pass
+                except Exception as json_err:
+                    print(f"⚠️ MEXC API JSON decode error: {json_err}")
 
             web3_sources = [
                 ("OKX", "https://www.okx.com/en/web3/discover/cryptopedia", "a"),
@@ -499,8 +502,8 @@ def fetch_global_crypto_promos():
                             link = f"https://www.binance.com/en/support/announcement/{code}" if code else "https://www.binance.com"
                             raw_text = f"Global Official Announcement / Event: {title}\nLink: {link}"
                             process_item(art_id, raw_text, link, topic)
-                except Exception:
-                    pass
+                except Exception as json_err:
+                    print(f"⚠️ Global API JSON decode error: {json_err}")
 
             rss_feeds = ["https://cointelegraph.com/rss", "https://cryptopotato.com/feed/"]
             for feed_url in rss_feeds:
@@ -513,29 +516,29 @@ def fetch_global_crypto_promos():
                         link = entry.get('link', '')
                         raw_text = f"Crypto Aggregator / RSS News & Airdrop Quest: {title}\n{summary}\nLink: {link}"
                         process_item(entry_id, raw_text, link, "NEWS")
-                except Exception:
-                    pass
+                except Exception as rss_err:
+                    print(f"RSS Parse Error ({feed_url}): {rss_err}")
         except Exception as e:
             print(f"Global Promos Monitor Error: {e}")
         time.sleep(900)
 
-# ==================== FUTURES & SPOT DATA FETCHING (БЕЗОПАСНЫЙ СБОР) ====================
+# ==================== FUTURES & SPOT DATA FETCHING ====================
 def fetch_futures_data():
     global latest_prices_cache
     prices, volumes, fundings, funding_times = {}, {}, {}, {}
     
     # 1. Binance
     try:
-        r = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=4).json()
+        r = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=3).json()
         for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym:
                 prices.setdefault(sym, {})['Binance'] = float(item['lastPrice'])
                 volumes.setdefault(sym, {})['Binance'] = float(item['quoteVolume'])
-    except Exception as e: print(f"⚠️ Binance futures error: {e}")
+    except Exception: pass
 
     try:
-        r = requests.get("https://fapi.binance.com/fapi/v1/premiumIndex", timeout=4).json()
+        r = requests.get("https://fapi.binance.com/fapi/v1/premiumIndex", timeout=3).json()
         for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym:
@@ -546,7 +549,7 @@ def fetch_futures_data():
 
     # 2. Bybit
     try:
-        r = requests.get("https://api.bybit.com/v5/market/tickers?category=linear", timeout=4).json().get('result', {}).get('list', [])
+        r = requests.get("https://api.bybit.com/v5/market/tickers?category=linear", timeout=3).json().get('result', {}).get('list', [])
         for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym:
@@ -557,20 +560,20 @@ def fetch_futures_data():
                     fundings.setdefault(sym, {})['Bybit'] = float(item['fundingRate']) * 100
                     next_time = int(item.get('nextFundingTime', 0)) // 1000
                     if next_time > 0: funding_times.setdefault(sym, {})['Bybit'] = next_time
-    except Exception as e: print(f"⚠️ Bybit futures error: {e}")
+    except Exception: pass
 
     # 3. OKX
     try:
-        r = requests.get("https://www.okx.com/api/v5/market/tickers?instType=SWAP", timeout=4).json().get('data', [])
+        r = requests.get("https://www.okx.com/api/v5/market/tickers?instType=SWAP", timeout=3).json().get('data', [])
         for item in r:
             sym = normalize_symbol(item['instId'])
             if sym:
                 prices.setdefault(sym, {})['OKX'] = float(item['last'])
                 volumes.setdefault(sym, {})['OKX'] = float(item.get('volCcy24h', 0))
-    except Exception as e: print(f"⚠️ OKX futures error: {e}")
+    except Exception: pass
 
     try:
-        r = requests.get("https://api.okx.com/api/v5/public/funding-rate-all", timeout=4).json().get('data', [])
+        r = requests.get("https://api.okx.com/api/v5/public/funding-rate-all", timeout=3).json().get('data', [])
         for item in r:
             sym = normalize_symbol(item['instId'])
             if sym and item.get('fundingRate'):
@@ -581,7 +584,7 @@ def fetch_futures_data():
 
     # 4. Gate.io
     try:
-        r = requests.get("https://api.gateio.ws/api/v4/futures/usdt/tickers", timeout=4).json()
+        r = requests.get("https://api.gateio.ws/api/v4/futures/usdt/tickers", timeout=3).json()
         for item in r:
             sym = normalize_symbol(item['contract'])
             if sym:
@@ -591,11 +594,11 @@ def fetch_futures_data():
                     fundings.setdefault(sym, {})['Gate'] = float(item['funding_rate']) * 100
                     next_time = int(item.get('funding_next_time', 0))
                     if next_time > 0: funding_times.setdefault(sym, {})['Gate'] = next_time
-    except Exception as e: print(f"⚠️ Gate futures error: {e}")
+    except Exception: pass
 
     # 5. Bitget
     try:
-        r = requests.get("https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES", timeout=4).json().get('data', [])
+        r = requests.get("https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES", timeout=3).json().get('data', [])
         for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym:
@@ -605,38 +608,34 @@ def fetch_futures_data():
                     fundings.setdefault(sym, {})['Bitget'] = float(item['fundingRate']) * 100
                     next_time = int(item.get('nextFundingTime', 0)) // 1000
                     if next_time > 0: funding_times.setdefault(sym, {})['Bitget'] = next_time
-    except Exception as e: print(f"⚠️ Bitget futures error: {e}")
+    except Exception: pass
 
     # 6. MEXC
     try:
-        r = requests.get("https://contract.mexc.com/api/v1/contract/ticker", timeout=4).json().get('data', [])
+        r = requests.get("https://contract.mexc.com/api/v1/contract/ticker", timeout=3).json().get('data', [])
         for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym:
-                p = float(item['lastPrice'])
-                amt = float(item.get('amount24h', 0))
-                prices.setdefault(sym, {})['MEXC'] = p
-                volumes.setdefault(sym, {})['MEXC'] = amt * p
+                prices.setdefault(sym, {})['MEXC'] = float(item['lastPrice'])
+                volumes.setdefault(sym, {})['MEXC'] = float(item.get('amount24h', 0))
                 if 'fundingRate' in item:
                     fundings.setdefault(sym, {})['MEXC'] = float(item['fundingRate']) * 100
                     next_time = int(item.get('nextSettleTime', 0)) // 1000
                     if next_time > 0: funding_times.setdefault(sym, {})['MEXC'] = next_time
-    except Exception as e: print(f"⚠️ MEXC futures error: {e}")
+    except Exception: pass
 
     # 7. BingX
     try:
-        r = requests.get("https://open-api.bingx.com/openApi/swap/v2/quote/ticker", timeout=4).json().get('data', [])
+        r = requests.get("https://open-api.bingx.com/openApi/swap/v2/quote/ticker", timeout=3).json().get('data', [])
         for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym:
-                p = float(item['lastPrice'])
-                vol = float(item.get('volume', 0))
-                prices.setdefault(sym, {})['BingX'] = p
-                volumes.setdefault(sym, {})['BingX'] = vol * p
-    except Exception as e: print(f"⚠️ BingX futures error: {e}")
+                prices.setdefault(sym, {})['BingX'] = float(item['lastPrice'])
+                volumes.setdefault(sym, {})['BingX'] = float(item.get('volume', 0))
+    except Exception: pass
 
     try:
-        r = requests.get("https://open-api.bingx.com/openApi/swap/v2/quote/premiumIndex", timeout=4).json().get('data', [])
+        r = requests.get("https://open-api.bingx.com/openApi/swap/v2/quote/premiumIndex", timeout=3).json().get('data', [])
         for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym and 'lastFundingRate' in item:
@@ -647,7 +646,7 @@ def fetch_futures_data():
 
     # 8. KuCoin
     try:
-        r = requests.get("https://api-futures.kucoin.com/api/v1/contracts/active", timeout=4).json().get('data', [])
+        r = requests.get("https://api-futures.kucoin.com/api/v1/contracts/active", timeout=3).json().get('data', [])
         for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym and 'lastTradePrice' in item:
@@ -657,7 +656,16 @@ def fetch_futures_data():
                     fundings.setdefault(sym, {})['KuCoin'] = float(item['fundingFeeRate']) * 100
                     next_time = int(item.get('nextFundingRateTime', 0)) // 1000
                     if next_time > 0: funding_times.setdefault(sym, {})['KuCoin'] = next_time
-    except Exception as e: print(f"⚠️ KuCoin futures error: {e}")
+    except Exception: pass
+
+    # Spot for quick price lookup
+    try:
+        r = requests.get("https://api.binance.com/api/v3/ticker/price", timeout=3).json()
+        for item in r:
+            sym = normalize_symbol(item['symbol'])
+            if sym:
+                prices.setdefault(sym, {})['BinanceSpot'] = float(item['price'])
+    except Exception: pass
 
     for sym, ex_dict in prices.items():
         if ex_dict:
@@ -770,10 +778,10 @@ def format_countdown(target_timestamp):
     minutes = int((diff % 3600) // 60)
     return f"{hours}ч {minutes:02d}м"
 
-# ==================== SPREAD MONITOR (ЖЕЛЕЗОБЕТОННЫЙ ЗАПУСК) ====================
+# ==================== SPREAD MONITOR (LOGGING & WEB APP) ====================
 def monitor_spread():
     global active_spreads
-    print("🟢 Spread Monitor started (Threshold: $50k volume, Spread: 5.0% - 30.0%)")
+    print("🟢 Spread Monitor started (Threshold: $50k volume, Spread >= 5.0%)")
     while True:
         try:
             prices, volumes, fundings, _ = fetch_futures_data()
@@ -795,7 +803,6 @@ def monitor_spread():
                 if min_p <= 0: continue
                 spread = ((max_p - min_p) / min_p) * 100
                 
-                # Твой классический диапазон от 5% до 30%
                 if 5.0 <= spread <= 30.0:
                     if spread >= 15.0:
                         badge = "🔥🔥🔥 **MEGA SPREAD (>= 15%)**"
@@ -847,14 +854,11 @@ def monitor_spread():
                         try:
                             markup.add(InlineKeyboardButton("📈 Живой график спреда", web_app=WebAppInfo(url=webapp_url)))
                         except Exception:
-                            pass
-                    
-                    if not markup.keyboard:
-                        fallback_url = render_url if render_url else "https://t.me"
-                        markup.add(InlineKeyboardButton("📈 Открыть график спреда", url=fallback_url))
+                            markup.add(InlineKeyboardButton("📈 Открыть график спреда", url=webapp_url))
+                    else:
+                        markup.add(InlineKeyboardButton("🌐 Биржа Long", url=get_exchange_url(min_ex, sym)))
 
                     send_to_topic("SPREAD", msg_text, reply_markup=markup)
-                    print(f"🚀 [SPREAD ALERT] Sent for #{sym}: {spread:.2f}%")
 
         except Exception as e:
             print(f"❌ Monitor Spread Error: {e}")
@@ -868,6 +872,7 @@ def monitor_funding():
         try:
             _, volumes, fundings, funding_times = fetch_futures_data()
             curr_time_str = get_kyiv_time()
+            print(f"🔍 [Funding Monitor] Scanned at {curr_time_str}")
 
             for sym, ex_funds in fundings.items():
                 sym_vols = volumes.get(sym, {})

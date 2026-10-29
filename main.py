@@ -10,7 +10,7 @@ import requests
 import feedparser
 import telebot
 from bs4 import BeautifulSoup
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from flask import Flask, render_template_string, request
 
 # ==================== CONFIGURATION ====================
@@ -850,11 +850,8 @@ def monitor_spread():
                     if render_url:
                         if not render_url.startswith('http'):
                             render_url = f"https://{render_url}"
-                        webapp_url = f"{render_url}/chart?symbol={sym}&min_ex={min_ex}&max_ex={max_ex}"
-                        try:
-                            markup.add(InlineKeyboardButton("📈 Живой график спреда", web_app=WebAppInfo(url=webapp_url)))
-                        except Exception:
-                            markup.add(InlineKeyboardButton("📈 Открыть график спреда", url=webapp_url))
+                        chart_url = f"{render_url}/chart?symbol={sym}&min_ex={min_ex}&max_ex={max_ex}"
+                        markup.add(InlineKeyboardButton("📈 Открыть график спреда", url=chart_url))
                     else:
                         markup.add(InlineKeyboardButton("🌐 Биржа Long", url=get_exchange_url(min_ex, sym)))
 

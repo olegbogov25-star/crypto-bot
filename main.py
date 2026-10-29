@@ -87,7 +87,7 @@ def normalize_symbol(raw_sym):
             sym += 'USDT'
     return sym
 
-# ==================== УНИВЕРСАЛЬНЫЙ ПОИСК ЦЕНЫ ДЛЯ ГРАФИКА И ЧАТА ====================
+# ==================== УНИВЕРСАЛЬНЫЙ ПОИСК ЦЕНЫ ДЛЯ ГРАФИКА И ЧАТА (ВСЕ МОНЕТЫ И ЩИТКИ) ====================
 def fetch_token_prices_on_demand(sym):
     base_sym = sym.replace('USDT', '')
     ex_prices, ex_vols = {}, {}
@@ -383,6 +383,8 @@ def get_exchange_url(exchange, symbol="BTCUSDT"):
         "OURBIT": f"https://www.ourbit.com/futures/trade/{base_sym}_USDT"
     }
     return links.get(ex_upper, None)
+
+latest_prices_cache = {}
 
 # ==================== ADVANCED AI & PROMO ANALYZER ====================
 def analyze_text(text):

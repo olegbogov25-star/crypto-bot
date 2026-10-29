@@ -74,6 +74,19 @@ def get_kyiv_time():
 def get_kyiv_date_time():
     return datetime.datetime.now(KYIV_TZ).strftime("%H:%M")
 
+def normalize_symbol(raw_sym):
+    if not raw_sym:
+        return ""
+    sym = raw_sym.upper().replace('_', '').replace('-', '').replace('/', '')
+    if sym.endswith('USDTM'):
+        sym = sym[:-1]
+    if not sym.endswith('USDT'):
+        if sym.endswith('USD'):
+            sym = sym[:-3] + 'USDT'
+        else:
+            sym += 'USDT'
+    return sym
+
 # ==================== УНИВЕРСАЛЬНЫЙ ПОИСК ЦЕНЫ ДЛЯ ГРАФИКА И ЧАТА ====================
 def fetch_token_prices_on_demand(sym):
     base_sym = sym.replace('USDT', '')
@@ -156,7 +169,6 @@ def chart_data_api():
     
     now_ts = int(time.time())
     
-    # Если истории нет или она пустая, мгновенно запрашиваем реальные цены с бирж
     if not long_points or not short_points:
         current_prices, _ = fetch_token_prices_on_demand(symbol)
         p_long = current_prices.get(min_ex, 0)
@@ -291,17 +303,19 @@ def web_chart():
             longSeries.setData({{ long_json | safe }});
             shortSeries.setData({{ short_json | safe }});
 
-            // Автообновление в реальном времени каждые 10 секунд
+            // Плавное обновление графика в реальном времени каждые 10 секунд с помощью update()
             setInterval(async () => {
                 try {
                     const res = await fetch('/api/chart-data?symbol={{ symbol }}&min_ex={{ min_ex }}&max_ex={{ max_ex }}');
                     const data = await res.json();
                     if (data) {
                         if (data.long_data && data.long_data.length > 0) {
-                            longSeries.setData(data.long_data);
+                            const latestLong = data.long_data[data.long_data.length - 1];
+                            longSeries.update(latestLong);
                         }
                         if (data.short_data && data.short_data.length > 0) {
-                            shortSeries.setData(data.short_data);
+                            const latestShort = data.short_data[data.short_data.length - 1];
+                            shortSeries.update(latestShort);
                         }
                     }
                 } catch (e) {
@@ -369,21 +383,6 @@ def get_exchange_url(exchange, symbol="BTCUSDT"):
         "OURBIT": f"https://www.ourbit.com/futures/trade/{base_sym}_USDT"
     }
     return links.get(ex_upper, None)
-
-def normalize_symbol(raw_sym):
-    if not raw_sym:
-        return ""
-    sym = raw_sym.upper().replace('_', '').replace('-', '').replace('/', '')
-    if sym.endswith('USDTM'):
-        sym = sym[:-1]
-    if not sym.endswith('USDT'):
-        if sym.endswith('USD'):
-            sym = sym[:-3] + 'USDT'
-        else:
-            sym += 'USDT'
-    return sym
-
-latest_prices_cache = {}
 
 # ==================== ADVANCED AI & PROMO ANALYZER ====================
 def analyze_text(text):

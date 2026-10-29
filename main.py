@@ -41,7 +41,7 @@ TOPICS = {
 
 processed_ids = set()
 active_fundings = {}  
-spread_history = {}  # Хранилище истории спредов для графиков
+spread_history = {}  # Хранилище истории спредов для живых графиков
 
 # ==================== PERSISTENT ACTIVE SPREADS (JSON) ====================
 SPREADS_FILE = "active_spreads.json"
@@ -85,6 +85,20 @@ def web_chart():
     min_ex = request.args.get('min_ex', 'Long')
     max_ex = request.args.get('max_ex', 'Short')
     
+    key = f"{symbol}_{min_ex}_{max_ex}"
+    history_points = spread_history.get(key, [])
+    
+    # Если истории еще нет, берем текущий момент как заглушку, чтобы график не был пустым
+    now_ts = int(time.time())
+    if not history_points:
+        history_points = [
+            {"time": now_ts - 120, "value": 7.0},
+            {"time": now_ts - 60, "value": 7.0},
+            {"time": now_ts, "value": 7.0}
+        ]
+    
+    history_json = json.dumps(history_points)
+
     html_template = """
     <!DOCTYPE html>
     <html lang="ru">
@@ -166,15 +180,8 @@ def web_chart():
                 lineWidth: 2,
             });
 
-            const initialData = [
-                { time: Math.floor(Date.now() / 1000) - 300, value: 7.2 },
-                { time: Math.floor(Date.now() / 1000) - 240, value: 7.8 },
-                { time: Math.floor(Date.now() / 1000) - 180, value: 8.5 },
-                { time: Math.floor(Date.now() / 1000) - 120, value: 8.1 },
-                { time: Math.floor(Date.now() / 1000) - 60, value: 8.9 },
-                { time: Math.floor(Date.now() / 1000), value: 9.1 },
-            ];
-            lineSeries.setData(initialData);
+            const chartData = {{ history_json | safe }};
+            lineSeries.setData(chartData);
 
             window.addEventListener('resize', () => {
                 chart.resize(document.getElementById('chart-container').clientWidth, document.getElementById('chart-container').clientHeight);
@@ -183,7 +190,7 @@ def web_chart():
     </body>
     </html>
     """
-    return render_template_string(html_template, symbol=symbol, min_ex=min_ex, max_ex=max_ex)
+    return render_template_string(html_template, symbol=symbol, min_ex=min_ex, max_ex=max_ex, history_json=history_json)
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
@@ -780,8 +787,8 @@ def format_countdown(target_timestamp):
 
 # ==================== SPREAD MONITOR (LOGGING & WEB APP) ====================
 def monitor_spread():
-    global active_spreads
-    print("🟢 Spread Monitor started (Threshold: $50k volume, Spread >= 5.0%)")
+    global active_spreads, spread_history
+    print("🟢 Spread Monitor started (Threshold: $100k volume, Spread >= 7.0%)")
     while True:
         try:
             prices, volumes, fundings, _ = fetch_futures_data()
@@ -790,7 +797,8 @@ def monitor_spread():
 
             for sym, ex_data in prices.items():
                 sym_vols = volumes.get(sym, {})
-                valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 50_000}
+                # Жесткий фильтр ликвидности: от $100,000
+                valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 100_000}
 
                 if len(valid_ex_data) < 2:
                     continue
@@ -803,13 +811,14 @@ def monitor_spread():
                 if min_p <= 0: continue
                 spread = ((max_p - min_p) / min_p) * 100
                 
-                if 5.0 <= spread <= 30.0:
+                # Жесткий фильтр спреда: от 7.0% до 30.0%
+                if 7.0 <= spread <= 30.0:
                     if spread >= 15.0:
                         badge = "🔥🔥🔥 **MEGA SPREAD (>= 15%)**"
                     elif spread >= 10.0:
                         badge = "🔥 **HIGH SPREAD (>= 10%)**"
                     else:
-                        badge = "⚡ **STRONG SPREAD (>= 5%)**"
+                        badge = "⚡ **STRONG SPREAD (>= 7%)**"
 
                     vol_min = sym_vols.get(min_ex, 0) * 0.01
                     vol_max = sym_vols.get(max_ex, 0) * 0.01
@@ -844,6 +853,18 @@ def monitor_spread():
                         f"🔄 _Обновлено: {curr_time_str} (Киев)_"
                     )
 
+                    # Записываем точку в историю для живого графика
+                    chart_key = f"{sym}_{min_ex}_{max_ex}"
+                    if chart_key not in spread_history:
+                        spread_history[chart_key] = []
+                    spread_history[chart_key].append({
+                        "time": int(time.time()),
+                        "value": round(spread, 2)
+                    })
+                    # Ограничиваем историю последними 200 точками
+                    if len(spread_history[chart_key]) > 200:
+                        spread_history[chart_key].pop(0)
+
                     render_url = os.environ.get('RENDER_EXTERNAL_URL', '').strip()
                     markup = InlineKeyboardMarkup()
                     
@@ -873,7 +894,7 @@ def monitor_funding():
 
             for sym, ex_funds in fundings.items():
                 sym_vols = volumes.get(sym, {})
-                valid_ex_funds = {ex: rate for ex, rate in ex_funds.items() if sym_vols.get(ex, 0) >= 50_000}
+                valid_ex_funds = {ex: rate for ex, rate in ex_funds.items() if sym_vols.get(ex, 0) >= 100_000}
                 if len(valid_ex_funds) < 2:
                     continue
 

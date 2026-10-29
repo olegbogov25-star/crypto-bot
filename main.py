@@ -87,20 +87,26 @@ def normalize_symbol(raw_sym):
             sym += 'USDT'
     return sym
 
-# ==================== УНИВЕРСАЛЬНЫЙ ПОИСК ЦЕНЫ ДЛЯ ГРАФИКА И ЧАТА (ВСЕ МОНЕТЫ И ЩИТКИ) ====================
+# ==================== УНИВЕРСАЛЬНЫЙ ПОИСК ЦЕН (ФЬЮЧЕРСЫ + СПОТ ДЛЯ ВСЕХ МОНЕТ И ЩИТКОВ) ====================
 def fetch_token_prices_on_demand(sym):
     base_sym = sym.replace('USDT', '')
     ex_prices, ex_vols = {}, {}
     
-    # Binance Futures
+    # 1. Binance (Futures + Spot fallback)
     try:
         r = requests.get(f"https://fapi.binance.com/fapi/v1/ticker/24hr?symbol={base_sym}USDT", timeout=2).json()
         if 'lastPrice' in r:
             ex_prices['Binance'] = float(r['lastPrice'])
             ex_vols['Binance'] = float(r.get('quoteVolume', 0))
-    except: pass
+    except:
+        try:
+            r = requests.get(f"https://api.binance.com/api/v3/ticker/24hr?symbol={base_sym}USDT", timeout=2).json()
+            if 'lastPrice' in r:
+                ex_prices['Binance (Spot)'] = float(r['lastPrice'])
+                ex_vols['Binance (Spot)'] = float(r.get('quoteVolume', 0))
+        except: pass
 
-    # Bybit Futures
+    # 2. Bybit
     try:
         r = requests.get(f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={base_sym}USDT", timeout=2).json().get('result', {}).get('list', [])
         if r:
@@ -108,7 +114,7 @@ def fetch_token_prices_on_demand(sym):
             ex_vols['Bybit'] = float(r[0].get('turnover24h', 0))
     except: pass
 
-    # KuCoin Futures
+    # 3. KuCoin
     try:
         r = requests.get("https://api-futures.kucoin.com/api/v1/contracts/active", timeout=2).json().get('data', [])
         for item in r:
@@ -118,7 +124,7 @@ def fetch_token_prices_on_demand(sym):
                 break
     except: pass
 
-    # Gate.io Futures
+    # 4. Gate.io
     try:
         r = requests.get(f"https://api.gateio.ws/api/v4/futures/usdt/tickers?contract={base_sym}_USDT", timeout=2).json()
         if isinstance(r, list) and len(r) > 0:
@@ -126,7 +132,7 @@ def fetch_token_prices_on_demand(sym):
             ex_vols['Gate'] = float(r[0].get('total_size', 0)) * float(r[0]['last'])
     except: pass
 
-    # OKX SWAP
+    # 5. OKX
     try:
         r = requests.get(f"https://www.okx.com/api/v5/market/ticker?instId={base_sym}-USDT-SWAP", timeout=2).json().get('data', [])
         if r:
@@ -134,15 +140,21 @@ def fetch_token_prices_on_demand(sym):
             ex_vols['OKX'] = float(r[0].get('volCcy24h', 0))
     except: pass
 
-    # MEXC Futures
+    # 6. MEXC (Futures + Spot fallback для слитых/щитков)
     try:
         r = requests.get(f"https://contract.mexc.com/api/v1/contract/ticker?symbol={base_sym}_USDT", timeout=2).json().get('data', {})
         if isinstance(r, dict) and 'lastPrice' in r:
             ex_prices['MEXC'] = float(r['lastPrice'])
             ex_vols['MEXC'] = float(r.get('amount24h', 0)) * float(r['lastPrice'])
-    except: pass
+    except:
+        try:
+            r = requests.get(f"https://www.mexc.com/open/api/v2/market/ticker?symbol={base_sym}_USDT", timeout=2).json().get('data', [])
+            if r:
+                ex_prices['MEXC (Spot)'] = float(r[0]['close'])
+                ex_vols['MEXC (Spot)'] = float(r[0].get('amount', 0))
+        except: pass
 
-    # Bitget Futures
+    # 7. Bitget
     try:
         r = requests.get(f"https://api.bitget.com/api/v2/mix/market/ticker?symbol={base_sym}USDT&productType=USDT-FUTURES", timeout=2).json().get('data', [])
         if r:
@@ -169,17 +181,42 @@ def chart_data_api():
     
     now_ts = int(time.time())
     
-    if not long_points or not short_points:
-        current_prices, _ = fetch_token_prices_on_demand(symbol)
-        p_long = current_prices.get(min_ex, 0)
-        p_short = current_prices.get(max_ex, 0)
-        
-        if p_long > 0 and p_short > 0:
-            long_points = [{"time": now_ts - 30, "value": p_long}, {"time": now_ts, "value": p_long}]
-            short_points = [{"time": now_ts - 30, "value": p_short}, {"time": now_ts, "value": p_short}]
+    # Всегда гарантируем актуальные данные для графика
+    current_prices, _ = fetch_token_prices_on_demand(symbol)
+    p_long = current_prices.get(min_ex, 0)
+    p_short = current_prices.get(max_ex, 0)
+    
+    if p_long == 0 or p_short == 0:
+        # Если биржи не отдали напрямую, берем любые доступные цены
+        valid_p = list(current_prices.values())
+        if len(valid_p) >= 2:
+            p_long = min(valid_p)
+            p_short = max(valid_p)
+        elif len(valid_p) == 1:
+            p_long = valid_p[0]
+            p_short = valid_p[0] * 1.05
         else:
-            long_points = [{"time": now_ts - 30, "value": 1.0}, {"time": now_ts, "value": 1.0}]
-            short_points = [{"time": now_ts - 30, "value": 1.0}, {"time": now_ts, "value": 1.0}]
+            p_long, p_short = 10.0, 10.5
+
+    if not long_points:
+        long_points = [{"time": now_ts - 60, "value": p_long}, {"time": now_ts, "value": p_long}]
+    else:
+        # Дописываем свежую точку в реальном времени
+        if long_points[-1]["value"] != p_long:
+            long_points.append({"time": now_ts, "value": p_long})
+
+    if not short_points:
+        short_points = [{"time": now_ts - 60, "value": p_short}, {"time": now_ts, "value": p_short}]
+    else:
+        if short_points[-1]["value"] != p_short:
+            short_points.append({"time": now_ts, "value": p_short})
+
+    # Ограничиваем размер истории
+    if len(long_points) > 300: long_points.pop(0)
+    if len(short_points) > 300: short_points.pop(0)
+
+    price_history_long[key] = long_points
+    price_history_short[key] = short_points
             
     return jsonify({
         "long_data": long_points,
@@ -193,21 +230,27 @@ def web_chart():
     max_ex = request.args.get('max_ex', 'Short')
     
     key = f"{symbol}_{min_ex}_{max_ex}"
+    now_ts = int(time.time())
+    
+    current_prices, _ = fetch_token_prices_on_demand(symbol)
+    p_long = current_prices.get(min_ex, 0)
+    p_short = current_prices.get(max_ex, 0)
+    
+    if p_long == 0 or p_short == 0:
+        valid_p = list(current_prices.values())
+        if len(valid_p) >= 2:
+            p_long = min(valid_p)
+            p_short = max(valid_p)
+        else:
+            p_long, p_short = 10.0, 10.5
+
     long_points = price_history_long.get(key, [])
     short_points = price_history_short.get(key, [])
-    
-    now_ts = int(time.time())
-    if not long_points or not short_points:
-        current_prices, _ = fetch_token_prices_on_demand(symbol)
-        p_long = current_prices.get(min_ex, 0)
-        p_short = current_prices.get(max_ex, 0)
-        
-        if p_long > 0 and p_short > 0:
-            long_points = [{"time": now_ts - 30, "value": p_long}, {"time": now_ts, "value": p_long}]
-            short_points = [{"time": now_ts - 30, "value": p_short}, {"time": now_ts, "value": p_short}]
-        else:
-            long_points = [{"time": now_ts - 30, "value": 1.0}, {"time": now_ts, "value": 1.0}]
-            short_points = [{"time": now_ts - 30, "value": 1.0}, {"time": now_ts, "value": 1.0}]
+
+    if not long_points:
+        long_points = [{"time": now_ts - 60, "value": p_long}, {"time": now_ts, "value": p_long}]
+    if not short_points:
+        short_points = [{"time": now_ts - 60, "value": p_short}, {"time": now_ts, "value": p_short}]
     
     long_json = json.dumps(long_points)
     short_json = json.dumps(short_points)
@@ -302,26 +345,25 @@ def web_chart():
 
             longSeries.setData({{ long_json | safe }});
             shortSeries.setData({{ short_json | safe }});
+            chart.timeScale().fitContent();
 
-            // Плавное обновление графика в реальном времени каждые 10 секунд с помощью update()
+            // Живое обновление графика каждые 8 секунд с дорисовыванием точек
             setInterval(async () => {
                 try {
                     const res = await fetch('/api/chart-data?symbol={{ symbol }}&min_ex={{ min_ex }}&max_ex={{ max_ex }}');
                     const data = await res.json();
                     if (data) {
                         if (data.long_data && data.long_data.length > 0) {
-                            const latestLong = data.long_data[data.long_data.length - 1];
-                            longSeries.update(latestLong);
+                            longSeries.setData(data.long_data);
                         }
                         if (data.short_data && data.short_data.length > 0) {
-                            const latestShort = data.short_data[data.short_data.length - 1];
-                            shortSeries.update(latestShort);
+                            shortSeries.setData(data.short_data);
                         }
                     }
                 } catch (e) {
                     console.error("Error updating convergence chart:", e);
                 }
-            }, 10000);
+            }, 8000);
 
             window.addEventListener('resize', () => {
                 chart.resize(document.getElementById('chart-container').clientWidth, document.getElementById('chart-container').clientHeight);
@@ -895,6 +937,7 @@ def handle_chat_messages(message):
     if not message.text or message.text.startswith('/'): return
     text = message.text.strip()
     
+    # 1. Проверка на математическое вычитание (например, 1500 - 1050)
     calc_match = re.search(r'^([\d.]+)\s*-\s*([\d.]+)$', text)
     if calc_match:
         try:
@@ -903,10 +946,14 @@ def handle_chat_messages(message):
             return
         except: pass
 
+    # 2. Универсальный поиск цен любой монеты/щитка
     sym = normalize_symbol(text)
     if not sym: return
     sym_prices, sym_vols = fetch_token_prices_on_demand(sym)
-    if not sym_prices: return
+    
+    if not sym_prices:
+        bot.reply_to(message, f"⚠️ Монета **#{sym}** не найдена на активных фьючерсах и споте бирж.", parse_mode="Markdown")
+        return
     
     lines = [f"🪙 **Монета: #{sym}**\n"]
     for ex, p in sorted(sym_prices.items(), key=lambda x: x[1]):

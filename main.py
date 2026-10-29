@@ -11,7 +11,7 @@ import feedparser
 import telebot
 from bs4 import BeautifulSoup
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-from flask import Flask, render_template_string, request
+from flask import Flask, render_template_string, request, jsonify
 
 # ==================== CONFIGURATION ====================
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -41,13 +41,15 @@ TOPICS = {
 
 processed_ids = set()
 active_fundings = {}  
-spread_history = {}  # Хранилище истории спредов для живых графиков
+spread_history = {}      # Хранилище истории спредов (для совместимости)
+price_history_long = {}  # История цен Long-биржи для графиков схождения
+price_history_short = {} # История цен Short-биржи для графиков схождения
+sent_alerts_cache = {}   # Кеш для защиты от флуда (антидубликаты алертов)
 
 # ==================== PERSISTENT ACTIVE SPREADS (JSON) ====================
 SPREADS_FILE = "active_spreads.json"
 
 def load_active_spreads():
-    """Загружает активные спреды из файла при старте бота"""
     if os.path.exists(SPREADS_FILE):
         try:
             with open(SPREADS_FILE, "r", encoding="utf-8") as f:
@@ -57,7 +59,6 @@ def load_active_spreads():
     return {}
 
 def save_active_spreads(spreads_dict):
-    """Сохраняет актуальные активные спреды на диск"""
     try:
         with open(SPREADS_FILE, "w", encoding="utf-8") as f:
             json.dump(spreads_dict, f, ensure_ascii=False, indent=4)
@@ -79,6 +80,27 @@ def get_kyiv_date_time():
 def health():
     return "OK", 200
 
+@app.route('/api/chart-data')
+def chart_data_api():
+    symbol = request.args.get('symbol', 'BTCUSDT')
+    min_ex = request.args.get('min_ex', 'Long')
+    max_ex = request.args.get('max_ex', 'Short')
+    
+    key = f"{symbol}_{min_ex}_{max_ex}"
+    long_points = price_history_long.get(key, [])
+    short_points = price_history_short.get(key, [])
+    
+    now_ts = int(time.time())
+    if not long_points:
+        long_points = [{"time": now_ts - 60, "value": 1.0}, {"time": now_ts, "value": 1.0}]
+    if not short_points:
+        short_points = [{"time": now_ts - 60, "value": 1.0}, {"time": now_ts, "value": 1.0}]
+        
+    return jsonify({
+        "long_data": long_points,
+        "short_data": short_points
+    })
+
 @app.route('/chart')
 def web_chart():
     symbol = request.args.get('symbol', 'BTCUSDT')
@@ -86,18 +108,17 @@ def web_chart():
     max_ex = request.args.get('max_ex', 'Short')
     
     key = f"{symbol}_{min_ex}_{max_ex}"
-    history_points = spread_history.get(key, [])
+    long_points = price_history_long.get(key, [])
+    short_points = price_history_short.get(key, [])
     
-    # Если истории еще нет, берем текущий момент как заглушку, чтобы график не был пустым
     now_ts = int(time.time())
-    if not history_points:
-        history_points = [
-            {"time": now_ts - 120, "value": 7.0},
-            {"time": now_ts - 60, "value": 7.0},
-            {"time": now_ts, "value": 7.0}
-        ]
+    if not long_points:
+        long_points = [{"time": now_ts - 60, "value": 1.0}, {"time": now_ts, "value": 1.0}]
+    if not short_points:
+        short_points = [{"time": now_ts - 60, "value": 1.0}, {"time": now_ts, "value": 1.0}]
     
-    history_json = json.dumps(history_points)
+    long_json = json.dumps(long_points)
+    short_json = json.dumps(short_points)
 
     html_template = """
     <!DOCTYPE html>
@@ -105,7 +126,7 @@ def web_chart():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>График спреда {{ symbol }}</title>
+        <title>График схождения: {{ symbol }}</title>
         <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
         <style>
             body {
@@ -148,10 +169,10 @@ def web_chart():
         </style>
     </head>
     <body>
-        <h2>📈 Спред: {{ symbol }}</h2>
+        <h2>📈 Схождение: {{ symbol }}</h2>
         <div class="subtitle">
-            🟢 Long: <span class="badge badge-long">{{ min_ex }}</span> | 
-            🔴 Short: <span class="badge badge-short">{{ max_ex }}</span>
+            🟢 Long ({{ min_ex }}): <span class="badge badge-long">Линия входа</span> | 
+            🔴 Short ({{ max_ex }}): <span class="badge badge-short">Линия выхода</span>
         </div>
         <div id="chart-container"></div>
 
@@ -175,13 +196,40 @@ def web_chart():
                 }
             });
 
-            const lineSeries = chart.addLineSeries({
-                color: '#00ffcc',
+            // Зеленая линия для Long биржи
+            const longSeries = chart.addLineSeries({
+                color: '#00ff80',
                 lineWidth: 2,
+                title: 'Long ({{ min_ex }})'
             });
 
-            const chartData = {{ history_json | safe }};
-            lineSeries.setData(chartData);
+            // Красная линия для Short биржи
+            const shortSeries = chart.addLineSeries({
+                color: '#ff4d4d',
+                lineWidth: 2,
+                title: 'Short ({{ max_ex }})'
+            });
+
+            longSeries.setData({{ long_json | safe }});
+            shortSeries.setData({{ short_json | safe }});
+
+            // Автообновление графика в реальном времени каждые 10 секунд без перезагрузки
+            setInterval(async () => {
+                try {
+                    const res = await fetch('/api/chart-data?symbol={{ symbol }}&min_ex={{ min_ex }}&max_ex={{ max_ex }}');
+                    const data = await res.json();
+                    if (data) {
+                        if (data.long_data && data.long_data.length > 0) {
+                            longSeries.setData(data.long_data);
+                        }
+                        if (data.short_data && data.short_data.length > 0) {
+                            shortSeries.setData(data.short_data);
+                        }
+                    }
+                } catch (e) {
+                    console.error("Error updating convergence chart:", e);
+                }
+            }, 10000);
 
             window.addEventListener('resize', () => {
                 chart.resize(document.getElementById('chart-container').clientWidth, document.getElementById('chart-container').clientHeight);
@@ -190,7 +238,7 @@ def web_chart():
     </body>
     </html>
     """
-    return render_template_string(html_template, symbol=symbol, min_ex=min_ex, max_ex=max_ex, history_json=history_json)
+    return render_template_string(html_template, symbol=symbol, min_ex=min_ex, max_ex=max_ex, long_json=long_json, short_json=short_json)
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
@@ -222,10 +270,8 @@ def secure_request(url, timeout=12):
         if response.status_code == 200:
             return response
         else:
-            print(f"⚠️ Site returned status {response.status_code} for {url}")
             return None
-    except Exception as e:
-        print(f"❌ Secure Request Error ({url}): {e}")
+    except Exception:
         return None
 
 # ==================== LINK GENERATORS ====================
@@ -369,11 +415,8 @@ def fetch_telegram_channels_promos():
                         if date_elem and date_elem.has_attr('datetime'):
                             post_date_str = date_elem['datetime'][:10]
                             try:
-                                post_year = int(post_date_str[:4])
-                                if post_year < 2025:
-                                    continue
-                            except:
-                                pass
+                                if int(post_date_str[:4]) < 2025: continue
+                            except: pass
 
                         item_id = f"tg_chan_{msg_id_attr.replace('/', '_')}"
                         text_div = msg.find('div', class_='tgme_widget_message_text')
@@ -382,8 +425,7 @@ def fetch_telegram_channels_promos():
                         raw_text = text_div.get_text(separator='\n', strip=True)
                         post_link = f"https://t.me/{msg_id_attr}"
                         btn = msg.find('a', class_='tgme_widget_message_url')
-                        if btn and btn.get('href'):
-                            post_link = btn.get('href')
+                        if btn and btn.get('href'): post_link = btn.get('href')
                         
                         full_payload = f"Telegram Channel [{exchange} / @{chan}]:\n{raw_text}\nLink: {post_link}"
                         process_item(item_id, full_payload, post_link, exchange)
@@ -416,8 +458,7 @@ def fetch_direct_exchange_promos():
                                 link = f"https://www.binance.com/en/support/announcement/{code}" if code else "https://www.binance.com"
                                 raw_text = f"Binance Direct API Promo / Campaign: {title}\nLink: {link}"
                                 process_item(art_id, raw_text, link, top_name)
-                    except Exception as json_err:
-                        print(f"⚠️ Binance API JSON decode error: {json_err}")
+                    except Exception: pass
 
             mexc_api = "https://www.mexc.com/api/support/list?categoryId=19&page=1&pageSize=1"
             res_mexc = secure_request(mexc_api, timeout=8)
@@ -431,87 +472,14 @@ def fetch_direct_exchange_promos():
                             link = f"https://www.mexc.com/support/articles/{item.get('id')}"
                             raw_text = f"MEXC Direct API Promo / Campaign: {title}\nLink: {link}"
                             process_item(item_id, raw_text, link, "MEXC")
-                except Exception as json_err:
-                    print(f"⚠️ MEXC API JSON decode error: {json_err}")
-
-            web3_sources = [
-                ("OKX", "https://www.okx.com/en/web3/discover/cryptopedia", "a"),
-                ("BINANCE", "https://www.binance.com/en/web3", "a")
-            ]
-            for w_ex, w_url, w_tag in web3_sources:
-                w_res = secure_request(w_url, timeout=10)
-                if w_res:
-                    w_soup = BeautifulSoup(w_res.text, 'html.parser')
-                    for el in w_soup.find_all(w_tag, limit=2):
-                        w_title = el.get_text(strip=True)
-                        if len(w_title) < 20: continue
-                        w_link = el.get('href', '')
-                        if w_link and not w_link.startswith('http'):
-                            if w_ex == "OKX": w_link = f"https://www.okx.com{w_link}"
-                        item_id = f"web3_{w_ex.lower()}_{abs(hash(w_title))}"
-                        raw_text = f"Web3 Wallet Quest / Airdrop [{w_ex} Wallet]: {w_title}\nLink: {w_link if w_link else w_url}"
-                        process_item(item_id, raw_text, w_link if w_link else w_url, "WEB3")
-
-            websites = [
-                ("OKX", "https://www.okx.com/help/section/announcements-latest-promotions", ["a", "h3"]),
-                ("BITGET", "https://www.bitget.com/support/articles/latest-activities", ["a", "h3"]),
-                ("GATE", "https://www.gate.io/articlelist/ann", ["a", "h3"]),
-                ("KUCOIN", "https://www.kucoin.com/news/categories/promotion", ["a", "h3"])
-            ]
-
-            for ex_name, site_url, tags in websites:
-                web_res = secure_request(site_url, timeout=10)
-                if not web_res: continue
-                soup = BeautifulSoup(web_res.text, 'html.parser')
-                
-                found_elements = []
-                for tag in tags:
-                    found_elements.extend(soup.find_all(tag, limit=3))
-
-                for el in found_elements:
-                    title = el.get_text(strip=True)
-                    if len(title) < 15: continue
-                    link = el.get('href', '')
-                    if link and not link.startswith('http'):
-                        if ex_name == "OKX": link = f"https://www.okx.com{link}"
-                        elif ex_name == "BITGET": link = f"https://www.bitget.com{link}"
-                        elif ex_name == "GATE": link = f"https://www.gate.io{link}"
-                        elif ex_name == "KUCOIN": link = f"https://www.kucoin.com{link}"
-                    
-                    item_id = f"web_{ex_name.lower()}_{abs(hash(title))}"
-                    raw_text = f"Official Website Announcement [{ex_name}]: {title}\nLink: {link if link else site_url}"
-                    process_item(item_id, raw_text, link if link else site_url, ex_name)
-
+                except Exception: pass
         except Exception as e:
-            print(f"Direct Promos Website/API Error: {e}")
+            print(f"Direct Promos Error: {e}")
         time.sleep(600)
 
-# ==================== GLOBAL CRYPTO APIS & RSS ====================
 def fetch_global_crypto_promos():
-    sources = [
-        ("https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=161&pageNo=1&pageSize=1", "BINANCE"),
-        ("https://coinmarketcap.com/headlines/news/", "NEWS"),
-    ]
-
     while True:
         try:
-            for api_url, topic in sources[:1]:
-                res = secure_request(api_url, timeout=6)
-                if not res: continue
-                try:
-                    data = res.json()
-                    if isinstance(data, dict):
-                        articles = data.get('data', {}).get('articles', [])
-                        for art in articles[:1]:
-                            art_id = f"global_api_{art.get('id')}"
-                            title = art.get('title', '')
-                            code = art.get('code', '')
-                            link = f"https://www.binance.com/en/support/announcement/{code}" if code else "https://www.binance.com"
-                            raw_text = f"Global Official Announcement / Event: {title}\nLink: {link}"
-                            process_item(art_id, raw_text, link, topic)
-                except Exception as json_err:
-                    print(f"⚠️ Global API JSON decode error: {json_err}")
-
             rss_feeds = ["https://cointelegraph.com/rss", "https://cryptopotato.com/feed/"]
             for feed_url in rss_feeds:
                 try:
@@ -521,12 +489,11 @@ def fetch_global_crypto_promos():
                         title = entry.get('title', '')
                         summary = entry.get('summary', '')
                         link = entry.get('link', '')
-                        raw_text = f"Crypto Aggregator / RSS News & Airdrop Quest: {title}\n{summary}\nLink: {link}"
+                        raw_text = f"Crypto Aggregator News: {title}\n{summary}\nLink: {link}"
                         process_item(entry_id, raw_text, link, "NEWS")
-                except Exception as rss_err:
-                    print(f"RSS Parse Error ({feed_url}): {rss_err}")
+                except Exception: pass
         except Exception as e:
-            print(f"Global Promos Monitor Error: {e}")
+            print(f"Global RSS Error: {e}")
         time.sleep(900)
 
 # ==================== FUTURES & SPOT DATA FETCHING ====================
@@ -534,7 +501,6 @@ def fetch_futures_data():
     global latest_prices_cache
     prices, volumes, fundings, funding_times = {}, {}, {}, {}
     
-    # 1. Binance
     try:
         r = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=3).json()
         for item in r:
@@ -554,7 +520,6 @@ def fetch_futures_data():
                 if next_time > 0: funding_times.setdefault(sym, {})['Binance'] = next_time
     except Exception: pass
 
-    # 2. Bybit
     try:
         r = requests.get("https://api.bybit.com/v5/market/tickers?category=linear", timeout=3).json().get('result', {}).get('list', [])
         for item in r:
@@ -569,7 +534,6 @@ def fetch_futures_data():
                     if next_time > 0: funding_times.setdefault(sym, {})['Bybit'] = next_time
     except Exception: pass
 
-    # 3. OKX
     try:
         r = requests.get("https://www.okx.com/api/v5/market/tickers?instType=SWAP", timeout=3).json().get('data', [])
         for item in r:
@@ -589,7 +553,6 @@ def fetch_futures_data():
                 if next_time > 0: funding_times.setdefault(sym, {})['OKX'] = next_time
     except Exception: pass
 
-    # 4. Gate.io
     try:
         r = requests.get("https://api.gateio.ws/api/v4/futures/usdt/tickers", timeout=3).json()
         for item in r:
@@ -603,7 +566,6 @@ def fetch_futures_data():
                     if next_time > 0: funding_times.setdefault(sym, {})['Gate'] = next_time
     except Exception: pass
 
-    # 5. Bitget
     try:
         r = requests.get("https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES", timeout=3).json().get('data', [])
         for item in r:
@@ -617,21 +579,19 @@ def fetch_futures_data():
                     if next_time > 0: funding_times.setdefault(sym, {})['Bitget'] = next_time
     except Exception: pass
 
-    # 6. MEXC
     try:
         r = requests.get("https://contract.mexc.com/api/v1/contract/ticker", timeout=3).json().get('data', [])
         for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym:
                 prices.setdefault(sym, {})['MEXC'] = float(item['lastPrice'])
-                volumes.setdefault(sym, {})['MEXC'] = float(item.get('amount24h', 0))
+                volumes.setdefault(sym, {})['MEXC'] = float(item.get('amount24h', 0)) * float(item['lastPrice'])
                 if 'fundingRate' in item:
                     fundings.setdefault(sym, {})['MEXC'] = float(item['fundingRate']) * 100
                     next_time = int(item.get('nextSettleTime', 0)) // 1000
                     if next_time > 0: funding_times.setdefault(sym, {})['MEXC'] = next_time
     except Exception: pass
 
-    # 7. BingX
     try:
         r = requests.get("https://open-api.bingx.com/openApi/swap/v2/quote/ticker", timeout=3).json().get('data', [])
         for item in r:
@@ -651,7 +611,6 @@ def fetch_futures_data():
                 if next_time > 0: funding_times.setdefault(sym, {})['BingX'] = next_time
     except Exception: pass
 
-    # 8. KuCoin
     try:
         r = requests.get("https://api-futures.kucoin.com/api/v1/contracts/active", timeout=3).json().get('data', [])
         for item in r:
@@ -665,111 +624,27 @@ def fetch_futures_data():
                     if next_time > 0: funding_times.setdefault(sym, {})['KuCoin'] = next_time
     except Exception: pass
 
-    # Spot for quick price lookup
-    try:
-        r = requests.get("https://api.binance.com/api/v3/ticker/price", timeout=3).json()
-        for item in r:
-            sym = normalize_symbol(item['symbol'])
-            if sym:
-                prices.setdefault(sym, {})['BinanceSpot'] = float(item['price'])
-    except Exception: pass
-
     for sym, ex_dict in prices.items():
         if ex_dict:
             latest_prices_cache[sym] = list(ex_dict.values())[0]
 
     return prices, volumes, fundings, funding_times
 
-# ==================== УНИВЕРСАЛЬНЫЙ ПОИСК ЦЕНЫ И СТАКАНОВ МОНЕТ (SPOT + FUTURES) ====================
 def fetch_token_prices_on_demand(sym):
     base_sym = sym.replace('USDT', '')
-    ex_prices = {}
-    ex_vols = {}
-
-    try:
-        r = requests.get(f"https://api.binance.com/api/v3/ticker/24hr?symbol={base_sym}USDT", timeout=2).json()
-        if isinstance(r, dict) and 'lastPrice' in r:
-            ex_prices['Binance Spot'] = float(r['lastPrice'])
-            ex_vols['Binance Spot'] = float(r.get('quoteVolume', 0))
-    except: pass
+    ex_prices, ex_vols = {}, {}
     try:
         r = requests.get(f"https://fapi.binance.com/fapi/v1/ticker/24hr?symbol={base_sym}USDT", timeout=2).json()
-        if isinstance(r, dict) and 'lastPrice' in r:
+        if 'lastPrice' in r:
             ex_prices['Binance'] = float(r['lastPrice'])
             ex_vols['Binance'] = float(r.get('quoteVolume', 0))
     except: pass
-
     try:
-        r = requests.get(f"https://api.bybit.com/v5/market/tickers?category=spot&symbol={base_sym}USDT", timeout=2).json()
-        lst = r.get('result', {}).get('list', [])
-        if lst:
-            ex_prices['Bybit Spot'] = float(lst[0]['lastPrice'])
-            ex_vols['Bybit Spot'] = float(lst[0].get('turnover24h', 0))
-    except: pass
-    try:
-        r = requests.get(f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={base_sym}USDT", timeout=2).json()
-        lst = r.get('result', {}).get('list', [])
-        if lst:
-            ex_prices['Bybit'] = float(lst[0]['lastPrice'])
-            ex_vols['Bybit'] = float(lst[0].get('turnover24h', 0))
-    except: pass
-
-    try:
-        r = requests.get(f"https://api.mexc.com/api/v3/ticker/24hr?symbol={base_sym}USDT", timeout=2).json()
-        if isinstance(r, dict) and 'lastPrice' in r:
-            ex_prices['MEXC Spot'] = float(r['lastPrice'])
-            ex_vols['MEXC Spot'] = float(r.get('quoteVolume', 0))
-    except: pass
-    try:
-        r = requests.get(f"https://contract.mexc.com/api/v1/contract/ticker?symbol={base_sym}_USDT", timeout=2).json()
-        data = r.get('data', {})
-        if isinstance(data, dict) and 'lastPrice' in data:
-            ex_prices['MEXC'] = float(data['lastPrice'])
-            ex_vols['MEXC'] = float(data.get('amount24h', 0)) * float(data['lastPrice'])
-    except: pass
-
-    try:
-        r = requests.get(f"https://api.gateio.ws/api/v4/spot/tickers?currency_pair={base_sym}_USDT", timeout=2).json()
-        if isinstance(r, list) and len(r) > 0:
-            ex_prices['Gate Spot'] = float(r[0]['last'])
-            ex_vols['Gate Spot'] = float(r[0].get('quote_volume', 0))
-    except: pass
-    try:
-        r = requests.get(f"https://api.gateio.ws/api/v4/futures/usdt/tickers?contract={base_sym}_USDT", timeout=2).json()
-        if isinstance(r, list) and len(r) > 0:
-            ex_prices['Gate'] = float(r[0]['last'])
-            ex_vols['Gate'] = float(r[0].get('total_size', 0)) * float(r[0]['last'])
-    except: pass
-
-    try:
-        r = requests.get(f"https://www.okx.com/api/v5/market/ticker?instId={base_sym}-USDT", timeout=2).json().get('data', [])
+        r = requests.get(f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={base_sym}USDT", timeout=2).json().get('result', {}).get('list', [])
         if r:
-            ex_prices['OKX Spot'] = float(r[0]['last'])
-            ex_vols['OKX Spot'] = float(r[0].get('volCcy24h', 0))
+            ex_prices['Bybit'] = float(r[0]['lastPrice'])
+            ex_vols['Bybit'] = float(r[0].get('turnover24h', 0))
     except: pass
-    try:
-        r = requests.get(f"https://www.okx.com/api/v5/market/ticker?instId={base_sym}-USDT-SWAP", timeout=2).json().get('data', [])
-        if r:
-            ex_prices['OKX'] = float(r[0]['last'])
-            ex_vols['OKX'] = float(r[0].get('volCcy24h', 0))
-    except: pass
-
-    try:
-        r = requests.get(f"https://api.bitget.com/api/v2/spot/market/tickers?symbol={base_sym}USDT", timeout=2).json().get('data', [])
-        if r:
-            ex_prices['Bitget Spot'] = float(r[0]['close'])
-            ex_vols['Bitget Spot'] = float(r[0].get('usdtVol', 0))
-    except: pass
-    try:
-        r = requests.get(f"https://api.bitget.com/api/v2/mix/market/ticker?symbol={base_sym}USDT&productType=USDT-FUTURES", timeout=2).json().get('data', [])
-        if r:
-            ex_prices['Bitget'] = float(r[0]['lastPr'])
-            ex_vols['Bitget'] = float(r[0].get('quoteVolume', 0))
-    except: pass
-
-    if not ex_prices and sym in latest_prices_cache:
-        ex_prices['Общий кэш'] = latest_prices_cache[sym]
-
     return ex_prices, ex_vols
 
 def format_volume(vol):
@@ -785,19 +660,18 @@ def format_countdown(target_timestamp):
     minutes = int((diff % 3600) // 60)
     return f"{hours}ч {minutes:02d}м"
 
-# ==================== SPREAD MONITOR (LOGGING & WEB APP) ====================
+# ==================== SPREAD MONITOR (ANTI-FLOOD & CONVERGENCE CHART) ====================
 def monitor_spread():
-    global active_spreads, spread_history
-    print("🟢 Spread Monitor started (Threshold: $100k volume, Spread >= 7.0%)")
+    global active_spreads, price_history_long, price_history_short, sent_alerts_cache
+    print("🟢 Spread Monitor started (Threshold: $100k volume, Spread >= 7.0%, Anti-Flood enabled)")
     while True:
         try:
             prices, volumes, fundings, _ = fetch_futures_data()
             curr_time_str = get_kyiv_time()
-            print(f"🔍 [Spread Monitor] Scanned {len(prices)} symbols at {curr_time_str}")
 
             for sym, ex_data in prices.items():
                 sym_vols = volumes.get(sym, {})
-                # Жесткий фильтр ликвидности: от $100,000
+                # Жесткие фильтры: ликвидность >= $100k
                 valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 100_000}
 
                 if len(valid_ex_data) < 2:
@@ -806,77 +680,94 @@ def monitor_spread():
                 min_ex = min(valid_ex_data, key=valid_ex_data.get)
                 max_ex = max(valid_ex_data, key=valid_ex_data.get)
                 min_p = valid_ex_data[min_ex]
-                max_p = valid_ex_data[max_ex]
+                max_p = valid_ex_data[max_p]
                 
                 if min_p <= 0: continue
                 spread = ((max_p - min_p) / min_p) * 100
                 
                 # Жесткий фильтр спреда: от 7.0% до 30.0%
                 if 7.0 <= spread <= 30.0:
-                    if spread >= 15.0:
-                        badge = "🔥🔥🔥 **MEGA SPREAD (>= 15%)**"
-                    elif spread >= 10.0:
-                        badge = "🔥 **HIGH SPREAD (>= 10%)**"
-                    else:
-                        badge = "⚡ **STRONG SPREAD (>= 7%)**"
-
-                    vol_min = sym_vols.get(min_ex, 0) * 0.01
-                    vol_max = sym_vols.get(max_ex, 0) * 0.01
-                    max_pos_usdt = int(min(vol_min, vol_max))
-                    if max_pos_usdt < 100: max_pos_usdt = 100
-
-                    risk_tag = "\n⚠️ **RISK: Аномальный спред / Риск делистинга!**\n" if spread > 25.0 else ""
-
-                    sym_funds = fundings.get(sym, {})
-                    min_fund = sym_funds.get(min_ex, 0.0)
-                    max_fund = sym_funds.get(max_ex, 0.0)
-
-                    sorted_exs = sorted(valid_ex_data.keys(), key=lambda ex: sym_vols.get(ex, 0), reverse=True)
-                    overview_list = []
-                    for ex in sorted_exs:
-                        p = valid_ex_data[ex]
-                        v = sym_vols.get(ex, 0)
-                        v_str = format_volume(v)
-                        url = get_exchange_url(ex, sym)
-                        overview_list.append(f"🔹 [{ex}]({url}): `${p}` ({v_str})")
-                    
-                    overview = "\n".join(overview_list)
-
-                    msg_text = (
-                        f"{badge}\n"
-                        f"🪙 **#{sym} | Spread: `{spread:.2f}%`**\n"
-                        f"{risk_tag}\n"
-                        f"🟢 **Long ({min_ex}):** `${min_p}` (Funding: `{min_fund:.2f}%`)\n"
-                        f"🔴 **Short ({max_ex}):** `${max_p}` (Funding: `{max_fund:.2f}%`)\n\n"
-                        f"💰 **Доступный объем позиции:** `~${max_pos_usdt:,} USDT`\n\n"
-                        f"📝 **All Exchanges Overview (ликвидные стаканы):**\n{overview}\n\n"
-                        f"🔄 _Обновлено: {curr_time_str} (Киев)_"
-                    )
-
-                    # Записываем точку в историю для живого графика
                     chart_key = f"{sym}_{min_ex}_{max_ex}"
-                    if chart_key not in spread_history:
-                        spread_history[chart_key] = []
-                    spread_history[chart_key].append({
-                        "time": int(time.time()),
-                        "value": round(spread, 2)
-                    })
-                    # Ограничиваем историю последними 200 точками
-                    if len(spread_history[chart_key]) > 200:
-                        spread_history[chart_key].pop(0)
+                    now_ts = int(time.time())
 
-                    render_url = os.environ.get('RENDER_EXTERNAL_URL', '').strip()
-                    markup = InlineKeyboardMarkup()
-                    
-                    if render_url:
-                        if not render_url.startswith('http'):
-                            render_url = f"https://{render_url}"
-                        chart_url = f"{render_url}/chart?symbol={sym}&min_ex={min_ex}&max_ex={max_ex}"
-                        markup.add(InlineKeyboardButton("📈 Открыть график спреда", url=chart_url))
+                    # Пишем историю для обеих бирж (схождение в реальном времени)
+                    if chart_key not in price_history_long:
+                        price_history_long[chart_key] = []
+                        price_history_short[chart_key] = []
+
+                    price_history_long[chart_key].append({"time": now_ts, "value": round(min_p, 4)})
+                    price_history_short[chart_key].append({"time": now_ts, "value": round(max_p, 4)})
+
+                    if len(price_history_long[chart_key]) > 200:
+                        price_history_long[chart_key].pop(0)
+                        price_history_short[chart_key].pop(0)
+
+                    # --- АНТИФЛУД ЗАЩИТА ---
+                    # Проверяем, отправляли ли мы уже алерт по этой связке недавно или при таком же спреде
+                    last_sent_data = sent_alerts_cache.get(chart_key)
+                    should_send = False
+
+                    if not last_sent_data:
+                        should_send = True
                     else:
-                        markup.add(InlineKeyboardButton("🌐 Биржа Long", url=get_exchange_url(min_ex, sym)))
+                        last_spread = last_sent_data['spread']
+                        last_time = last_sent_data['time']
+                        # Шлем новый алерт, если спред вырос/изменился больше чем на 1.5% ИЛИ прошло более 1.5 часа
+                        if abs(spread - last_spread) >= 1.5 or (now_ts - last_time) > 5400:
+                            should_send = True
 
-                    send_to_topic("SPREAD", msg_text, reply_markup=markup)
+                    if should_send:
+                        sent_alerts_cache[chart_key] = {"spread": spread, "time": now_ts}
+
+                        if spread >= 15.0:
+                            badge = "🔥🔥🔥 **MEGA SPREAD (>= 15%)**"
+                        elif spread >= 10.0:
+                            badge = "🔥 **HIGH SPREAD (>= 10%)**"
+                        else:
+                            badge = "⚡ **STRONG SPREAD (>= 7%)**"
+
+                        vol_min = sym_vols.get(min_ex, 0) * 0.01
+                        vol_max = sym_vols.get(max_ex, 0) * 0.01
+                        max_pos_usdt = int(min(vol_min, vol_max))
+                        if max_pos_usdt < 100: max_pos_usdt = 100
+
+                        sym_funds = fundings.get(sym, {})
+                        min_fund = sym_funds.get(min_ex, 0.0)
+                        max_fund = sym_funds.get(max_ex, 0.0)
+
+                        sorted_exs = sorted(valid_ex_data.keys(), key=lambda ex: sym_vols.get(ex, 0), reverse=True)
+                        overview_list = []
+                        for ex in sorted_exs:
+                            p = valid_ex_data[ex]
+                            v = sym_vols.get(ex, 0)
+                            v_str = format_volume(v)
+                            url = get_exchange_url(ex, sym)
+                            overview_list.append(f"🔹 [{ex}]({url}): `${p}` ({v_str})")
+                        
+                        overview = "\n".join(overview_list)
+
+                        msg_text = (
+                            f"{badge}\n"
+                            f"🪙 **#{sym} | Spread: `{spread:.2f}%`**\n\n"
+                            f"🟢 **Long ({min_ex}):** `${min_p}` (Funding: `{min_fund:.2f}%`)\n"
+                            f"🔴 **Short ({max_ex}):** `${max_p}` (Funding: `{max_fund:.2f}%`)\n\n"
+                            f"💰 **Доступный объем позиции:** `~${max_pos_usdt:,} USDT`\n\n"
+                            f"📝 **All Exchanges Overview:**\n{overview}\n\n"
+                            f"🔄 _Обновлено: {curr_time_str} (Киев)_"
+                        )
+
+                        render_url = os.environ.get('RENDER_EXTERNAL_URL', '').strip()
+                        markup = InlineKeyboardMarkup()
+                        
+                        if render_url:
+                            if not render_url.startswith('http'):
+                                render_url = f"https://{render_url}"
+                            chart_url = f"{render_url}/chart?symbol={sym}&min_ex={min_ex}&max_ex={max_ex}"
+                            markup.add(InlineKeyboardButton("📈 График схождения (Live)", url=chart_url))
+                        else:
+                            markup.add(InlineKeyboardButton("🌐 Биржа Long", url=get_exchange_url(min_ex, sym)))
+
+                        send_to_topic("SPREAD", msg_text, reply_markup=markup)
 
         except Exception as e:
             print(f"❌ Monitor Spread Error: {e}")
@@ -890,20 +781,15 @@ def monitor_funding():
         try:
             _, volumes, fundings, funding_times = fetch_futures_data()
             curr_time_str = get_kyiv_time()
-            print(f"🔍 [Funding Monitor] Scanned at {curr_time_str}")
 
             for sym, ex_funds in fundings.items():
                 sym_vols = volumes.get(sym, {})
                 valid_ex_funds = {ex: rate for ex, rate in ex_funds.items() if sym_vols.get(ex, 0) >= 100_000}
-                if len(valid_ex_funds) < 2:
-                    continue
+                if len(valid_ex_funds) < 2: continue
 
                 max_ex = max(valid_ex_funds, key=valid_ex_funds.get)
                 min_ex = min(valid_ex_funds, key=valid_ex_funds.get)
-                max_rate = valid_ex_funds[max_ex]
-                min_rate = valid_ex_funds[min_ex]
-                
-                funding_spread = abs(max_rate - min_rate)
+                funding_spread = abs(valid_ex_funds[max_ex] - valid_ex_funds[min_ex])
                 
                 if funding_spread >= 0.5:
                     vol_min = sym_vols.get(min_ex, 0) * 0.01
@@ -920,145 +806,66 @@ def monitor_funding():
                         url = get_exchange_url(ex, sym)
                         rates_list.append(f"🔹 [{ex}]({url}): `{r:+.2f}%` (⏱ `{countdown}`)")
 
-                    rates_overview = "\n".join(rates_list)
-
                     msg_text = (
-                        f"🔥 **FUNDING ARBITRAGE / HIGH SPREAD (>= 0.5%)**\n"
+                        f"🔥 **FUNDING ARBITRAGE (Spread >= 0.5%)**\n"
                         f"🪙 **#{sym} (Spread: `{funding_spread:.2f}%`)**\n\n"
-                        f"💰 **Доступный объем позиции:** `~${max_pos_usdt:,} USDT`\n\n"
-                        f"📊 **All Exchanges Rates & Timers:**\n{rates_overview}\n\n"
-                        f"🔄 _Данные обновлены в {curr_time_str} (Киев)_"
+                        f"💰 **Объем:** `~${max_pos_usdt:,} USDT`\n\n"
+                        f"📊 **Rates & Timers:**\n" + "\n".join(rates_list) + f"\n\n🔄 _{curr_time_str}_"
                     )
-                    
                     send_to_topic("FUNDING", msg_text)
                     time.sleep(2)
-
         except Exception as e:
             print(f"❌ Funding Monitor Error: {e}")
-        
         time.sleep(1800)
 
-# ==================== TELEGRAM COMMANDS & CALCULATORS (УСИЛЕННЫЙ /vol) ====================
+# ==================== TELEGRAM COMMANDS & CALCULATORS ====================
 @bot.message_handler(commands=['vol', 'volume'])
 def cmd_vol(message):
-    text = message.text.strip()
-    cleaned_text = text.replace(',', '.')
-    numbers = re.findall(r'\d+(?:\.\d+)?', cleaned_text)
-    
+    text = message.text.strip().replace(',', '.')
+    numbers = re.findall(r'\d+(?:\.\d+)?', text)
     if len(numbers) >= 2:
         try:
             cost = float(numbers[0])
-            if len(numbers) >= 3 and len(numbers[2]) <= 3:
-                volume = float(numbers[1] + numbers[2])
-            else:
-                volume = float(numbers[1])
-                if volume < 1000 and volume > 0:
-                    volume = volume * 1000
-            
-            if volume <= 0:
-                raise ValueError
-            
+            volume = float(numbers[1])
+            if volume < 1000: volume *= 1000
             cost_per_1k = (cost / volume) * 1000
-            vol_display = f"{volume:,.0f} ({volume/1000:.2f}K)"
-            
-            response_text = (
-                f"📊 **Расчет стоимости объема:**\n"
-                f"💵 Затраты: `${cost:.2f}`\n"
-                f"📈 Объем: `{vol_display}`\n"
-                f"💎 Цена за 1K объема:\n`$ {cost_per_1k:.2f}`"
-            )
-            bot.reply_to(message, response_text, parse_mode="Markdown")
+            bot.reply_to(message, f"📊 **Расчет объема:**\n💵 Затраты: `${cost:.2f}`\n📈 Объем: `{volume:,.0f}`\n💎 Цена 1K: `$ {cost_per_1k:.2f}`", parse_mode="Markdown")
             return
-        except Exception as e:
-            print(f"❌ /vol error: {e}")
-            
-    bot.reply_to(message, "ℹ️ Использование команды: `/vol [затраты] [объем]` (например: `/vol 52.5 11000` или `/vol 52.5 11 000`)", parse_mode="Markdown")
+        except: pass
+    bot.reply_to(message, "ℹ️ Использование: `/vol [затраты] [объем]`", parse_mode="Markdown")
 
 @bot.message_handler(func=lambda message: True)
 def handle_chat_messages(message):
-    if not message.text:
-        return
+    if not message.text or message.text.startswith('/'): return
     text = message.text.strip()
     
     calc_match = re.search(r'^([\d.]+)\s*-\s*([\d.]+)$', text)
     if calc_match:
         try:
-            val1 = float(calc_match.group(1))
-            val2 = float(calc_match.group(2))
-            res = val1 - val2
-            bot.reply_to(message, f"🧮 **Калькулятор:**\n{val1} - {val2} = `{res:.2f}`", parse_mode="Markdown")
+            val1, val2 = float(calc_match.group(1)), float(calc_match.group(2))
+            bot.reply_to(message, f"🧮 {val1} - {val2} = `{val1 - val2:.2f}`", parse_mode="Markdown")
             return
-        except Exception:
-            pass
+        except: pass
 
-    if text.startswith('/'):
-        return
-
-    amount_token_match = re.search(r'^([\d\s,.]+?)\s*([a-zA-Z0-9_-]+)$', text)
-    if amount_token_match:
-        try:
-            raw_amount_str = amount_token_match.group(1).replace(' ', '').replace(',', '')
-            amount = float(raw_amount_str)
-            raw_tkn = amount_token_match.group(2)
-            sym = normalize_symbol(raw_tkn)
-            
-            sym_prices, sym_vols = fetch_token_prices_on_demand(sym)
-            
-            if sym_prices:
-                avg_price = list(sym_prices.values())[0]
-                total_usd = amount * avg_price
-                
-                lines = [
-                    f"🪙 **Расчет по монете: #{sym}**",
-                    f"📦 Количество: `{amount:,.4f}`",
-                    f"💵 Текущая цена: `${avg_price}`",
-                    f"💰 **Общая стоимость:** `~${total_usd:,.2f} USD`\n",
-                    "📝 **Цены на биржах (Spot & Futures):**"
-                ]
-                for ex, p in sorted(sym_prices.items(), key=lambda x: x[1]):
-                    v = format_volume(sym_vols.get(ex, 0))
-                    url = get_exchange_url(ex.replace(' Spot', ''), sym)
-                    lines.append(f"🔹 [{ex}]({url}): `${p}` ({v})")
-                
-                bot.reply_to(message, "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
-                return
-        except Exception as e:
-            print(f"Universal Amount-Token calc error: {e}")
-
-    if len(text) > 15:
-        return
-        
     sym = normalize_symbol(text)
-    if not sym:
-        return
-        
+    if not sym: return
     sym_prices, sym_vols = fetch_token_prices_on_demand(sym)
-    if not sym_prices:
-        return
-        
-    sorted_exs = sorted(sym_prices.keys(), key=lambda ex: sym_prices[ex])
-    lines = [f"🪙 **Монета: #{sym} (Spot & Futures)**\n"]
-    for ex in sorted_exs:
-        p = sym_prices[ex]
+    if not sym_prices: return
+    
+    lines = [f"🪙 **Монета: #{sym}**\n"]
+    for ex, p in sorted(sym_prices.items(), key=lambda x: x[1]):
         v = format_volume(sym_vols.get(ex, 0))
-        url = get_exchange_url(ex.replace(' Spot', ''), sym)
-        lines.append(f"🔹 [{ex}]({url}): `${p}` ({v})")
-        
+        lines.append(f"🔹 [{ex}]: `${p}` ({v})")
     bot.reply_to(message, "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
 
 # ==================== MAIN START ====================
 if __name__ == "__main__":
     print("🚀 Bot starting...")
-    
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-
-    # Запускаем фоновые потоки сканеров
+    threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     threading.Thread(target=fetch_direct_exchange_promos, daemon=True).start()
     threading.Thread(target=fetch_global_crypto_promos, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()
-
     print("🤖 Telegram bot polling started...")
     bot.infinity_polling(skip_pending=True)

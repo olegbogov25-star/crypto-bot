@@ -181,27 +181,24 @@ def chart_data_api():
     
     now_ts = int(time.time())
     
-    # Всегда гарантируем актуальные данные для графика
     current_prices, _ = fetch_token_prices_on_demand(symbol)
     p_long = current_prices.get(min_ex, 0)
     p_short = current_prices.get(max_ex, 0)
     
     if p_long == 0 or p_short == 0:
-        # Если биржи не отдали напрямую, берем любые доступные цены
         valid_p = list(current_prices.values())
         if len(valid_p) >= 2:
             p_long = min(valid_p)
             p_short = max(valid_p)
         elif len(valid_p) == 1:
             p_long = valid_p[0]
-            p_short = valid_p[0] * 1.05
+            p_short = valid_p[0] * 1.02
         else:
             p_long, p_short = 10.0, 10.5
 
     if not long_points:
         long_points = [{"time": now_ts - 60, "value": p_long}, {"time": now_ts, "value": p_long}]
     else:
-        # Дописываем свежую точку в реальном времени
         if long_points[-1]["value"] != p_long:
             long_points.append({"time": now_ts, "value": p_long})
 
@@ -211,7 +208,6 @@ def chart_data_api():
         if short_points[-1]["value"] != p_short:
             short_points.append({"time": now_ts, "value": p_short})
 
-    # Ограничиваем размер истории
     if len(long_points) > 300: long_points.pop(0)
     if len(short_points) > 300: short_points.pop(0)
 
@@ -347,23 +343,25 @@ def web_chart():
             shortSeries.setData({{ short_json | safe }});
             chart.timeScale().fitContent();
 
-            // Живое обновление графика каждые 8 секунд с дорисовыванием точек
+            // Плавное обновление графика в реальном времени с помощью update() без дерганья
             setInterval(async () => {
                 try {
                     const res = await fetch('/api/chart-data?symbol={{ symbol }}&min_ex={{ min_ex }}&max_ex={{ max_ex }}');
                     const data = await res.json();
                     if (data) {
                         if (data.long_data && data.long_data.length > 0) {
-                            longSeries.setData(data.long_data);
+                            const latestLong = data.long_data[data.long_data.length - 1];
+                            longSeries.update(latestLong);
                         }
                         if (data.short_data && data.short_data.length > 0) {
-                            shortSeries.setData(data.short_data);
+                            const latestShort = data.short_data[data.short_data.length - 1];
+                            shortSeries.update(latestShort);
                         }
                     }
                 } catch (e) {
                     console.error("Error updating convergence chart:", e);
                 }
-            }, 8000);
+            }, 6000);
 
             window.addEventListener('resize', () => {
                 chart.resize(document.getElementById('chart-container').clientWidth, document.getElementById('chart-container').clientHeight);
@@ -946,8 +944,12 @@ def handle_chat_messages(message):
             return
         except: pass
 
-    # 2. Универсальный поиск цен любой монеты/щитка
-    sym = normalize_symbol(text)
+    # 2. Очищаем текст от цифр и пробелов (чтобы "1 bnb", "1 btc" превращались в чистый тикер "BNB", "BTC")
+    clean_query = re.sub(r'[^a-zA-Z]', '', text)
+    if not clean_query:
+        return
+
+    sym = normalize_symbol(clean_query)
     if not sym: return
     sym_prices, sym_vols = fetch_token_prices_on_demand(sym)
     

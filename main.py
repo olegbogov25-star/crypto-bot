@@ -41,10 +41,10 @@ TOPICS = {
 
 processed_ids = set()
 active_fundings = {}  
-spread_history = {}      # Хранилище истории спредов (для совместимости)
-price_history_long = {}  # История цен Long-биржи для графиков схождения
-price_history_short = {} # История цен Short-биржи для графиков схождения
-sent_alerts_cache = {}   # Кеш для защиты от флуда (антидубликаты алертов)
+spread_history = {}      
+price_history_long = {}  
+price_history_short = {} 
+sent_alerts_cache = {}   
 
 # ==================== PERSISTENT ACTIVE SPREADS (JSON) ====================
 SPREADS_FILE = "active_spreads.json"
@@ -66,7 +66,6 @@ def save_active_spreads(spreads_dict):
         print(f"❌ Error saving spreads json: {e}")
 
 active_spreads = load_active_spreads()
-
 KYIV_TZ = pytz.timezone("Europe/Kyiv")
 
 def get_kyiv_time():
@@ -74,6 +73,71 @@ def get_kyiv_time():
 
 def get_kyiv_date_time():
     return datetime.datetime.now(KYIV_TZ).strftime("%H:%M")
+
+# ==================== УНИВЕРСАЛЬНЫЙ ПОИСК ЦЕНЫ ДЛЯ ГРАФИКА И ЧАТА ====================
+def fetch_token_prices_on_demand(sym):
+    base_sym = sym.replace('USDT', '')
+    ex_prices, ex_vols = {}, {}
+    
+    # Binance Futures
+    try:
+        r = requests.get(f"https://fapi.binance.com/fapi/v1/ticker/24hr?symbol={base_sym}USDT", timeout=2).json()
+        if 'lastPrice' in r:
+            ex_prices['Binance'] = float(r['lastPrice'])
+            ex_vols['Binance'] = float(r.get('quoteVolume', 0))
+    except: pass
+
+    # Bybit Futures
+    try:
+        r = requests.get(f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={base_sym}USDT", timeout=2).json().get('result', {}).get('list', [])
+        if r:
+            ex_prices['Bybit'] = float(r[0]['lastPrice'])
+            ex_vols['Bybit'] = float(r[0].get('turnover24h', 0))
+    except: pass
+
+    # KuCoin Futures
+    try:
+        r = requests.get("https://api-futures.kucoin.com/api/v1/contracts/active", timeout=2).json().get('data', [])
+        for item in r:
+            if normalize_symbol(item.get('symbol', '')) == sym and 'lastTradePrice' in item:
+                ex_prices['KuCoin'] = float(item['lastTradePrice'])
+                ex_vols['KuCoin'] = float(item.get('turnoverOf24h', 0))
+                break
+    except: pass
+
+    # Gate.io Futures
+    try:
+        r = requests.get(f"https://api.gateio.ws/api/v4/futures/usdt/tickers?contract={base_sym}_USDT", timeout=2).json()
+        if isinstance(r, list) and len(r) > 0:
+            ex_prices['Gate'] = float(r[0]['last'])
+            ex_vols['Gate'] = float(r[0].get('total_size', 0)) * float(r[0]['last'])
+    except: pass
+
+    # OKX SWAP
+    try:
+        r = requests.get(f"https://www.okx.com/api/v5/market/ticker?instId={base_sym}-USDT-SWAP", timeout=2).json().get('data', [])
+        if r:
+            ex_prices['OKX'] = float(r[0]['last'])
+            ex_vols['OKX'] = float(r[0].get('volCcy24h', 0))
+    except: pass
+
+    # MEXC Futures
+    try:
+        r = requests.get(f"https://contract.mexc.com/api/v1/contract/ticker?symbol={base_sym}_USDT", timeout=2).json().get('data', {})
+        if isinstance(r, dict) and 'lastPrice' in r:
+            ex_prices['MEXC'] = float(r['lastPrice'])
+            ex_vols['MEXC'] = float(r.get('amount24h', 0)) * float(r['lastPrice'])
+    except: pass
+
+    # Bitget Futures
+    try:
+        r = requests.get(f"https://api.bitget.com/api/v2/mix/market/ticker?symbol={base_sym}USDT&productType=USDT-FUTURES", timeout=2).json().get('data', [])
+        if r:
+            ex_prices['Bitget'] = float(r[0]['lastPr'])
+            ex_vols['Bitget'] = float(r[0].get('quoteVolume', 0))
+    except: pass
+
+    return ex_prices, ex_vols
 
 # ==================== HEALTHCHECK & WEB APP CHART SERVER ====================
 @app.route('/')
@@ -91,11 +155,20 @@ def chart_data_api():
     short_points = price_history_short.get(key, [])
     
     now_ts = int(time.time())
-    if not long_points:
-        long_points = [{"time": now_ts - 60, "value": 1.0}, {"time": now_ts, "value": 1.0}]
-    if not short_points:
-        short_points = [{"time": now_ts - 60, "value": 1.0}, {"time": now_ts, "value": 1.0}]
+    
+    # Если истории нет или она пустая, мгновенно запрашиваем реальные цены с бирж
+    if not long_points or not short_points:
+        current_prices, _ = fetch_token_prices_on_demand(symbol)
+        p_long = current_prices.get(min_ex, 0)
+        p_short = current_prices.get(max_ex, 0)
         
+        if p_long > 0 and p_short > 0:
+            long_points = [{"time": now_ts - 30, "value": p_long}, {"time": now_ts, "value": p_long}]
+            short_points = [{"time": now_ts - 30, "value": p_short}, {"time": now_ts, "value": p_short}]
+        else:
+            long_points = [{"time": now_ts - 30, "value": 1.0}, {"time": now_ts, "value": 1.0}]
+            short_points = [{"time": now_ts - 30, "value": 1.0}, {"time": now_ts, "value": 1.0}]
+            
     return jsonify({
         "long_data": long_points,
         "short_data": short_points
@@ -112,10 +185,17 @@ def web_chart():
     short_points = price_history_short.get(key, [])
     
     now_ts = int(time.time())
-    if not long_points:
-        long_points = [{"time": now_ts - 60, "value": 1.0}, {"time": now_ts, "value": 1.0}]
-    if not short_points:
-        short_points = [{"time": now_ts - 60, "value": 1.0}, {"time": now_ts, "value": 1.0}]
+    if not long_points or not short_points:
+        current_prices, _ = fetch_token_prices_on_demand(symbol)
+        p_long = current_prices.get(min_ex, 0)
+        p_short = current_prices.get(max_ex, 0)
+        
+        if p_long > 0 and p_short > 0:
+            long_points = [{"time": now_ts - 30, "value": p_long}, {"time": now_ts, "value": p_long}]
+            short_points = [{"time": now_ts - 30, "value": p_short}, {"time": now_ts, "value": p_short}]
+        else:
+            long_points = [{"time": now_ts - 30, "value": 1.0}, {"time": now_ts, "value": 1.0}]
+            short_points = [{"time": now_ts - 30, "value": 1.0}, {"time": now_ts, "value": 1.0}]
     
     long_json = json.dumps(long_points)
     short_json = json.dumps(short_points)
@@ -196,14 +276,12 @@ def web_chart():
                 }
             });
 
-            // Зеленая линия для Long биржи
             const longSeries = chart.addLineSeries({
                 color: '#00ff80',
                 lineWidth: 2,
                 title: 'Long ({{ min_ex }})'
             });
 
-            // Красная линия для Short биржи
             const shortSeries = chart.addLineSeries({
                 color: '#ff4d4d',
                 lineWidth: 2,
@@ -213,7 +291,7 @@ def web_chart():
             longSeries.setData({{ long_json | safe }});
             shortSeries.setData({{ short_json | safe }});
 
-            // Автообновление графика в реальном времени каждые 10 секунд без перезагрузки
+            // Автообновление в реальном времени каждые 10 секунд
             setInterval(async () => {
                 try {
                     const res = await fetch('/api/chart-data?symbol={{ symbol }}&min_ex={{ min_ex }}&max_ex={{ max_ex }}');
@@ -630,23 +708,6 @@ def fetch_futures_data():
 
     return prices, volumes, fundings, funding_times
 
-def fetch_token_prices_on_demand(sym):
-    base_sym = sym.replace('USDT', '')
-    ex_prices, ex_vols = {}, {}
-    try:
-        r = requests.get(f"https://fapi.binance.com/fapi/v1/ticker/24hr?symbol={base_sym}USDT", timeout=2).json()
-        if 'lastPrice' in r:
-            ex_prices['Binance'] = float(r['lastPrice'])
-            ex_vols['Binance'] = float(r.get('quoteVolume', 0))
-    except: pass
-    try:
-        r = requests.get(f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={base_sym}USDT", timeout=2).json().get('result', {}).get('list', [])
-        if r:
-            ex_prices['Bybit'] = float(r[0]['lastPrice'])
-            ex_vols['Bybit'] = float(r[0].get('turnover24h', 0))
-    except: pass
-    return ex_prices, ex_vols
-
 def format_volume(vol):
     if vol >= 1_000_000: return f"${vol / 1_000_000:.1f}M (24h)"
     elif vol >= 1_000: return f"${vol / 1_000:.1f}K (24h)"
@@ -671,7 +732,6 @@ def monitor_spread():
 
             for sym, ex_data in prices.items():
                 sym_vols = volumes.get(sym, {})
-                # Жесткие фильтры: ликвидность >= $100k
                 valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 100_000}
 
                 if len(valid_ex_data) < 2:
@@ -680,17 +740,15 @@ def monitor_spread():
                 min_ex = min(valid_ex_data, key=valid_ex_data.get)
                 max_ex = max(valid_ex_data, key=valid_ex_data.get)
                 min_p = valid_ex_data[min_ex]
-                max_p = valid_ex_data[max_p]
+                max_p = valid_ex_data[max_ex]
                 
                 if min_p <= 0: continue
                 spread = ((max_p - min_p) / min_p) * 100
                 
-                # Жесткий фильтр спреда: от 7.0% до 30.0%
                 if 7.0 <= spread <= 30.0:
                     chart_key = f"{sym}_{min_ex}_{max_ex}"
                     now_ts = int(time.time())
 
-                    # Пишем историю для обеих бирж (схождение в реальном времени)
                     if chart_key not in price_history_long:
                         price_history_long[chart_key] = []
                         price_history_short[chart_key] = []
@@ -702,8 +760,6 @@ def monitor_spread():
                         price_history_long[chart_key].pop(0)
                         price_history_short[chart_key].pop(0)
 
-                    # --- АНТИФЛУД ЗАЩИТА ---
-                    # Проверяем, отправляли ли мы уже алерт по этой связке недавно или при таком же спреде
                     last_sent_data = sent_alerts_cache.get(chart_key)
                     should_send = False
 
@@ -712,7 +768,6 @@ def monitor_spread():
                     else:
                         last_spread = last_sent_data['spread']
                         last_time = last_sent_data['time']
-                        # Шлем новый алерт, если спред вырос/изменился больше чем на 1.5% ИЛИ прошло более 1.5 часа
                         if abs(spread - last_spread) >= 1.5 or (now_ts - last_time) > 5400:
                             should_send = True
 

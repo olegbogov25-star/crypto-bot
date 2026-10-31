@@ -36,6 +36,7 @@ TOPICS = {
     "FUNDING": 76,  
     "SPREAD": 77,
     "WEB3": 78,     # Топик для Web3-активностей
+    "NEWSMAKER": 4203, # Топик для новостей NewsMaker
     "CHAT": 1       # ID топика «Чат» для калькулятора, /vol и запросов монет
 }
 
@@ -159,7 +160,7 @@ def fetch_token_prices_on_demand(sym):
         r = requests.get(f"https://api.bitget.com/api/v2/mix/market/ticker?symbol={base_sym}USDT&productType=USDT-FUTURES", timeout=2).json().get('data', [])
         if r:
             ex_prices['Bitget'] = float(r[0]['lastPr'])
-            ex_vols['Bitget'] = float(r[0].get('quoteVolume', 0))
+            ex_vols['Bitget'] = float(r.get('quoteVolume', 0))
     except: pass
 
     return ex_prices, ex_vols
@@ -343,7 +344,6 @@ def web_chart():
             shortSeries.setData({{ short_json | safe }});
             chart.timeScale().fitContent();
 
-            // Плавное обновление графика в реальном времени с помощью update() без дерганья
             setInterval(async () => {
                 try {
                     const res = await fetch('/api/chart-data?symbol={{ symbol }}&min_ex={{ min_ex }}&max_ex={{ max_ex }}');
@@ -458,6 +458,27 @@ def analyze_text(text):
         print(f"AI Error: {e}")
         return text
 
+# ==================== NEWSMAKER TRANSLATOR & ROUTER ====================
+def translate_newsmaker_text(text):
+    if not OPENROUTER_API_KEY:
+        return text
+    prompt = f"""
+Ты — профессиональный крипто-переводчик. Переведи следующий текст новости крипторынка на русский язык качественно, профессионально, сохранив весь смысл и крипто-терминологию. Сделай текст читаемым и структурированным.
+
+Текст: {text}
+"""
+    try:
+        res = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json"},
+            json={"model": "openai/gpt-4o-mini", "messages": [{"role": "user", "content": prompt}]},
+            timeout=15
+        )
+        return res.json()['choices'][0]['message']['content'].strip()
+    except Exception as e:
+        print(f"NewsMaker Translation Error: {e}")
+        return text
+
 def send_to_topic(topic_name, text, reply_to_message_id=None, reply_markup=None):
     thread_id = TOPICS.get(topic_name, TOPICS.get("NEWS"))
     if thread_id and CHAT_ID:
@@ -477,7 +498,28 @@ def send_to_topic(topic_name, text, reply_to_message_id=None, reply_markup=None)
             print(f"❌ Send Error ({topic_name}): {e}")
     return None
 
-def process_item(item_id, raw_text, link, default_topic):
+def extract_official_web_link(msg_element, fallback_link):
+    """Ищет прямую ссылку на официальный сайт биржи внутри кнопок или текста поста"""
+    try:
+        # Проверяем кнопки в виджете Telegram-поста
+        buttons = msg_element.find_all('a', class_='tgme_widget_message_inline_button')
+        for btn in buttons:
+            href = btn.get('href', '')
+            if href and any(domain in href.lower() for domain in ['binance.com', 'bybit.com', 'okx.com', 'gate.io', 'bitget.com', 'mexc.com', 'bingx.com', 'kucoin.com', 'kraken.com']):
+                return href
+        
+        # Проверяем ссылки в тексте
+        text_elem = msg_element.find('div', class_='tgme_widget_message_text')
+        if text_elem:
+            links = text_elem.find_all('a', href=True)
+            for a in links:
+                href = a['href']
+                if href and any(domain in href.lower() for domain in ['binance.com', 'bybit.com', 'okx.com', 'gate.io', 'bitget.com', 'mexc.com', 'bingx.com', 'kucoin.com', 'kraken.com']):
+                    return href
+    except: pass
+    return fallback_link
+
+def process_item(item_id, raw_text, link, default_topic, msg_element=None):
     if item_id in processed_ids:
         return
     processed_ids.add(item_id)
@@ -490,13 +532,23 @@ def process_item(item_id, raw_text, link, default_topic):
     if target_topic not in TOPICS:
         target_topic = "NEWS"
 
-    exchange_url = get_exchange_url(target_topic) if target_topic in TOPICS and target_topic not in ["NEWS", "SPREAD", "FUNDING", "WEB3", "CHAT"] else None
+    # Ищем официальную веб-ссылку биржи вместо чисто телеграмной
+    official_web_link = None
+    if msg_element is not None:
+        official_web_link = extract_official_web_link(msg_element, link)
+    else:
+        official_web_link = link
+
+    exchange_url = get_exchange_url(target_topic) if target_topic in TOPICS and target_topic not in ["NEWS", "SPREAD", "FUNDING", "WEB3", "NEWSMAKER", "CHAT"] else None
 
     markup = InlineKeyboardMarkup()
-    if exchange_url and exchange_url.startswith("http"):
+    if official_web_link and official_web_link.startswith("http"):
+        markup.add(InlineKeyboardButton("🌐 Официальный сайт / Анонс", url=official_web_link))
+    elif exchange_url and exchange_url.startswith("http"):
         markup.add(InlineKeyboardButton(f"🌐 Биржа ({target_topic})", url=exchange_url))
-    if link and link.startswith("http"):
-        markup.add(InlineKeyboardButton("📱 Источник", url=link))
+        
+    if link and link.startswith("http") and link != official_web_link:
+        markup.add(InlineKeyboardButton("📱 Источник (Telegram)", url=link))
 
     send_to_topic(target_topic, ai_result, reply_markup=markup)
     time.sleep(1)
@@ -547,12 +599,59 @@ def fetch_telegram_channels_promos():
                         if btn and btn.get('href'): post_link = btn.get('href')
                         
                         full_payload = f"Telegram Channel [{exchange} / @{chan}]:\n{raw_text}\nLink: {post_link}"
-                        process_item(item_id, full_payload, post_link, exchange)
+                        process_item(item_id, full_payload, post_link, exchange, msg_element=msg)
                         
             time.sleep(600)
         except Exception as e:
             print(f"Telegram Channels Monitor Error: {e}")
             time.sleep(60)
+
+# ==================== NEWSMAKER MONITOR ====================
+def fetch_newsmaker_channel():
+    print("🟢 NewsMaker Monitor started...")
+    # Укажи здесь имя канала NewsMaker (например, "NewsmakerChannel" или аналогичное из твоей ссылки)
+    newsmaker_username = "NewsmakerChannel" 
+    while True:
+        try:
+            url = f"https://t.me/s/{newsmaker_username}"
+            res = secure_request(url, timeout=10)
+            if res:
+                soup = BeautifulSoup(res.text, 'html.parser')
+                messages = soup.find_all('div', class_='tgme_widget_message')
+                for msg in messages[-3:]:
+                    msg_id_attr = msg.get('data-post', '')
+                    if not msg_id_attr: continue
+                    
+                    item_id = f"newsmaker_{msg_id_attr.replace('/', '_')}"
+                    if item_id in processed_ids: continue
+                    processed_ids.add(item_id)
+                    
+                    text_div = msg.find('div', class_='tgme_widget_message_text')
+                    if not text_div: continue
+                    raw_text = text_div.get_text(separator='\n', strip=True)
+                    
+                    post_link = f"https://t.me/{msg_id_attr}"
+                    btn = msg.find('a', class_='tgme_widget_message_url')
+                    if btn and btn.get('href'): post_link = btn.get('href')
+                    
+                    # Перевод новости на русский язык через ИИ
+                    translated_text = translate_newsmaker_text(raw_text)
+                    
+                    msg_text = (
+                        f"📰 **Crypto News (NewsMaker)**\n\n"
+                        f"{translated_text}\n\n"
+                        f"🔄 _Источник рынка_"
+                    )
+                    
+                    markup = InlineKeyboardMarkup()
+                    if post_link and post_link.startswith("http"):
+                        markup.add(InlineKeyboardButton("📱 Оригинал новости", url=post_link))
+                        
+                    send_to_topic("NEWSMAKER", msg_text, reply_markup=markup)
+                    time.sleep(1)
+        except Exception as e:
+            print(f"NewsMaker Monitor Error: {e}")
+        time.sleep(900)
 
 # ==================== DIRECT EXCHANGE WEBSITES, APIS & WEB3 SCRAPER ====================
 def fetch_direct_exchange_promos():
@@ -968,6 +1067,7 @@ if __name__ == "__main__":
     print("🚀 Bot starting...")
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
+    threading.Thread(target=fetch_newsmaker_channel, daemon=True).start()
     threading.Thread(target=fetch_direct_exchange_promos, daemon=True).start()
     threading.Thread(target=fetch_global_crypto_promos, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()

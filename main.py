@@ -5,6 +5,7 @@ import datetime
 import json
 import re
 import random
+import io
 import pytz
 import requests
 import feedparser
@@ -651,7 +652,7 @@ def fetch_telegram_channels_promos():
             print(f"Telegram Channels & Web3 Monitor Error: {e}")
             time.sleep(60)
 
-# ==================== NEWSMAKER MONITOR (С КАРТИНКАМИ И ГРАФИКАМИ) ====================
+# ==================== NEWSMAKER MONITOR (С НАДЕЖНЫМ СКАЧИВАНИЕМ И ОТПРАВКОЙ КАРТИНОК) ====================
 def fetch_newsmaker_channel():
     print("🟢 NewsMaker Monitor started...")
     newsmaker_username = "nwsmkr" 
@@ -673,17 +674,19 @@ def fetch_newsmaker_channel():
                     text_div = msg.find('div', class_='tgme_widget_message_text')
                     raw_text = text_div.get_text(separator='\n', strip=True) if text_div else ""
                     
-                    # Надежный поиск картинки / графика в посте
+                    # Надежный поиск картинки / графика в посте через стиль или тег
                     photo_url = None
-                    img_tag = msg.find('img', class_='tgme_widget_message_photo_image')
-                    if img_tag and img_tag.has_attr('src'):
-                        photo_url = img_tag['src']
-                    else:
-                        photo_div = msg.find('div', class_='tgme_widget_message_photo_wrap')
-                        if photo_div and photo_div.has_attr('style'):
-                            match = re.search(r'url\(\s*[\"\']?(.*?)[\"\']?\s*\)', photo_div['style'])
-                            if match:
-                                photo_url = match.group(1)
+                    photo_wrap = msg.find('a', class_='tgme_widget_message_photo_wrap')
+                    if photo_wrap and photo_wrap.has_attr('style'):
+                        style_str = photo_wrap['style']
+                        match = re.search(r"background-image:\s*url\(['\"]?(.*?)['\"]?\)", style_str)
+                        if match:
+                            photo_url = match.group(1)
+                    
+                    if not photo_url:
+                        img_tag = msg.find('img', class_='tgme_widget_message_photo_image')
+                        if img_tag and img_tag.has_attr('src'):
+                            photo_url = img_tag['src']
                     
                     post_link = f"https://t.me/{msg_id_attr}"
                     btn = msg.find('a', class_='tgme_widget_message_url')
@@ -702,17 +705,29 @@ def fetch_newsmaker_channel():
                         markup.add(InlineKeyboardButton("📱 Оригинал новости", url=post_link))
                         
                     thread_id = TOPICS.get("NEWSMAKER", 4203)
-                    try:
-                        if photo_url:
-                            bot.send_photo(
-                                chat_id=CHAT_ID,
-                                message_thread_id=thread_id,
-                                photo=photo_url,
-                                caption=msg_text,
-                                parse_mode="Markdown",
-                                reply_markup=markup
-                            )
-                        else:
+                    
+                    # Скачиваем картинку в память и отправляем через send_photo для 100% гарантии отображения
+                    photo_sent = False
+                    if photo_url:
+                        try:
+                            img_res = requests.get(photo_url, headers=get_random_headers(), timeout=10)
+                            if img_res.status_code == 200:
+                                photo_file = io.BytesIO(img_res.content)
+                                photo_file.name = "chart.jpg"
+                                bot.send_photo(
+                                    chat_id=CHAT_ID,
+                                    message_thread_id=thread_id,
+                                    photo=photo_file,
+                                    caption=msg_text,
+                                    parse_mode="Markdown",
+                                    reply_markup=markup
+                                )
+                                photo_sent = True
+                        except Exception as img_err:
+                            print(f"❌ Failed to download/send NewsMaker image: {img_err}")
+
+                    if not photo_sent:
+                        try:
                             bot.send_message(
                                 chat_id=CHAT_ID,
                                 message_thread_id=thread_id,
@@ -721,9 +736,10 @@ def fetch_newsmaker_channel():
                                 disable_web_page_preview=True,
                                 reply_markup=markup
                             )
-                        time.sleep(1)
-                    except Exception as e:
-                        print(f"❌ Send NewsMaker Error: {e}")
+                        except Exception as e:
+                            print(f"❌ Send NewsMaker Error: {e}")
+                            
+                    time.sleep(1)
         except Exception as e:
             print(f"NewsMaker Monitor Error: {e}")
         time.sleep(900)
@@ -1088,23 +1104,32 @@ def monitor_funding():
             print(f"❌ Funding Monitor Error: {e}")
         time.sleep(1800)
 
-# ==================== BINANCE ALPHA (x4) SESSION MODULE ====================
+# ==================== BINANCE ALPHA (x4) НАДЕЖНЫЙ ПОТОК ====================
 def run_alpha_session(chat_id, symbol):
     base_sym = symbol.replace('USDT', '')
+    print(f"🚀 Starting Alpha Session loop for #{symbol}")
     
-    prices, vols = fetch_token_prices_on_demand(symbol)
-    if not prices:
-        bot.send_message(CHAT_ID, message_thread_id=TOPICS["ALPHA"], text=f"⚠️ **Ошибка Alpha-сессии:** Монета **#{symbol}** не найдена на Binance / биржах. Проверь тикер.", parse_mode="Markdown")
-        if chat_id in active_alpha_sessions:
-            del active_alpha_sessions[chat_id]
-        return
-
-    bot.send_message(CHAT_ID, message_thread_id=TOPICS["ALPHA"], text=f"🚀 **Binance Alpha (x4) сессия запущенна для #{symbol}**\nМониторинг 1-минутных свечей, объема и индикаторов активен.", parse_mode="Markdown")
+    try:
+        bot.send_message(
+            chat_id=CHAT_ID, 
+            message_thread_id=TOPICS["ALPHA"], 
+            text=f"🚀 **Binance Alpha (x4) сессия запущенна для #{symbol}**\nМониторинг 1-минутных свечей, объема и индикаторов активен.", 
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        print(f"Failed to send initial alpha message: {e}")
     
     while True:
         session = active_alpha_sessions.get(chat_id)
         if not session or session.get("stop"):
-            bot.send_message(CHAT_ID, message_thread_id=TOPICS["ALPHA"], text=f"⏹ **Alpha сессия для #{symbol} остановлена.**", parse_mode="Markdown")
+            try:
+                bot.send_message(
+                    chat_id=CHAT_ID, 
+                    message_thread_id=TOPICS["ALPHA"], 
+                    text=f"⏹ **Alpha сессия для #{symbol} остановлена.**", 
+                    parse_mode="Markdown"
+                )
+            except: pass
             break
         
         try:
@@ -1144,9 +1169,15 @@ def run_alpha_session(chat_id, symbol):
                     f"🧠 Вердикт индикаторов:\n_{signal_type}_\n\n"
                     f"🕒 _{get_kyiv_time()}_"
                 )
-                bot.send_message(CHAT_ID, message_thread_id=TOPICS["ALPHA"], text=msg_txt, parse_mode="Markdown")
+                bot.send_message(
+                    chat_id=CHAT_ID, 
+                    message_thread_id=TOPICS["ALPHA"], 
+                    text=msg_txt, 
+                    parse_mode="Markdown"
+                )
+                print(f"✅ Sent Alpha update for #{symbol}: price={close_p}, change={price_change:.2f}%")
         except Exception as e:
-            print(f"Alpha session loop error for {symbol}: {e}")
+            print(f"❌ Alpha session loop error for {symbol}: {e}")
             
         time.sleep(60)
 
@@ -1224,10 +1255,7 @@ def handle_chat_messages(message):
 if __name__ == "__main__":
     print("🚀 Bot starting with Binance Alpha, Web3 & NewsMaker modules...")
     threading.Thread(target=run_flask, daemon=True).start()
-    threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     threading.Thread(target=fetch_newsmaker_channel, daemon=True).start()
-    threading.Thread(target=fetch_direct_exchange_promos, daemon=True).start()
-    threading.Thread(target=fetch_global_crypto_promos, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()
     print("🤖 Telegram bot polling started...")

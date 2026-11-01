@@ -1151,24 +1151,24 @@ def run_alpha_session(session_key, symbol):
                     vol_ratio = (vol / prev_vol) if prev_vol > 0 else 1.0
                     
                     status_emoji = "🟢" if price_change >= 0 else "🔴"
-                    signal_type = "Стабильность: объемы в норме, сильных всплесков за 1 мин нет."
+                    signal_type = "📊 Рынок спокоен, штатный режим."
                     
                     if vol_ratio >= 2.0 and price_change > 0.2:
-                        signal_type = "🔥 ПРИЗНАКИ ПАМПА (Роста): Резкий аномальный всплеск объема на покупку, поджатие цены к верхним границам!"
+                        signal_type = "🔥 ВЕРОЯТЕН РЕЗКИЙ ПАМП! Аномальный всплеск объема на покупку!"
                         status_emoji = "🚀"
                     elif vol_ratio >= 2.0 and price_change < -0.2:
-                        signal_type = "⚠️ ПРИЗНАКИ ДАМПА (Падения): Снижение объемов, резкие продажи за минуту или уход цены под средние линии!"
+                        signal_type = "⚠️ ВЕРОЯТЕН РЕЗКИЙ ДАМП! Идет мощное давление продавцов!"
                         status_emoji = "🩸"
 
                     msg_txt = (
                         f"{status_emoji} **Binance Alpha (x4) | #{symbol}**\n"
                         f"💵 Цена: `${close_p}` (`{price_change:+.2f}%`)\n"
                         f"📊 Объем (1m): `{vol:.2f}` (x`{vol_ratio:.1f}` от прошл.)\n"
-                        f"🧠 Вердикт индикаторов:\n_{signal_type}_\n\n"
+                        f"🧠 **Прогноз графика:**\n_{signal_type}_\n\n"
                         f"🕒 _{get_kyiv_time()}_"
                     )
                     
-                    # Безопасная отправка в Telegram (не роняет цикл при лимитах)
+                    # Безопасная отправка в Telegram каждую минуту
                     try:
                         bot.send_message(
                             chat_id=CHAT_ID, 

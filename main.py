@@ -1102,7 +1102,7 @@ def monitor_funding():
             print(f"❌ Funding Monitor Error: {e}")
         time.sleep(1800)
 
-# ==================== BINANCE ALPHA (x4) НЕУБИВАЕМЫЙ ПОТОК ====================
+# ==================== BINANCE ALPHA (x4) ВЕЧНЫЙ НЕУБИВАЕМЫЙ ПОТОК ====================
 def run_alpha_session(session_key, symbol):
     base_sym = symbol.replace('USDT', '')
     print(f"🚀 Starting Alpha Session loop for #{symbol}")
@@ -1117,6 +1117,7 @@ def run_alpha_session(session_key, symbol):
     except Exception as e:
         print(f"Failed to send initial alpha message: {e}")
     
+    # Главный цикл оборачиваем с гарантией от любых сбоев
     while True:
         try:
             session = active_alpha_sessions.get(session_key)
@@ -1130,13 +1131,14 @@ def run_alpha_session(session_key, symbol):
                     )
                 except: pass
                 break
-            
+
+            # 1. Запрос к API Binance Spot (с таймаутом и надежной обработкой)
             url = f"https://api.binance.com/api/v3/klines?symbol={base_sym}USDT&interval=1m&limit=5"
             res = requests.get(url, timeout=5)
             
             if res.status_code == 200:
                 klines_res = res.json()
-                if isinstance(klines_res, list) and len(klines_res >= 3):
+                if isinstance(klines_res, list) and len(klines_res) >= 3:
                     latest = klines_res[-1]
                     prev = klines_res[-2]
                     
@@ -1165,6 +1167,8 @@ def run_alpha_session(session_key, symbol):
                         f"🧠 Вердикт индикаторов:\n_{signal_type}_\n\n"
                         f"🕒 _{get_kyiv_time()}_"
                     )
+                    
+                    # Безопасная отправка в Telegram (не роняет цикл при лимитах)
                     try:
                         bot.send_message(
                             chat_id=CHAT_ID, 
@@ -1174,17 +1178,19 @@ def run_alpha_session(session_key, symbol):
                         )
                         print(f"✅ Sent Alpha update for #{symbol}: price={close_p}, change={price_change:.2f}%")
                     except Exception as tg_err:
-                        print(f"⚠️ Telegram send error in alpha loop: {tg_err}")
+                        print(f"⚠️ Telegram send_message error: {tg_err}")
                 else:
                     print(f"⚠️ Alpha klines data format invalid for #{symbol}")
             else:
-                print(f"⚠️ Binance Spot API error for #{symbol}: status {res.status_code}")
-        except Exception as e:
-            print(f"❌ Alpha session loop error for {symbol}: {e}")
+                print(f"⚠️ Binance Spot API status {res.status_code} for #{symbol}")
+
+        except Exception as err:
+            print(f"❌ Alpha loop iteration exception for {symbol}: {err}")
             
+        # Пауза строго 60 секунд между апдейтами
         time.sleep(60)
 
-# Альтернативный универсальный перехватчик команд для топиков групп
+# Перехватчик команд для запусков в любых топиках
 @bot.message_handler(func=lambda msg: msg.text and msg.text.lower().startswith(('/start', '/run', '/alpha')))
 def cmd_alpha_start_alt(message):
     text = message.text.strip()
@@ -1195,9 +1201,15 @@ def cmd_alpha_start_alt(message):
         session_key = f"alpha_{sym}"
         active_alpha_sessions[session_key] = {"symbol": sym, "stop": False}
         threading.Thread(target=run_alpha_session, args=(session_key, sym), daemon=True).start()
-        bot.reply_to(message, f"✅ Сессия Binance Alpha (x4) для **#{sym}** запущена в топике Alpha!", parse_mode="Markdown")
+        
+        try:
+            bot.reply_to(message, f"✅ Сессия Binance Alpha (x4) для **#{sym}** запущена в топике Alpha!", parse_mode="Markdown")
+        except: pass
         return
-    bot.reply_to(message, "ℹ️ Использование: `/start [тикер]` (например: `/start btc` или `/start near`)", parse_mode="Markdown")
+    
+    try:
+        bot.reply_to(message, "ℹ️ Использование: `/start [тикер]` (например: `/start btc` или `/start near`)", parse_mode="Markdown")
+    except: pass
 
 @bot.message_handler(commands=['stop', 'end'])
 def cmd_alpha_stop(message):
@@ -1274,6 +1286,3 @@ if __name__ == "__main__":
     threading.Thread(target=monitor_funding, daemon=True).start()
     print("🤖 Telegram bot polling started...")
     bot.infinity_polling(skip_pending=True)
-```eof
-
-Заменяй код, заливай на сервер — теперь всё будет работать стабильно и без падений! Если что, я на связи.

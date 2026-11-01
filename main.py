@@ -37,6 +37,7 @@ TOPICS = {
     "SPREAD": 77,
     "WEB3": 78,     # Топик для Web3-активностей
     "NEWSMAKER": 4203, # Топик для новостей NewsMaker
+    "ALPHA": 4273,  # Топик для Binance Alpha (x4)
     "CHAT": 1       # ID топика «Чат» для калькулятора, /vol и запросов монет
 }
 
@@ -46,6 +47,9 @@ spread_history = {}
 price_history_long = {}  
 price_history_short = {} 
 sent_alerts_cache = {}   
+
+# Стан активных Alpha-сессий: {chat_id: {"symbol": "BTCUSDT", "stop": False}}
+active_alpha_sessions = {}
 
 # ==================== PERSISTENT ACTIVE SPREADS (JSON) ====================
 SPREADS_FILE = "active_spreads.json"
@@ -160,7 +164,7 @@ def fetch_token_prices_on_demand(sym):
         r = requests.get(f"https://api.bitget.com/api/v2/mix/market/ticker?symbol={base_sym}USDT&productType=USDT-FUTURES", timeout=2).json().get('data', [])
         if r:
             ex_prices['Bitget'] = float(r[0]['lastPr'])
-            ex_vols['Bitget'] = float(r.get('quoteVolume', 0))
+            ex_vols['Bitget'] = float(r[0].get('quoteVolume', 0))
     except: pass
 
     return ex_prices, ex_vols
@@ -501,14 +505,12 @@ def send_to_topic(topic_name, text, reply_to_message_id=None, reply_markup=None)
 def extract_official_web_link(msg_element, fallback_link):
     """Ищет прямую ссылку на официальный сайт биржи внутри кнопок или текста поста"""
     try:
-        # Проверяем кнопки в виджете Telegram-поста
         buttons = msg_element.find_all('a', class_='tgme_widget_message_inline_button')
         for btn in buttons:
             href = btn.get('href', '')
             if href and any(domain in href.lower() for domain in ['binance.com', 'bybit.com', 'okx.com', 'gate.io', 'bitget.com', 'mexc.com', 'bingx.com', 'kucoin.com', 'kraken.com']):
                 return href
         
-        # Проверяем ссылки в тексте
         text_elem = msg_element.find('div', class_='tgme_widget_message_text')
         if text_elem:
             links = text_elem.find_all('a', href=True)
@@ -532,14 +534,13 @@ def process_item(item_id, raw_text, link, default_topic, msg_element=None):
     if target_topic not in TOPICS:
         target_topic = "NEWS"
 
-    # Ищем официальную веб-ссылку биржи вместо чисто телеграмной
     official_web_link = None
     if msg_element is not None:
         official_web_link = extract_official_web_link(msg_element, link)
     else:
         official_web_link = link
 
-    exchange_url = get_exchange_url(target_topic) if target_topic in TOPICS and target_topic not in ["NEWS", "SPREAD", "FUNDING", "WEB3", "NEWSMAKER", "CHAT"] else None
+    exchange_url = get_exchange_url(target_topic) if target_topic in TOPICS and target_topic not in ["NEWS", "SPREAD", "FUNDING", "WEB3", "NEWSMAKER", "ALPHA", "CHAT"] else None
 
     markup = InlineKeyboardMarkup()
     if official_web_link and official_web_link.startswith("http"):
@@ -553,64 +554,109 @@ def process_item(item_id, raw_text, link, default_topic, msg_element=None):
     send_to_topic(target_topic, ai_result, reply_markup=markup)
     time.sleep(1)
 
-# ==================== TELEGRAM CHANNELS PROMO MONITOR ====================
+# ==================== TELEGRAM CHANNELS PROMO & WEB3 MONITOR ====================
 def fetch_telegram_channels_promos():
     channels = {
-        "BINANCE": ["Binance_UA_official", "BinanceUkrainian", "binance_announcements", "Binance_Announcements"],
-        "OKX": ["okx_ukraine", "okx_ru", "OKXAnnouncements", "okx_campaign_announcement", "okxwalletannouncement", "OKX_Official"],
-        "BYBIT": ["bybitukrainian", "bybitukrainiannews", "Bybit_CIS", "BybitAnnouncements"],
-        "BITGET": ["BitgetUA", "Bitget_Announcements", "BitgetENOfficial"],
-        "MEXC": ["MEXCKraineOfficial", "MEXCofficialNews", "MEXCofficial"],
-        "GATE": ["GateioOfficialNews", "GateCom_EN", "Gate_Ukrainian", "Gateio_NewList_News"],
-        "BINGX": ["BingXOfficial", "BingXAnnouncement", "BingXEnglish", "BingXRussianAnnouncements"],
-        "KUCOIN": ["Kucoin_Exchange", "Kucoin_News"],
-        "KRAKEN": ["kraken_announcements"]
+        "BINANCE": {
+            "channels": ["Binance_UA_official", "BinanceUkrainian", "binance_announcements", "Binance_Announcements"],
+            "web3_channels": ["binanceweb3"],
+            "topic": "BINANCE"
+        },
+        "OKX": {
+            "channels": ["okx_ukraine", "okx_ru", "OKXAnnouncements", "okx_campaign_announcement", "OKX_Official"],
+            "web3_channels": ["okxwalletannouncement"],
+            "topic": "OKX"
+        },
+        "BYBIT": {
+            "channels": ["bybitukrainian", "bybitukrainiannews", "Bybit_CIS", "BybitAnnouncements"],
+            "web3_channels": ["bybit_web3"],
+            "topic": "BYBIT"
+        },
+        "BITGET": {
+            "channels": ["BitgetUA", "Bitget_Announcements", "BitgetENOfficial"],
+            "web3_channels": ["bitget_wallet"],
+            "topic": "BITGET"
+        },
+        "KUCOIN": {
+            "channels": ["Kucoin_Exchange", "Kucoin_News"],
+            "web3_channels": ["KuCoin_Web3Wallet", "kucoin_web3"],
+            "topic": "KUCOIN"
+        },
+        "MEXC": {
+            "channels": ["MEXCKraineOfficial", "MEXCofficialNews", "MEXCofficial"],
+            "web3_channels": [],
+            "topic": "MEXC"
+        },
+        "GATE": {
+            "channels": ["GateioOfficialNews", "GateCom_EN", "Gate_Ukrainian", "Gateio_NewList_News"],
+            "web3_channels": [],
+            "topic": "GATE"
+        },
+        "BINGX": {
+            "channels": ["BingXOfficial", "BingXAnnouncement", "BingXEnglish", "BingXRussianAnnouncements"],
+            "web3_channels": [],
+            "topic": "BINGX"
+        },
+        "KRAKEN": {
+            "channels": ["kraken_announcements"],
+            "web3_channels": [],
+            "topic": "KRAKEN"
+        }
     }
     
     while True:
         try:
-            for exchange, chan_list in channels.items():
-                for chan in chan_list:
+            for ex_key, data in channels.items():
+                target_topic = data["topic"]
+                # Обычные каналы биржи
+                for chan in data["channels"]:
                     url = f"https://t.me/s/{chan}"
                     res = secure_request(url, timeout=8)
                     if not res: continue
-                    
                     soup = BeautifulSoup(res.text, 'html.parser')
                     messages = soup.find_all('div', class_='tgme_widget_message')
-                    
                     for msg in messages[-1:]:
                         msg_id_attr = msg.get('data-post', '')
                         if not msg_id_attr: continue
-                        
-                        date_elem = msg.find('time', class_='tgme_widget_message_date')
-                        if date_elem and date_elem.has_attr('datetime'):
-                            post_date_str = date_elem['datetime'][:10]
-                            try:
-                                if int(post_date_str[:4]) < 2025: continue
-                            except: pass
-
                         item_id = f"tg_chan_{msg_id_attr.replace('/', '_')}"
                         text_div = msg.find('div', class_='tgme_widget_message_text')
                         if not text_div: continue
-                        
                         raw_text = text_div.get_text(separator='\n', strip=True)
                         post_link = f"https://t.me/{msg_id_attr}"
                         btn = msg.find('a', class_='tgme_widget_message_url')
                         if btn and btn.get('href'): post_link = btn.get('href')
-                        
-                        full_payload = f"Telegram Channel [{exchange} / @{chan}]:\n{raw_text}\nLink: {post_link}"
-                        process_item(item_id, full_payload, post_link, exchange, msg_element=msg)
+                        full_payload = f"Telegram Channel [{ex_key} / @{chan}]:\n{raw_text}\nLink: {post_link}"
+                        process_item(item_id, full_payload, post_link, target_topic, msg_element=msg)
+
+                # Web3 каналы биржи (лететь должны строго в топик этой биржи!)
+                for chan in data["web3_channels"]:
+                    url = f"https://t.me/s/{chan}"
+                    res = secure_request(url, timeout=8)
+                    if not res: continue
+                    soup = BeautifulSoup(res.text, 'html.parser')
+                    messages = soup.find_all('div', class_='tgme_widget_message')
+                    for msg in messages[-1:]:
+                        msg_id_attr = msg.get('data-post', '')
+                        if not msg_id_attr: continue
+                        item_id = f"tg_web3_{msg_id_attr.replace('/', '_')}"
+                        text_div = msg.find('div', class_='tgme_widget_message_text')
+                        if not text_div: continue
+                        raw_text = text_div.get_text(separator='\n', strip=True)
+                        post_link = f"https://t.me/{msg_id_attr}"
+                        btn = msg.find('a', class_='tgme_widget_message_url')
+                        if btn and btn.get('href'): post_link = btn.get('href')
+                        full_payload = f"Web3 Quest & Airdrop [{ex_key} Web3 / @{chan}]:\n{raw_text}\nLink: {post_link}"
+                        process_item(item_id, full_payload, post_link, target_topic, msg_element=msg)
                         
             time.sleep(600)
         except Exception as e:
-            print(f"Telegram Channels Monitor Error: {e}")
+            print(f"Telegram Channels & Web3 Monitor Error: {e}")
             time.sleep(60)
 
 # ==================== NEWSMAKER MONITOR ====================
 def fetch_newsmaker_channel():
     print("🟢 NewsMaker Monitor started...")
-    # Укажи здесь имя канала NewsMaker (например, "NewsmakerChannel" или аналогичное из твоей ссылки)
-    newsmaker_username = "NewsmakerChannel" 
+    newsmaker_username = "nwsmkr" 
     while True:
         try:
             url = f"https://t.me/s/{newsmaker_username}"
@@ -634,7 +680,6 @@ def fetch_newsmaker_channel():
                     btn = msg.find('a', class_='tgme_widget_message_url')
                     if btn and btn.get('href'): post_link = btn.get('href')
                     
-                    # Перевод новости на русский язык через ИИ
                     translated_text = translate_newsmaker_text(raw_text)
                     
                     msg_text = (
@@ -661,7 +706,7 @@ def fetch_direct_exchange_promos():
             binance_apis = [
                 ("https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=48&pageNo=1&pageSize=1", "BINANCE"),
                 ("https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=161&pageNo=1&pageSize=1", "BINANCE"),
-                ("https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=379&pageNo=1&pageSize=1", "WEB3")
+                ("https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=379&pageNo=1&pageSize=1", "BINANCE")
             ]
             for api_url, top_name in binance_apis:
                 res = secure_request(api_url, timeout=8)
@@ -1013,6 +1058,80 @@ def monitor_funding():
             print(f"❌ Funding Monitor Error: {e}")
         time.sleep(1800)
 
+# ==================== BINANCE ALPHA (x4) SESSION MODULE ====================
+def run_alpha_session(chat_id, symbol):
+    base_sym = symbol.replace('USDT', '')
+    bot.send_message(CHAT_ID, message_thread_id=TOPICS["ALPHA"], text=f"🚀 **Binance Alpha (x4) сессия запущенна для #{symbol}**\nМониторинг 1-минутных свечей, объема и индикаторов активен.", parse_mode="Markdown")
+    
+    while True:
+        session = active_alpha_sessions.get(chat_id)
+        if not session or session.get("stop"):
+            bot.send_message(CHAT_ID, message_thread_id=TOPICS["ALPHA"], text=f"⏹ **Alpha сессия для #{symbol} остановлена.**", parse_mode="Markdown")
+            break
+        
+        try:
+            # Запрос 1-минутных свечей Binance API (Alpha x4 логика)
+            klines_res = requests.get(f"https://fapi.binance.com/fapi/v1/klines?symbol={base_sym}USDT&interval=1m&limit=5", timeout=5).json()
+            if isinstance(klines_res, list) and len(klines_res) >= 3:
+                latest = klines_res[-1]
+                prev = klines_res[-2]
+                
+                open_p = float(latest[1])
+                close_p = float(latest[4])
+                vol = float(latest[5])
+                prev_vol = float(prev[5])
+                
+                price_change = ((close_p - open_p) / open_p) * 100
+                vol_ratio = (vol / prev_vol) if prev_vol > 0 else 1.0
+                
+                status_emoji = "🟢" if price_change >= 0 else "🔴"
+                signal_type = "СТАБИЛЬНОСТЬ"
+                
+                if vol_ratio >= 2.5 and price_change > 0.3:
+                    signal_type = "🔥 ПРИЗНАКИ ПАМПА (Роста): Резкий аномальный всплеск объема на покупку за последнюю минуту, поджатие цены к верхним границам!"
+                    status_emoji = "🚀"
+                elif vol_ratio >= 2.5 and price_change < -0.3:
+                    signal_type = "⚠️ ПРИЗНАКИ ДАМПА (Падения): Снижение объемов, резкие продажи за минуту или уход цены под средние линии!"
+                    status_emoji = "🩸"
+                else:
+                    signal_type = "Объемы в норме, сильных всплесков за 1 мин нет."
+
+                msg_txt = (
+                    f"{status_emoji} **Binance Alpha (x4) | #{symbol}**\n"
+                    f"💵 Цена: `${close_p}` (`{price_change:+.2f}%`)\n"
+                    f"📊 Объем (1m): `{vol:.2f}` (x`{vol_ratio:.1f}` от прошл.)\n"
+                    f"🧠 Вердикт индикаторов:\n_{signal_type}_\n\n"
+                    f"🕒 _{get_kyiv_time()}_"
+                )
+                bot.send_message(CHAT_ID, message_thread_id=TOPICS["ALPHA"], text=msg_txt, parse_mode="Markdown")
+        except Exception as e:
+            print(f"Alpha session loop error: {e}")
+            
+        time.sleep(60)
+
+@bot.message_handler(commands=['start', 'run'])
+def cmd_alpha_start(message):
+    text = message.text.strip()
+    parts = text.split()
+    if len(parts) >= 2:
+        query = parts[1]
+        sym = normalize_symbol(query)
+        chat_id = message.chat.id
+        active_alpha_sessions[chat_id] = {"symbol": sym, "stop": False}
+        threading.Thread(target=run_alpha_session, args=(chat_id, sym), daemon=True).start()
+        bot.reply_to(message, f"✅ Сессия Binance Alpha (x4) для **#{sym}** запущена в топике Alpha!", parse_mode="Markdown")
+        return
+    bot.reply_to(message, "ℹ️ Использование: `/start [тикер]` (например: `/start btc` или `/start near`)", parse_mode="Markdown")
+
+@bot.message_handler(commands=['stop', 'end'])
+def cmd_alpha_stop(message):
+    chat_id = message.chat.id
+    if chat_id in active_alpha_sessions:
+        active_alpha_sessions[chat_id]["stop"] = True
+        bot.reply_to(message, "⏹ Запрос на остановку Alpha-сессии принят.", parse_mode="Markdown")
+    else:
+        bot.reply_to(message, "ℹ️ Нет активных запущенных сессий.", parse_mode="Markdown")
+
 # ==================== TELEGRAM COMMANDS & CALCULATORS ====================
 @bot.message_handler(commands=['vol', 'volume'])
 def cmd_vol(message):
@@ -1034,7 +1153,6 @@ def handle_chat_messages(message):
     if not message.text or message.text.startswith('/'): return
     text = message.text.strip()
     
-    # 1. Проверка на математическое вычитание (например, 1500 - 1050)
     calc_match = re.search(r'^([\d.]+)\s*-\s*([\d.]+)$', text)
     if calc_match:
         try:
@@ -1043,7 +1161,6 @@ def handle_chat_messages(message):
             return
         except: pass
 
-    # 2. Очищаем текст от цифр и пробелов (чтобы "1 bnb", "1 btc" превращались в чистый тикер "BNB", "BTC")
     clean_query = re.sub(r'[^a-zA-Z]', '', text)
     if not clean_query:
         return
@@ -1064,7 +1181,7 @@ def handle_chat_messages(message):
 
 # ==================== MAIN START ====================
 if __name__ == "__main__":
-    print("🚀 Bot starting...")
+    print("🚀 Bot starting with Binance Alpha, Web3 & NewsMaker modules...")
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     threading.Thread(target=fetch_newsmaker_channel, daemon=True).start()

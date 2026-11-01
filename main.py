@@ -51,6 +51,8 @@ sent_alerts_cache = {}
 
 # Статус активных Alpha-сессий: {session_key: {"symbol": "BTCUSDT", "stop": False}}
 active_alpha_sessions = {}
+# Внутренняя память цен для предиктивного анализа Alpha-сессий
+alpha_price_memory = {}
 
 # ==================== PERSISTENT ACTIVE SPREADS (JSON) ====================
 SPREADS_FILE = "active_spreads.json"
@@ -1104,20 +1106,21 @@ def monitor_funding():
 
 # ==================== BINANCE ALPHA ЕЖЕМИНУТНЫЙ ПРЕДИКТИВНЫЙ МОНИТОРИНГ ====================
 def run_alpha_session(session_key, symbol):
-    base_sym = symbol.replace('USDT', '')
     print(f"🚀 [ALPHA DEBUG] Поток запущен для #{symbol} (ключ: {session_key})")
     
     try:
         bot.send_message(
             chat_id=CHAT_ID, 
             message_thread_id=TOPICS["ALPHA"], 
-            text=f"🚀 **Binance Alpha сессия запущена для #{symbol}**\nПредиктивный сканер объемов активен.", 
+            text=f"🚀 **Binance Alpha сессия запущена для #{symbol}**\nПредиктивный сканер по памяти цен активен.", 
             parse_mode="Markdown"
         )
     except Exception as e:
         print(f"❌ [ALPHA ERROR] Не удалось отправить стартовое сообщение: {e}")
     
-    # Главный цикл анализа минутных свечей и объемов
+    if session_key not in alpha_price_memory:
+        alpha_price_memory[session_key] = []
+
     while True:
         try:
             session = active_alpha_sessions.get(session_key)
@@ -1125,69 +1128,62 @@ def run_alpha_session(session_key, symbol):
                 print(f"⏹ [ALPHA DEBUG] Сессия для #{symbol} остановлена принудительно.")
                 break
 
+            # 1. Получаем актуальную цену из универсального поисковика
             ex_prices, ex_vols = fetch_token_prices_on_demand(symbol)
-            current_price = ex_prices.get('Binance', 0) or ex_prices.get('Binance (Spot)', 0)
-            if not current_price and ex_prices:
-                current_price = list(ex_prices.values())[0]
+            current_price = 0
+            if ex_prices:
+                current_price = ex_prices.get('Binance', 0) or ex_prices.get('Binance (Spot)', 0)
+                if not current_price:
+                    current_price = list(ex_prices.values())[0]
 
-            alpha_endpoints = [
-                f"https://api.binance.com/api/v3/klines?symbol={base_sym}USDT&interval=1m&limit=5",
-                f"https://fapi.binance.com/fapi/v1/klines?symbol={base_sym}USDT&interval=1m&limit=5"
-            ]
+            if current_price <= 0:
+                bot.send_message(
+                    chat_id=CHAT_ID, 
+                    message_thread_id=TOPICS["ALPHA"], 
+                    text=f"🔍 **Alpha | #{symbol}**\n⚠️ Не удалось получить цену с бирж. Повтор через минуту...", 
+                    parse_mode="Markdown"
+                )
+                time.sleep(60)
+                continue
+
+            now_ts = time.time()
+            history = alpha_price_memory[session_key]
+            history.append((now_ts, current_price))
             
-            klines_res = None
-            for url in alpha_endpoints:
-                try:
-                    res = requests.get(url, timeout=5)
-                    if res.status_code == 200:
-                        data = res.json()
-                        if isinstance(data, list) and len(data) >= 3:
-                            klines_res = data
-                            break
-                except: pass
+            # Храним историю цен за последние 10 минут
+            alpha_price_memory[session_key] = [item for item in history if now_ts - item[0] <= 600]
+            history = alpha_price_memory[session_key]
 
-            if klines_res:
-                latest = klines_res[-1]
-                prev = klines_res[-2]
-                
-                open_p = float(latest[1])
-                close_p = float(latest[4])
-                vol = float(latest[5])
-                prev_vol = float(prev[5])
-                
-                price_change = ((close_p - open_p) / open_p) * 100 if open_p > 0 else 0.0
-                vol_ratio = (vol / prev_vol) if prev_vol > 0 else 1.0
-                
-                status_emoji = "🟢"
-                action_advice = "✅ Объем в норме. Можно безопасно крутить лимитками."
-                
-                if vol_ratio >= 2.0 and price_change < -0.15:
-                    status_emoji = "🩸"
-                    action_advice = "⚠️ **ВНИМАНИЕ: ДАМП!** Монету резко укатывает. Обратный ордер на продажу может не зацепить — лучше притормозить или переставить лимитки ниже!"
-                elif vol_ratio >= 2.0 and price_change > 0.15:
-                    status_emoji = "🚀"
-                    action_advice = "🔥 **ВНИМАНИЕ: ПАМП!** Идет импульс вверх. Покупать по текущим рискованно, жди отката."
-                elif price_change < -0.5:
-                    status_emoji = "📉"
-                    action_advice = "📉 Плавное сползание вниз. Будь аккуратен с продажей."
+            price_change = 0.0
+            trend_icon = "🟢"
+            action_advice = "✅ Цена стабильна. Можно безопасно крутить лимитками."
 
-                msg_txt = (
-                    f"{status_emoji} **Alpha | #{symbol}** | `{close_p}` (`{price_change:+.2f}%`)\n"
-                    f"📊 Объем 1m: `x{vol_ratio:.1f}` к прошлой мин.\n\n"
-                    f"🎯 **Совет по откруту:**\n_{action_advice}_\n\n"
-                    f"🕒 _{get_kyiv_time()}_"
-                )
-            elif current_price > 0:
-                msg_txt = (
-                    f"📊 **Alpha | #{symbol}** | Цена: `${current_price}`\n"
-                    f"ℹ️ Сканирование ликвидности...\n\n"
-                    f"🕒 _{get_kyiv_time()}_"
-                )
-            else:
-                msg_txt = (
-                    f"🔍 **Alpha | #{symbol}** | Ожидание рыночного триггера...\n\n"
-                    f"🕒 _{get_kyiv_time()}_"
-                )
+            # Вычисляем изменение цены за последнюю минуту
+            if len(history) >= 2:
+                old_price = history[0][1]
+                for t, p in history:
+                    if now_ts - t >= 50:
+                        old_price = p
+                        break
+                if old_price > 0:
+                    price_change = ((current_price - old_price) / old_price) * 100
+
+            # Анализ под стратегию лимитного открута
+            if price_change <= -0.25:
+                trend_icon = "🩸"
+                action_advice = "⚠️ **ВНИМАНИЕ: ДАМП!** Монету резко укатывает вниз. Обратный ордер на продажу может зависнуть — притормози открут или переставь лимитку ближе!"
+            elif price_change >= 0.25:
+                trend_icon = "🚀"
+                action_advice = "🔥 **ВНИМАНИЕ: ПАМП!** Резкий импульс вверх. Покупать по текущим рискованно, жди отката."
+            elif price_change < -0.1:
+                trend_icon = "📉"
+                action_advice = "📉 Плавное сползание. Будь аккуратен с продажей."
+
+            msg_txt = (
+                f"{trend_icon} **Alpha | #{symbol}** | `${current_price}` (`{price_change:+.2f}%` за мин)\n\n"
+                f"🎯 **Совет по откруту:**\n_{action_advice}_\n\n"
+                f"🕒 _{get_kyiv_time()}_"
+            )
                 
             bot.send_message(
                 chat_id=CHAT_ID, 

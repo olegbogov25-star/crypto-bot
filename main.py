@@ -1102,7 +1102,7 @@ def monitor_funding():
             print(f"❌ Funding Monitor Error: {e}")
         time.sleep(1800)
 
-# ==================== BINANCE ALPHA (x4) НАДЕЖНЫЙ ПОТОК ====================
+# ==================== BINANCE ALPHA (x4) НАДЕЖНЫЙ ПОТОК (ИСПРАВЛЕН СПОТОВЫЙ ЗАПРОС) ====================
 def run_alpha_session(session_key, symbol):
     base_sym = symbol.replace('USDT', '')
     print(f"🚀 Starting Alpha Session loop for #{symbol}")
@@ -1131,49 +1131,52 @@ def run_alpha_session(session_key, symbol):
             break
         
         try:
-            url = f"https://fapi.binance.com/fapi/v1/klines?symbol={base_sym}USDT&interval=1m&limit=5"
+            # Запрос идем на спотовый API Binance, чтобы гарантированно находить абсолютно любые монеты и щитки
+            url = f"https://api.binance.com/api/v3/klines?symbol={base_sym}USDT&interval=1m&limit=5"
             res = requests.get(url, timeout=5)
-            if res.status_code != 200:
-                url = f"https://api.binance.com/api/v3/klines?symbol={base_sym}USDT&interval=1m&limit=5"
-                res = requests.get(url, timeout=5)
-                
-            klines_res = res.json()
-            if isinstance(klines_res, list) and len(klines_res) >= 3:
-                latest = klines_res[-1]
-                prev = klines_res[-2]
-                
-                open_p = float(latest[1])
-                close_p = float(latest[4])
-                vol = float(latest[5])
-                prev_vol = float(prev[5])
-                
-                price_change = ((close_p - open_p) / open_p) * 100
-                vol_ratio = (vol / prev_vol) if prev_vol > 0 else 1.0
-                
-                status_emoji = "🟢" if price_change >= 0 else "🔴"
-                signal_type = "Стабильность: объемы в норме, сильных всплесков за 1 мин нет."
-                
-                if vol_ratio >= 2.0 and price_change > 0.2:
-                    signal_type = "🔥 ПРИЗНАКИ ПАМПА (Роста): Резкий аномальный всплеск объема на покупку, поджатие цены к верхним границам!"
-                    status_emoji = "🚀"
-                elif vol_ratio >= 2.0 and price_change < -0.2:
-                    signal_type = "⚠️ ПРИЗНАКИ ДАМПА (Падения): Снижение объемов, резкие продажи за минуту или уход цены под средние линии!"
-                    status_emoji = "🩸"
+            
+            if res.status_code == 200:
+                klines_res = res.json()
+                if isinstance(klines_res, list) and len(klines_res) >= 3:
+                    latest = klines_res[-1]
+                    prev = klines_res[-2]
+                    
+                    open_p = float(latest[1])
+                    close_p = float(latest[4])
+                    vol = float(latest[5])
+                    prev_vol = float(prev[5])
+                    
+                    price_change = ((close_p - open_p) / open_p) * 100
+                    vol_ratio = (vol / prev_vol) if prev_vol > 0 else 1.0
+                    
+                    status_emoji = "🟢" if price_change >= 0 else "🔴"
+                    signal_type = "Стабильность: объемы в норме, сильных всплесков за 1 мин нет."
+                    
+                    if vol_ratio >= 2.0 and price_change > 0.2:
+                        signal_type = "🔥 ПРИЗНАКИ ПАМПА (Роста): Резкий аномальный всплеск объема на покупку, поджатие цены к верхним границам!"
+                        status_emoji = "🚀"
+                    elif vol_ratio >= 2.0 and price_change < -0.2:
+                        signal_type = "⚠️ ПРИЗНАКИ ДАМПА (Падения): Снижение объемов, резкие продажи за минуту или уход цены под средние линии!"
+                        status_emoji = "🩸"
 
-                msg_txt = (
-                    f"{status_emoji} **Binance Alpha (x4) | #{symbol}**\n"
-                    f"💵 Цена: `${close_p}` (`{price_change:+.2f}%`)\n"
-                    f"📊 Объем (1m): `{vol:.2f}` (x`{vol_ratio:.1f}` от прошл.)\n"
-                    f"🧠 Вердикт индикаторов:\n_{signal_type}_\n\n"
-                    f"🕒 _{get_kyiv_time()}_"
-                )
-                bot.send_message(
-                    chat_id=CHAT_ID, 
-                    message_thread_id=TOPICS["ALPHA"], 
-                    text=msg_txt, 
-                    parse_mode="Markdown"
-                )
-                print(f"✅ Sent Alpha update for #{symbol}: price={close_p}, change={price_change:.2f}%")
+                    msg_txt = (
+                        f"{status_emoji} **Binance Alpha (x4) | #{symbol}**\n"
+                        f"💵 Цена: `${close_p}` (`{price_change:+.2f}%`)\n"
+                        f"📊 Объем (1m): `{vol:.2f}` (x`{vol_ratio:.1f}` от прошл.)\n"
+                        f"🧠 Вердикт индикаторов:\n_{signal_type}_\n\n"
+                        f"🕒 _{get_kyiv_time()}_"
+                    )
+                    bot.send_message(
+                        chat_id=CHAT_ID, 
+                        message_thread_id=TOPICS["ALPHA"], 
+                        text=msg_txt, 
+                        parse_mode="Markdown"
+                    )
+                    print(f"✅ Sent Alpha update for #{symbol}: price={close_p}, change={price_change:.2f}%")
+                else:
+                    print(f"⚠️ Alpha klines data format invalid for #{symbol}")
+            else:
+                print(f"⚠️ Binance Spot API error for #{symbol}: status {res.status_code}")
         except Exception as e:
             print(f"❌ Alpha session loop error for {symbol}: {e}")
             

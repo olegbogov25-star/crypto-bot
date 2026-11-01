@@ -1226,7 +1226,7 @@ def cmd_vol(message):
     numbers = re.findall(r'\d+(?:\.\d+)?', text)
     if len(numbers) >= 2:
         try:
-            cost = float(numbers[0]) ром
+            cost = float(numbers[0])
             volume = float(numbers[1])
             if volume < 1000: volume *= 1000
             cost_per_1k = (cost / volume) * 1000

@@ -49,7 +49,7 @@ price_history_long = {}
 price_history_short = {} 
 sent_alerts_cache = {}   
 
-# Статус активных Alpha-сессий: {chat_id: {"symbol": "BTCUSDT", "stop": False}}
+# Статус активных Alpha-сессий: {session_key: {"symbol": "BTCUSDT", "stop": False}}
 active_alpha_sessions = {}
 
 # ==================== PERSISTENT ACTIVE SPREADS (JSON) ====================
@@ -674,7 +674,6 @@ def fetch_newsmaker_channel():
                     text_div = msg.find('div', class_='tgme_widget_message_text')
                     raw_text = text_div.get_text(separator='\n', strip=True) if text_div else ""
                     
-                    # Надежный поиск картинки / графика в посте через стиль или тег
                     photo_url = None
                     photo_wrap = msg.find('a', class_='tgme_widget_message_photo_wrap')
                     if photo_wrap and photo_wrap.has_attr('style'):
@@ -706,7 +705,6 @@ def fetch_newsmaker_channel():
                         
                     thread_id = TOPICS.get("NEWSMAKER", 4203)
                     
-                    # Скачиваем картинку в память и отправляем через send_photo для 100% гарантии отображения
                     photo_sent = False
                     if photo_url:
                         try:
@@ -1105,7 +1103,7 @@ def monitor_funding():
         time.sleep(1800)
 
 # ==================== BINANCE ALPHA (x4) НАДЕЖНЫЙ ПОТОК ====================
-def run_alpha_session(chat_id, symbol):
+def run_alpha_session(session_key, symbol):
     base_sym = symbol.replace('USDT', '')
     print(f"🚀 Starting Alpha Session loop for #{symbol}")
     
@@ -1120,7 +1118,7 @@ def run_alpha_session(chat_id, symbol):
         print(f"Failed to send initial alpha message: {e}")
     
     while True:
-        session = active_alpha_sessions.get(chat_id)
+        session = active_alpha_sessions.get(session_key)
         if not session or session.get("stop"):
             try:
                 bot.send_message(
@@ -1188,21 +1186,28 @@ def cmd_alpha_start(message):
     if len(parts) >= 2:
         query = parts[1]
         sym = normalize_symbol(query)
-        chat_id = message.chat.id
-        active_alpha_sessions[chat_id] = {"symbol": sym, "stop": False}
-        threading.Thread(target=run_alpha_session, args=(chat_id, sym), daemon=True).start()
+        session_key = f"alpha_{sym}"
+        active_alpha_sessions[session_key] = {"symbol": sym, "stop": False}
+        threading.Thread(target=run_alpha_session, args=(session_key, sym), daemon=True).start()
         bot.reply_to(message, f"✅ Сессия Binance Alpha (x4) для **#{sym}** запущена в топике Alpha!", parse_mode="Markdown")
         return
     bot.reply_to(message, "ℹ️ Использование: `/start [тикер]` (например: `/start btc` или `/start near`)", parse_mode="Markdown")
 
 @bot.message_handler(commands=['stop', 'end'])
 def cmd_alpha_stop(message):
-    chat_id = message.chat.id
-    if chat_id in active_alpha_sessions:
-        active_alpha_sessions[chat_id]["stop"] = True
-        bot.reply_to(message, "⏹ Запрос на остановку Alpha-сессии принят.", parse_mode="Markdown")
-    else:
-        bot.reply_to(message, "ℹ️ Нет активных запущенных сессий.", parse_mode="Markdown")
+    parts = message.text.strip().split()
+    if len(parts) >= 2:
+        query = parts[1]
+        sym = normalize_symbol(query)
+        session_key = f"alpha_{sym}"
+        if session_key in active_alpha_sessions:
+            active_alpha_sessions[session_key]["stop"] = True
+            bot.reply_to(message, f"⏹ Сессия **#{sym}** остановлена.", parse_mode="Markdown")
+            return
+            
+    for k in active_alpha_sessions:
+        active_alpha_sessions[k]["stop"] = True
+    bot.reply_to(message, "⏹ Все активные Alpha-сессии остановлены.", parse_mode="Markdown")
 
 # ==================== TELEGRAM COMMANDS & CALCULATORS ====================
 @bot.message_handler(commands=['vol', 'volume'])
@@ -1255,7 +1260,10 @@ def handle_chat_messages(message):
 if __name__ == "__main__":
     print("🚀 Bot starting with Binance Alpha, Web3 & NewsMaker modules...")
     threading.Thread(target=run_flask, daemon=True).start()
+    threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     threading.Thread(target=fetch_newsmaker_channel, daemon=True).start()
+    threading.Thread(target=fetch_direct_exchange_promos, daemon=True).start()
+    threading.Thread(target=fetch_global_crypto_promos, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()
     print("🤖 Telegram bot polling started...")

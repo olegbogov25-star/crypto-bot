@@ -48,7 +48,7 @@ price_history_long = {}
 price_history_short = {} 
 sent_alerts_cache = {}   
 
-# Стан активных Alpha-сессий: {chat_id: {"symbol": "BTCUSDT", "stop": False}}
+# Статус активных Alpha-сессий: {chat_id: {"symbol": "BTCUSDT", "stop": False}}
 active_alpha_sessions = {}
 
 # ==================== PERSISTENT ACTIVE SPREADS (JSON) ====================
@@ -164,7 +164,7 @@ def fetch_token_prices_on_demand(sym):
         r = requests.get(f"https://api.bitget.com/api/v2/mix/market/ticker?symbol={base_sym}USDT&productType=USDT-FUTURES", timeout=2).json().get('data', [])
         if r:
             ex_prices['Bitget'] = float(r[0]['lastPr'])
-            ex_vols['Bitget'] = float(r[0].get('quoteVolume', 0))
+            ex_vols['Bitget'] = float(r.get('quoteVolume', 0))
     except: pass
 
     return ex_prices, ex_vols
@@ -653,7 +653,7 @@ def fetch_telegram_channels_promos():
             print(f"Telegram Channels & Web3 Monitor Error: {e}")
             time.sleep(60)
 
-# ==================== NEWSMAKER MONITOR ====================
+# ==================== NEWSMAKER MONITOR (С КАРТИНКАМИ И ГРАФИКАМИ) ====================
 def fetch_newsmaker_channel():
     print("🟢 NewsMaker Monitor started...")
     newsmaker_username = "nwsmkr" 
@@ -673,14 +673,22 @@ def fetch_newsmaker_channel():
                     processed_ids.add(item_id)
                     
                     text_div = msg.find('div', class_='tgme_widget_message_text')
-                    if not text_div: continue
-                    raw_text = text_div.get_text(separator='\n', strip=True)
+                    raw_text = text_div.get_text(separator='\n', strip=True) if text_div else ""
+                    
+                    # Извлекаем картинку / график из поста
+                    photo_url = None
+                    photo_div = msg.find('div', class_='tgme_widget_message_photo_wrap')
+                    if photo_div and photo_div.has_attr('style'):
+                        style = photo_div['style']
+                        match = re.search(r'url\(\'(.*?)\'\)', style)
+                        if match:
+                            photo_url = match.group(1)
                     
                     post_link = f"https://t.me/{msg_id_attr}"
                     btn = msg.find('a', class_='tgme_widget_message_url')
                     if btn and btn.get('href'): post_link = btn.get('href')
                     
-                    translated_text = translate_newsmaker_text(raw_text)
+                    translated_text = translate_newsmaker_text(raw_text) if raw_text else "📰 Новость с графиком"
                     
                     msg_text = (
                         f"📰 **Crypto News (NewsMaker)**\n\n"
@@ -692,8 +700,29 @@ def fetch_newsmaker_channel():
                     if post_link and post_link.startswith("http"):
                         markup.add(InlineKeyboardButton("📱 Оригинал новости", url=post_link))
                         
-                    send_to_topic("NEWSMAKER", msg_text, reply_markup=markup)
-                    time.sleep(1)
+                    thread_id = TOPICS.get("NEWSMAKER", 4203)
+                    try:
+                        if photo_url:
+                            bot.send_photo(
+                                chat_id=CHAT_ID,
+                                message_thread_id=thread_id,
+                                photo=photo_url,
+                                caption=msg_text,
+                                parse_mode="Markdown",
+                                reply_markup=markup
+                            )
+                        else:
+                            bot.send_message(
+                                chat_id=CHAT_ID,
+                                message_thread_id=thread_id,
+                                text=msg_text,
+                                parse_mode="Markdown",
+                                disable_web_page_preview=True,
+                                reply_markup=markup
+                            )
+                        time.sleep(1)
+                    except Exception as e:
+                        print(f"❌ Send NewsMaker Error: {e}")
         except Exception as e:
             print(f"NewsMaker Monitor Error: {e}")
         time.sleep(900)
@@ -1061,6 +1090,15 @@ def monitor_funding():
 # ==================== BINANCE ALPHA (x4) SESSION MODULE ====================
 def run_alpha_session(chat_id, symbol):
     base_sym = symbol.replace('USDT', '')
+    
+    # Проверяем наличие монеты на бирже
+    prices, vols = fetch_token_prices_on_demand(symbol)
+    if not prices:
+        bot.send_message(CHAT_ID, message_thread_id=TOPICS["ALPHA"], text=f"⚠️ **Ошибка Alpha-сессии:** Монета **#{symbol}** не найдена на Binance / биржах. Проверь тикер.", parse_mode="Markdown")
+        if chat_id in active_alpha_sessions:
+            del active_alpha_sessions[chat_id]
+        return
+
     bot.send_message(CHAT_ID, message_thread_id=TOPICS["ALPHA"], text=f"🚀 **Binance Alpha (x4) сессия запущенна для #{symbol}**\nМониторинг 1-минутных свечей, объема и индикаторов активен.", parse_mode="Markdown")
     
     while True:
@@ -1070,8 +1108,13 @@ def run_alpha_session(chat_id, symbol):
             break
         
         try:
-            # Запрос 1-минутных свечей Binance API (Alpha x4 логика)
-            klines_res = requests.get(f"https://fapi.binance.com/fapi/v1/klines?symbol={base_sym}USDT&interval=1m&limit=5", timeout=5).json()
+            url = f"https://fapi.binance.com/fapi/v1/klines?symbol={base_sym}USDT&interval=1m&limit=5"
+            res = requests.get(url, timeout=5)
+            if res.status_code != 200:
+                url = f"https://api.binance.com/api/v3/klines?symbol={base_sym}USDT&interval=1m&limit=5"
+                res = requests.get(url, timeout=5)
+                
+            klines_res = res.json()
             if isinstance(klines_res, list) and len(klines_res) >= 3:
                 latest = klines_res[-1]
                 prev = klines_res[-2]
@@ -1085,16 +1128,14 @@ def run_alpha_session(chat_id, symbol):
                 vol_ratio = (vol / prev_vol) if prev_vol > 0 else 1.0
                 
                 status_emoji = "🟢" if price_change >= 0 else "🔴"
-                signal_type = "СТАБИЛЬНОСТЬ"
+                signal_type = "Стабильность: объемы в норме, сильных всплесков за 1 мин нет."
                 
                 if vol_ratio >= 2.5 and price_change > 0.3:
-                    signal_type = "🔥 ПРИЗНАКИ ПАМПА (Роста): Резкий аномальный всплеск объема на покупку за последнюю минуту, поджатие цены к верхним границам!"
+                    signal_type = "🔥 ПРИЗНАКИ ПАМПА (Роста): Резкий аномальный всплеск объема на покупку, поджатие цены к верхним границам!"
                     status_emoji = "🚀"
                 elif vol_ratio >= 2.5 and price_change < -0.3:
                     signal_type = "⚠️ ПРИЗНАКИ ДАМПА (Падения): Снижение объемов, резкие продажи за минуту или уход цены под средние линии!"
                     status_emoji = "🩸"
-                else:
-                    signal_type = "Объемы в норме, сильных всплесков за 1 мин нет."
 
                 msg_txt = (
                     f"{status_emoji} **Binance Alpha (x4) | #{symbol}**\n"
@@ -1105,7 +1146,7 @@ def run_alpha_session(chat_id, symbol):
                 )
                 bot.send_message(CHAT_ID, message_thread_id=TOPICS["ALPHA"], text=msg_txt, parse_mode="Markdown")
         except Exception as e:
-            print(f"Alpha session loop error: {e}")
+            print(f"Alpha session loop error for {symbol}: {e}")
             
         time.sleep(60)
 

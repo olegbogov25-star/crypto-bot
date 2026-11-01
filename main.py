@@ -1102,7 +1102,7 @@ def monitor_funding():
             print(f"❌ Funding Monitor Error: {e}")
         time.sleep(1800)
 
-# ==================== BINANCE ALPHA (x4) НАДЕЖНЫЙ ПОТОК (ИСПРАВЛЕН СПОТОВЫЙ ЗАПРОС) ====================
+# ==================== BINANCE ALPHA (x4) АЛЬТЕРНАТИВНЫЙ НАДЕЖНЫЙ ПОТОК ====================
 def run_alpha_session(session_key, symbol):
     base_sym = symbol.replace('USDT', '')
     print(f"🚀 Starting Alpha Session loop for #{symbol}")
@@ -1111,7 +1111,7 @@ def run_alpha_session(session_key, symbol):
         bot.send_message(
             chat_id=CHAT_ID, 
             message_thread_id=TOPICS["ALPHA"], 
-            text=f"🚀 **Binance Alpha (x4) сессия запущенна для #{symbol}**\nМониторинг 1-минутных свечей, объема и индикаторов активен.", 
+            text=f"🚀 **Binance Alpha (x4) сессия запущена для #{symbol}**\nМониторинг 1-минутных свечей, объема и индикаторов активен.", 
             parse_mode="Markdown"
         )
     except Exception as e:
@@ -1131,7 +1131,7 @@ def run_alpha_session(session_key, symbol):
             break
         
         try:
-            # Запрос идем на спотовый API Binance, чтобы гарантированно находить абсолютно любые монеты и щитки
+            # Запрос идем на спотовый API Binance, гарантированно без ошибок для любых монет
             url = f"https://api.binance.com/api/v3/klines?symbol={base_sym}USDT&interval=1m&limit=5"
             res = requests.get(url, timeout=5)
             
@@ -1182,12 +1182,13 @@ def run_alpha_session(session_key, symbol):
             
         time.sleep(60)
 
-@bot.message_handler(commands=['start', 'run'])
-def cmd_alpha_start(message):
+# Альтернативный универсальный перехватчик команд для топиков групп
+@bot.message_handler(func=lambda msg: msg.text and msg.text.lower().startswith(('/start', '/run', '/alpha')))
+def cmd_alpha_start_alt(message):
     text = message.text.strip()
-    parts = text.split()
-    if len(parts) >= 2:
-        query = parts[1]
+    match = re.search(r'(?:/start|/run|/alpha)\s+([a-zA-Z0-9_-]+)', text)
+    if match:
+        query = match.group(1)
         sym = normalize_symbol(query)
         session_key = f"alpha_{sym}"
         active_alpha_sessions[session_key] = {"symbol": sym, "stop": False}

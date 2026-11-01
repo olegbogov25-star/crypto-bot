@@ -608,7 +608,6 @@ def fetch_telegram_channels_promos():
         try:
             for ex_key, data in channels.items():
                 target_topic = data["topic"]
-                # Обычные каналы биржи
                 for chan in data["channels"]:
                     url = f"https://t.me/s/{chan}"
                     res = secure_request(url, timeout=8)
@@ -628,7 +627,6 @@ def fetch_telegram_channels_promos():
                         full_payload = f"Telegram Channel [{ex_key} / @{chan}]:\n{raw_text}\nLink: {post_link}"
                         process_item(item_id, full_payload, post_link, target_topic, msg_element=msg)
 
-                # Web3 каналы биржи (лететь должны строго в топик этой биржи!)
                 for chan in data["web3_channels"]:
                     url = f"https://t.me/s/{chan}"
                     res = secure_request(url, timeout=8)
@@ -675,14 +673,17 @@ def fetch_newsmaker_channel():
                     text_div = msg.find('div', class_='tgme_widget_message_text')
                     raw_text = text_div.get_text(separator='\n', strip=True) if text_div else ""
                     
-                    # Извлекаем картинку / график из поста
+                    # Надежный поиск картинки / графика в посте
                     photo_url = None
-                    photo_div = msg.find('div', class_='tgme_widget_message_photo_wrap')
-                    if photo_div and photo_div.has_attr('style'):
-                        style = photo_div['style']
-                        match = re.search(r'url\(\'(.*?)\'\)', style)
-                        if match:
-                            photo_url = match.group(1)
+                    img_tag = msg.find('img', class_='tgme_widget_message_photo_image')
+                    if img_tag and img_tag.has_attr('src'):
+                        photo_url = img_tag['src']
+                    else:
+                        photo_div = msg.find('div', class_='tgme_widget_message_photo_wrap')
+                        if photo_div and photo_div.has_attr('style'):
+                            match = re.search(r'url\(\s*[\"\']?(.*?)[\"\']?\s*\)', photo_div['style'])
+                            if match:
+                                photo_url = match.group(1)
                     
                     post_link = f"https://t.me/{msg_id_attr}"
                     btn = msg.find('a', class_='tgme_widget_message_url')
@@ -1091,7 +1092,6 @@ def monitor_funding():
 def run_alpha_session(chat_id, symbol):
     base_sym = symbol.replace('USDT', '')
     
-    # Проверяем наличие монеты на бирже
     prices, vols = fetch_token_prices_on_demand(symbol)
     if not prices:
         bot.send_message(CHAT_ID, message_thread_id=TOPICS["ALPHA"], text=f"⚠️ **Ошибка Alpha-сессии:** Монета **#{symbol}** не найдена на Binance / биржах. Проверь тикер.", parse_mode="Markdown")
@@ -1130,10 +1130,10 @@ def run_alpha_session(chat_id, symbol):
                 status_emoji = "🟢" if price_change >= 0 else "🔴"
                 signal_type = "Стабильность: объемы в норме, сильных всплесков за 1 мин нет."
                 
-                if vol_ratio >= 2.5 and price_change > 0.3:
+                if vol_ratio >= 2.0 and price_change > 0.2:
                     signal_type = "🔥 ПРИЗНАКИ ПАМПА (Роста): Резкий аномальный всплеск объема на покупку, поджатие цены к верхним границам!"
                     status_emoji = "🚀"
-                elif vol_ratio >= 2.5 and price_change < -0.3:
+                elif vol_ratio >= 2.0 and price_change < -0.2:
                     signal_type = "⚠️ ПРИЗНАКИ ДАМПА (Падения): Снижение объемов, резкие продажи за минуту или уход цены под средние линии!"
                     status_emoji = "🩸"
 

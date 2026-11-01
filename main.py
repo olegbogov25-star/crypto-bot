@@ -1105,36 +1105,31 @@ def monitor_funding():
 # ==================== BINANCE ALPHA (x4) ВЕЧНЫЙ НЕУБИВАЕМЫЙ ПОТОК ====================
 def run_alpha_session(session_key, symbol):
     base_sym = symbol.replace('USDT', '')
-    print(f"🚀 Starting Alpha Session loop for #{symbol}")
+    print(f"🚀 [ALPHA DEBUG] Поток запущен для #{symbol} (ключ: {session_key})")
     
     try:
         bot.send_message(
             chat_id=CHAT_ID, 
             message_thread_id=TOPICS["ALPHA"], 
-            text=f"🚀 **Binance Alpha (x4) сессия запущена для #{symbol}**\nМониторинг 1-минутных свечей, объема и индикаторов активен.", 
+            text=f"🚀 **Binance Alpha (x4) сессия запущена для #{symbol}**\nЕжеминутный мониторинг свечей и прогнозов активен.", 
             parse_mode="Markdown"
         )
     except Exception as e:
-        print(f"Failed to send initial alpha message: {e}")
+        print(f"❌ [ALPHA ERROR] Не удалось отправить стартовое сообщение: {e}")
     
-    # Главный цикл оборачиваем с гарантией от любых сбоев
+    # Главный цикл с гарантией отправки каждую минуту и защитой от сбоев
     while True:
         try:
             session = active_alpha_sessions.get(session_key)
             if not session or session.get("stop"):
-                try:
-                    bot.send_message(
-                        chat_id=CHAT_ID, 
-                        message_thread_id=TOPICS["ALPHA"], 
-                        text=f"⏹ **Alpha сессия для #{symbol} остановлена.**", 
-                        parse_mode="Markdown"
-                    )
-                except: pass
+                print(f"⏹ [ALPHA DEBUG] Сессия для #{symbol} остановлена принудительно.")
                 break
 
-            # 1. Запрос к API Binance Spot (с таймаутом и надежной обработкой)
+            # 1. Запрос к API Binance Spot
             url = f"https://api.binance.com/api/v3/klines?symbol={base_sym}USDT&interval=1m&limit=5"
+            print(f"🔍 [ALPHA DEBUG] Запрос к Binance API для {base_sym}USDT...")
             res = requests.get(url, timeout=5)
+            print(f"📥 [ALPHA DEBUG] Ответ от Binance: статус {res.status_code}")
             
             if res.status_code == 200:
                 klines_res = res.json()
@@ -1168,26 +1163,23 @@ def run_alpha_session(session_key, symbol):
                         f"🕒 _{get_kyiv_time()}_"
                     )
                     
-                    # Безопасная отправка в Telegram каждую минуту
-                    try:
-                        bot.send_message(
-                            chat_id=CHAT_ID, 
-                            message_thread_id=TOPICS["ALPHA"], 
-                            text=msg_txt, 
-                            parse_mode="Markdown"
-                        )
-                        print(f"✅ Sent Alpha update for #{symbol}: price={close_p}, change={price_change:.2f}%")
-                    except Exception as tg_err:
-                        print(f"⚠️ Telegram send_message error: {tg_err}")
+                    # ПРИНУДИТЕЛЬНАЯ ОТПРАВКА КАЖДУЮ МИНУТУ
+                    bot.send_message(
+                        chat_id=CHAT_ID, 
+                        message_thread_id=TOPICS["ALPHA"], 
+                        text=msg_txt, 
+                        parse_mode="Markdown"
+                    )
+                    print(f"✅ [ALPHA SUCCESS] Отправлен минутный отчет для #{symbol}: цена {close_p}")
                 else:
-                    print(f"⚠️ Alpha klines data format invalid for #{symbol}")
+                    print(f"⚠️ [ALPHA WARN] Неверный формат данных от Binance klines для #{symbol}")
             else:
-                print(f"⚠️ Binance Spot API status {res.status_code} for #{symbol}")
+                print(f"⚠️ [ALPHA WARN] Binance API вернул код {res.status_code}")
 
         except Exception as err:
-            print(f"❌ Alpha loop iteration exception for {symbol}: {err}")
+            print(f"❌ [ALPHA CRITICAL ERROR] Ошибка в цикле alpha для {symbol}: {err}")
             
-        # Пауза строго 60 секунд между апдейтами
+        # Пауза строго 60 секунд между отчетами
         time.sleep(60)
 
 # Перехватчик команд для запусков в любых топиках
@@ -1234,7 +1226,7 @@ def cmd_vol(message):
     numbers = re.findall(r'\d+(?:\.\d+)?', text)
     if len(numbers) >= 2:
         try:
-            cost = float(numbers[0])
+            cost = float(numbers[0]) ром
             volume = float(numbers[1])
             if volume < 1000: volume *= 1000
             cost_per_1k = (cost / volume) * 1000

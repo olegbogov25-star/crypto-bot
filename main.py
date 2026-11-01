@@ -1111,13 +1111,13 @@ def run_alpha_session(session_key, symbol):
         bot.send_message(
             chat_id=CHAT_ID, 
             message_thread_id=TOPICS["ALPHA"], 
-            text=f"🚀 **Binance Alpha сессия запущена для #{symbol}**\nЕжеминутный предиктивный анализ объемов и памп/дамп паттернов активен.", 
+            text=f"🚀 **Binance Alpha сессия запущена для #{symbol}**\nЕжеминутный предиктивный анализ цен и объемов активен.", 
             parse_mode="Markdown"
         )
     except Exception as e:
         print(f"❌ [ALPHA ERROR] Не удалось отправить стартовое сообщение: {e}")
     
-    # Главный цикл: отчет отправляется КАЖДУЮ МИНУТУ с выводом вердикта
+    # Главный цикл: отчет отправляется КАЖДУЮ МИНУТУ с выводом цен и вердикта
     while True:
         try:
             session = active_alpha_sessions.get(session_key)
@@ -1125,10 +1125,16 @@ def run_alpha_session(session_key, symbol):
                 print(f"⏹ [ALPHA DEBUG] Сессия для #{symbol} остановлена принудительно.")
                 break
 
-            # Запрос к минутным свечам Binance
+            # 1. Получаем актуальные цены через универсальный поискочник
+            ex_prices, ex_vols = fetch_token_prices_on_demand(symbol)
+            current_price = ex_prices.get('Binance', 0) or ex_prices.get('Binance (Spot)', 0)
+            if not current_price and ex_prices:
+                current_price = list(ex_prices.values())[0]
+
+            # 2. Запрос к минутным свечам Binance
             alpha_endpoints = [
                 f"https://api.binance.com/api/v3/klines?symbol={base_sym}USDT&interval=1m&limit=5",
-                f"https://api.binance.com/api/v3/klines?symbol={base_sym}USDC&interval=1m&limit=5"
+                f"https://fapi.binance.com/fapi/v1/klines?symbol={base_sym}USDT&interval=1m&limit=5"
             ]
             
             klines_res = None
@@ -1157,47 +1163,44 @@ def run_alpha_session(session_key, symbol):
                 status_emoji = "🟢" if price_change >= 0 else "🔴"
                 signal_desc = "📊 Рынок стабилен, штатное накопление."
                 
-                # Анализ памп / дамп по объемам и движению
                 if vol_ratio >= 2.0 and price_change < -0.1:
                     status_emoji = "🩸"
-                    signal_desc = "⚠️ **ДАМП / СБРОС ОБЪЕМОВ!** Идет мощное давление продавцов. Если зацепит лимитку вниз, ожидай отскок для профита открута."
+                    signal_desc = "⚠️ **ДАМП / СБРОС ОБЪЕМОВ!** Давление продавцов. Жди отскок для профита открута."
                 elif vol_ratio >= 2.0 and price_change > 0.1:
                     status_emoji = "🚀"
-                    signal_desc = "🔥 **ПАМП / ВЛИВ ПОКУПАТЕЛЕЙ!** Аномальный импульс вверх. Лучше притормозить открут до успокоения монеты."
+                    signal_desc = "🔥 **ПАМП / ВЛИВ ПОКУПАТЕЛЕЙ!** Импульс вверх, лучше притормозить открут."
                 elif vol_ratio >= 1.5:
                     status_emoji = "⚡"
-                    signal_desc = "⚡ Повышенная активность в стакане, следим за пробоем."
-                else:
-                    signal_desc = "🔍 Объем в норме, ожидание импульса ликвидности."
+                    signal_desc = "⚡ Повышенная активность в стакане."
 
                 msg_txt = (
                     f"{status_emoji} **Binance Alpha | #{symbol}**\n"
                     f"💵 Цена: `${close_p}` (`{price_change:+.2f}%`)\n"
                     f"📊 Объем (1m): `{vol:.2f}` (x`{vol_ratio:.1f}` к прошл. мин)\n\n"
-                    f"🧠 **Вердикт по объемам:**\n_{signal_desc}_\n\n"
+                    f"🧠 **Вердикт:**\n_{signal_desc}_\n\n"
                     f"🕒 _{get_kyiv_time()}_"
                 )
-                
-                bot.send_message(
-                    chat_id=CHAT_ID, 
-                    message_thread_id=TOPICS["ALPHA"], 
-                    text=msg_txt, 
-                    parse_mode="Markdown"
+            elif current_price > 0:
+                msg_txt = (
+                    f"📊 **Binance Alpha | #{symbol}**\n"
+                    f"💵 Текущая цена: `${current_price}`\n"
+                    f"ℹ️ Мониторинг котировок и лимиток активен.\n\n"
+                    f"🕒 _{get_kyiv_time()}_"
                 )
-                print(f"✅ [ALPHA SUCCESS] Отчет для #{symbol}: цена {close_p}, объем х{vol_ratio:.1f}")
             else:
                 msg_txt = (
                     f"🔍 **Binance Alpha | #{symbol}**\n"
-                    f"ℹ️ Сканирование минутных импульсов ликвидности...\n"
-                    f"🧠 Статус: Ожидание рыночного триггера.\n\n"
+                    f"ℹ️ Сканирование ликвидности по альфа-токену...\n\n"
                     f"🕒 _{get_kyiv_time()}_"
                 )
-                bot.send_message(
-                    chat_id=CHAT_ID, 
-                    message_thread_id=TOPICS["ALPHA"], 
-                    text=msg_txt, 
-                    parse_mode="Markdown"
-                )
+                
+            bot.send_message(
+                chat_id=CHAT_ID, 
+                message_thread_id=TOPICS["ALPHA"], 
+                text=msg_txt, 
+                parse_mode="Markdown"
+            )
+            print(f"✅ [ALPHA SUCCESS] Отчет для #{symbol} отправлен.")
 
         except Exception as err:
             print(f"❌ [ALPHA CRITICAL ERROR] Ошибка в цикле alpha для {symbol}: {err}")
@@ -1244,7 +1247,6 @@ def cmd_alpha_stop(message):
 # ==================== AI VISION: АНАЛИЗ СКРИНШОТОВ ГРАФИКОВ И ЛИМИТОК ====================
 @bot.message_handler(content_types=['photo'])
 def handle_chart_screenshots(message):
-    # Проверяем, что картинка отправлена в нужный топик Alpha или в чат
     if message.message_thread_id not in [TOPICS["ALPHA"], TOPICS["CHAT"]]:
         return
 
@@ -1255,7 +1257,6 @@ def handle_chart_screenshots(message):
     try:
         bot.reply_to(message, "🧐 Анализирую твой скриншот графика и лимитки через ИИ...")
         
-        # Получаем файл фотографии с наибольшим разрешением
         file_info = bot.get_file(message.photo[-1].file_id)
         downloaded_file = bot.download_file(file_info.file_path)
         

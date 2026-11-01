@@ -1111,13 +1111,13 @@ def run_alpha_session(session_key, symbol):
         bot.send_message(
             chat_id=CHAT_ID, 
             message_thread_id=TOPICS["ALPHA"], 
-            text=f"🚀 **Binance Alpha сессия запущена для #{symbol}**\nЕжеминутный предиктивный анализ цен и объемов активен.", 
+            text=f"🚀 **Binance Alpha сессия запущена для #{symbol}**\nПредиктивный сканер объемов активен.", 
             parse_mode="Markdown"
         )
     except Exception as e:
         print(f"❌ [ALPHA ERROR] Не удалось отправить стартовое сообщение: {e}")
     
-    # Главный цикл: отчет отправляется КАЖДУЮ МИНУТУ с выводом цен и вердикта
+    # Главный цикл анализа минутных свечей и объемов
     while True:
         try:
             session = active_alpha_sessions.get(session_key)
@@ -1125,13 +1125,11 @@ def run_alpha_session(session_key, symbol):
                 print(f"⏹ [ALPHA DEBUG] Сессия для #{symbol} остановлена принудительно.")
                 break
 
-            # 1. Получаем актуальные цены через универсальный поискочник
             ex_prices, ex_vols = fetch_token_prices_on_demand(symbol)
             current_price = ex_prices.get('Binance', 0) or ex_prices.get('Binance (Spot)', 0)
             if not current_price and ex_prices:
                 current_price = list(ex_prices.values())[0]
 
-            # 2. Запрос к минутным свечам Binance
             alpha_endpoints = [
                 f"https://api.binance.com/api/v3/klines?symbol={base_sym}USDT&interval=1m&limit=5",
                 f"https://fapi.binance.com/fapi/v1/klines?symbol={base_sym}USDT&interval=1m&limit=5"
@@ -1160,37 +1158,34 @@ def run_alpha_session(session_key, symbol):
                 price_change = ((close_p - open_p) / open_p) * 100 if open_p > 0 else 0.0
                 vol_ratio = (vol / prev_vol) if prev_vol > 0 else 1.0
                 
-                status_emoji = "🟢" if price_change >= 0 else "🔴"
-                signal_desc = "📊 Рынок стабилен, штатное накопление."
+                status_emoji = "🟢"
+                action_advice = "✅ Объем в норме. Можно безопасно крутить лимитками."
                 
-                if vol_ratio >= 2.0 and price_change < -0.1:
+                if vol_ratio >= 2.0 and price_change < -0.15:
                     status_emoji = "🩸"
-                    signal_desc = "⚠️ **ДАМП / СБРОС ОБЪЕМОВ!** Давление продавцов. Жди отскок для профита открута."
-                elif vol_ratio >= 2.0 and price_change > 0.1:
+                    action_advice = "⚠️ **ВНИМАНИЕ: ДАМП!** Монету резко укатывает. Обратный ордер на продажу может не зацепить — лучше притормозить или переставить лимитки ниже!"
+                elif vol_ratio >= 2.0 and price_change > 0.15:
                     status_emoji = "🚀"
-                    signal_desc = "🔥 **ПАМП / ВЛИВ ПОКУПАТЕЛЕЙ!** Импульс вверх, лучше притормозить открут."
-                elif vol_ratio >= 1.5:
-                    status_emoji = "⚡"
-                    signal_desc = "⚡ Повышенная активность в стакане."
+                    action_advice = "🔥 **ВНИМАНИЕ: ПАМП!** Идет импульс вверх. Покупать по текущим рискованно, жди отката."
+                elif price_change < -0.5:
+                    status_emoji = "📉"
+                    action_advice = "📉 Плавное сползание вниз. Будь аккуратен с продажей."
 
                 msg_txt = (
-                    f"{status_emoji} **Binance Alpha | #{symbol}**\n"
-                    f"💵 Цена: `${close_p}` (`{price_change:+.2f}%`)\n"
-                    f"📊 Объем (1m): `{vol:.2f}` (x`{vol_ratio:.1f}` к прошл. мин)\n\n"
-                    f"🧠 **Вердикт:**\n_{signal_desc}_\n\n"
+                    f"{status_emoji} **Alpha | #{symbol}** | `{close_p}` (`{price_change:+.2f}%`)\n"
+                    f"📊 Объем 1m: `x{vol_ratio:.1f}` к прошлой мин.\n\n"
+                    f"🎯 **Совет по откруту:**\n_{action_advice}_\n\n"
                     f"🕒 _{get_kyiv_time()}_"
                 )
             elif current_price > 0:
                 msg_txt = (
-                    f"📊 **Binance Alpha | #{symbol}**\n"
-                    f"💵 Текущая цена: `${current_price}`\n"
-                    f"ℹ️ Мониторинг котировок и лимиток активен.\n\n"
+                    f"📊 **Alpha | #{symbol}** | Цена: `${current_price}`\n"
+                    f"ℹ️ Сканирование ликвидности...\n\n"
                     f"🕒 _{get_kyiv_time()}_"
                 )
             else:
                 msg_txt = (
-                    f"🔍 **Binance Alpha | #{symbol}**\n"
-                    f"ℹ️ Сканирование ликвидности по альфа-токену...\n\n"
+                    f"🔍 **Alpha | #{symbol}** | Ожидание рыночного триггера...\n\n"
                     f"🕒 _{get_kyiv_time()}_"
                 )
                 
@@ -1200,10 +1195,9 @@ def run_alpha_session(session_key, symbol):
                 text=msg_txt, 
                 parse_mode="Markdown"
             )
-            print(f"✅ [ALPHA SUCCESS] Отчет для #{symbol} отправлен.")
 
         except Exception as err:
-            print(f"❌ [ALPHA CRITICAL ERROR] Ошибка в цикле alpha для {symbol}: {err}")
+            print(f"❌ [ALPHA CRITICAL ERROR]: {err}")
             
         time.sleep(60)
 
@@ -1220,12 +1214,12 @@ def cmd_alpha_start_alt(message):
         threading.Thread(target=run_alpha_session, args=(session_key, sym), daemon=True).start()
         
         try:
-            bot.reply_to(message, f"✅ Ежеминутная предиктивная сессия для **#{sym}** запущена в топике Alpha!", parse_mode="Markdown")
+            bot.reply_to(message, f"✅ Ежеминутный предиктивный сканер для **#{sym}** запущен в топике Alpha!", parse_mode="Markdown")
         except: pass
         return
     
     try:
-        bot.reply_to(message, "ℹ️ Использование: `/start [тикер]` (например: `/start CT` или `/start DNA`)", parse_mode="Markdown")
+        bot.reply_to(message, "ℹ️ Использование: `/start [тикер]` (например: `/start CT`)", parse_mode="Markdown")
     except: pass
 
 @bot.message_handler(commands=['stop', 'end'])
@@ -1244,7 +1238,7 @@ def cmd_alpha_stop(message):
         active_alpha_sessions[k]["stop"] = True
     bot.reply_to(message, "⏹ Все активные Alpha-сессии остановлены.", parse_mode="Markdown")
 
-# ==================== AI VISION: АНАЛИЗ СКРИНШОТОВ ГРАФИКОВ И ЛИМИТОК ====================
+# ==================== AI VISION: КОМПАКТНЫЙ АНАЛИЗ СКРИНШОТОВ ====================
 @bot.message_handler(content_types=['photo'])
 def handle_chart_screenshots(message):
     if message.message_thread_id not in [TOPICS["ALPHA"], TOPICS["CHAT"]]:
@@ -1255,7 +1249,7 @@ def handle_chart_screenshots(message):
         return
 
     try:
-        bot.reply_to(message, "🧐 Анализирую твой скриншот графика и лимитки через ИИ...")
+        bot.reply_to(message, "🧐 Оцениваю график и лимитки...")
         
         file_info = bot.get_file(message.photo[-1].file_id)
         downloaded_file = bot.download_file(file_info.file_path)
@@ -1264,13 +1258,11 @@ def handle_chart_screenshots(message):
         base64_image = base64.b64encode(downloaded_file).decode('utf-8')
         
         prompt = """
-Ты — профессиональный трейдер и помощник по управлению позициями в разделе Binance Alpha. 
-Пользователь прислал скриншот торгового терминала с открытым графиком, стаканом и зависшими лимитными ордерами (например, на продажу альфа-токена).
-Проанализируй скриншот:
-1. Оцени текущую цену и положение лимитного ордера относительно стакана.
-2. Проанализируй плотности в стакане и динамику.
-3. Дай четкий совет: стоит ли ожидать отката цены к уровню лимитки, или лучше отменить ордер и переставить его / менять стратегию открута?
-Ответь кратко, четко, на русском языке, с упором на практику.
+Ты — ассистент трейдера, который откручивает Binance Alpha лимитными ордерами. Пользователь скинул скриншот графика/стакана.
+Дай СТРОГО ультра-краткий ответ в 3 строки (без воды):
+1. 📊 **Цена vs Ордер:** (где цена относительно твоей лимитки)
+2. ⚠️ **Риск уката:** (есть ли риск резкого дампа/пампа, который сорвет обратную продажу)
+3. 🎯 **Вердикт:** (крутить дальше / ждать отката / отменять и переставлять ордер)
 """
 
         payload = {
@@ -1289,7 +1281,7 @@ def handle_chart_screenshots(message):
                     ]
                 }
             ],
-            "max_tokens": 500
+            "max_tokens": 250
         }
 
         res = requests.post(
@@ -1300,11 +1292,11 @@ def handle_chart_screenshots(message):
         )
         
         result_text = res.json()['choices'][0]['message']['content'].strip()
-        bot.reply_to(message, f"📈 **AI Анализ графика и ордера:**\n\n{result_text}", parse_mode="Markdown")
+        bot.reply_to(message, f"🎯 **Вердикт по ордеру:**\n\n{result_text}", parse_mode="Markdown")
 
     except Exception as e:
         print(f"❌ Vision Analysis Error: {e}")
-        bot.reply_to(message, "❌ Не удалось проанализировать скриншот. Попробуй еще раз.")
+        bot.reply_to(message, "❌ Не удалось проанализировать скриншот.")
 
 # ==================== TELEGRAM COMMANDS & CALCULATORS ====================
 @bot.message_handler(commands=['vol', 'volume'])

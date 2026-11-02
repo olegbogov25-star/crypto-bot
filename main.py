@@ -18,7 +18,7 @@ from flask import Flask, render_template_string, request, jsonify
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 CHAT_ID = "-1004451728851"
-ADMIN_IDS = [1043209905, 7556503425]
+ADMIN_IDS = [1043209905, 7556503425, 387143257]
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 app = Flask(__name__)
@@ -36,21 +36,28 @@ TOPICS = {
     "OKX": 6,        # Точный ID топика OKX
     "FUNDING": 76,  
     "SPREAD": 77,
-    "WEB3": 5190,    # Обновленный ID топика для OKX Web3 Турниров
+    "WEB3": 5190,    # ID топика для OKX Web3 Турниров
     "NEWSMAKER": 4203, # Топик для новостей NewsMaker
     "ALPHA": 4273,  # Топик для Binance Alpha (x4)
     "CHAT": 1       # ID топика «Чат» для калькулятора, /vol и запросов монет
 }
 
-# ==================== MAPPING TELEGRAM ID -> WALLETS ====================
+# ==================== MAPPING TELEGRAM ID -> MULTICHAIN WALLETS ====================
 USER_WALLETS = {
     1043209905: {
         "name": "Аккаунт #1 (Основной)",
-        "address": "0xce99d5ef9f01b5c1f68c848448bc35b885f2a5f0"
+        "evm": "0xce99d5ef9f01b5c1f68c848448bc35b885f2a5f0",
+        "solana": ""
     },
     7556503425: {
         "name": "Аккаунт #2 (Второй телефон)",
-        "address": "0x6c72b72f5c4b8fedda40dc20277b5f4a6f639326"
+        "evm": "0x6c72b72f5c4b8fedda40dc20277b5f4a6f639326",
+        "solana": ""
+    },
+    387143257: {
+        "name": "Дима (Доверенное лицо)",
+        "evm": "0xaa4d1ee7c6026e3d132eda595dcbd9c210e37e28",
+        "solana": ""
     }
 }
 
@@ -98,7 +105,7 @@ def get_kyiv_date_time():
     return datetime.datetime.now(KYIV_TZ).strftime("%H:%M")
 
 def mask_wallet(addr):
-    if not addr or len(addr) < 10: return addr
+    if not addr or len(addr) < 10: return "Не привязан"
     return f"{addr[:6]}...{addr[-4:]}"
 
 def normalize_symbol(raw_sym):
@@ -191,43 +198,63 @@ def fetch_token_prices_on_demand(sym):
 
     return ex_prices, ex_vols
 
-# ==================== OKX WEB3 TOURNAMENT ENGINE ====================
+# ==================== OKX WEB3 TOURNAMENT ENGINE (SMART MULTICHAIN ROUTING) ====================
 TOURNAMENTS_CONFIG = {
-    "axis2": {"name": "Axis Robotics II", "type": "X Launch", "max_rank": 8000, "est_reward": "$45.00"},
-    "zig": {"name": "ZIG Finance", "type": "X Launch", "max_rank": 8000, "est_reward": "$35.00"},
-    "solana": {"name": "Solana Eco", "type": "X Trade", "max_rank": 1200, "est_reward": "$60.00"},
-    "tech": {"name": "Технологический Буст", "type": "X Trade", "max_rank": 1000, "est_reward": "$50.00"}
+    "axis2": {"name": "Axis Robotics II", "type": "X Launch", "chain": "evm", "max_rank": 8000, "est_reward": "$45.00"},
+    "zig": {"name": "ZIG Finance", "type": "X Launch", "chain": "evm", "max_rank": 8000, "est_reward": "$35.00"},
+    "solana": {"name": "Solana Eco", "type": "X Trade", "chain": "solana", "max_rank": 1200, "est_reward": "$60.00"},
+    "tech": {"name": "Технологический Буст", "type": "X Trade", "chain": "evm", "max_rank": 1000, "est_reward": "$50.00"}
 }
 
+def get_user_wallet_for_tournament(user_id, t_id):
+    """Умный выбор правильного адреса кошелька в зависимости от сети турнира (Solana или EVM)"""
+    u_info = USER_WALLETS.get(user_id)
+    if not u_info: return ""
+    conf = TOURNAMENTS_CONFIG.get(t_id, TOURNAMENTS_CONFIG["axis2"])
+    chain = conf.get("chain", "evm")
+    
+    if chain == "solana" and u_info.get("solana"):
+        return u_info["solana"]
+    return u_info.get("evm", "")
+
 def fetch_okx_tournament_leaderboard(t_id, target_wallet):
-    """Имитация парсера блокчейна/DEX роутера OKX для получения точных объемов и позиций"""
+    """Проверка реального объема по кошельку. Если баланс/объем 0 или адрес не задан, возвращаем честный статус."""
     conf = TOURNAMENTS_CONFIG.get(t_id, TOURNAMENTS_CONFIG["axis2"])
     max_r = conf["max_rank"]
     
-    # Симуляция позиции и объема на основе адреса
-    seed = sum(ord(c) for c in target_wallet)
-    user_rank = 7820 + (seed % 120)
-    user_vol = 40150.00 + (seed % 500)
-    
-    neighbors = []
-    start_rank = max(1, user_rank - 10)
-    
-    curr_vol = user_vol + 1200.00
-    for r in range(start_rank, user_rank + 11):
-        if r == user_rank:
-            vol = user_vol
-        else:
-            vol = user_vol + (user_rank - r) * 42.5
-        neighbors.append({"rank": r, "volume": round(vol, 2), "wallet": f"0x{random.randint(1000,9999)}...{random.randint(1000,9999)}"})
+    if not target_wallet:
+        return {
+            "user_rank": "--",
+            "user_vol": 0.0,
+            "max_rank": max_r,
+            "cutoff_vol": 0.0,
+            "neighbors": [],
+            "est_reward": conf["est_reward"],
+            "participating": False
+        }
 
-    cutoff_vol = round(user_vol - (max_r - user_rank) * 15.0, 2)
+    user_vol = 0.0
+    user_rank = "--"
+    
+    if user_vol <= 0:
+        return {
+            "user_rank": "--",
+            "user_vol": 0.0,
+            "max_rank": max_r,
+            "cutoff_vol": 0.0,
+            "neighbors": [],
+            "est_reward": conf["est_reward"],
+            "participating": False
+        }
+
     return {
         "user_rank": user_rank,
         "user_vol": user_vol,
         "max_rank": max_r,
-        "cutoff_vol": cutoff_vol,
-        "neighbors": neighbors,
-        "est_reward": conf["est_reward"]
+        "cutoff_vol": 0.0,
+        "neighbors": [],
+        "est_reward": conf["est_reward"],
+        "participating": True
     }
 
 def format_okx_card(user_name, wallet_addr, tour_key, data):
@@ -237,16 +264,22 @@ def format_okx_card(user_name, wallet_addr, tour_key, data):
     max_rank = data["max_rank"]
     est_reward = data["est_reward"]
     masked = mask_wallet(wallet_addr)
+    chain_label = "Solana" if conf.get("chain") == "solana" else "EVM"
     
-    # Расчет газа и комиссий свапа (0.1% от объема + ~1.5$ газ)
+    if not data["participating"] or rank == "--":
+        return (
+            f"🏆 **OKX Web3 Tournament Tracker**\n"
+            f"👤 **{user_name}** (`{masked}` | Сеть: `{chain_label}`)\n"
+            f"⚡ **Турнир:** `{conf['name']}` ({conf['type']})\n\n"
+            f"📍 **Твое место:** `--` (Нет транзакций / Не участвует)\n"
+            f"📊 **Наторгованный объем:** `$0.00`\n"
+            f"🎁 **Примерная награда:** `0 USDT`\n\n"
+            f"ℹ️ Сделайте первый свап в сети `{chain_label}` для активации отслеживания.\n\n"
+            f"🔄 _Авто-обновление каждые 10 мин | {get_kyiv_time()} (Киев)_"
+        )
+
     estimated_fees = round(vol * 0.0005 + 1.80, 2)
-    
-    # Логика вердикта (Rescue signal)
-    diff_to_cutoff = rank - (max_rank - 150)
-    if diff_to_cutoff > 0:
-        verdict = f"🚨 **ОПАСНАЯ ЗОНА (ВЫЛЕТ)!**\nДокрути еще `+$350.00` объема (~$0.35 комсы), чтобы уйти от края {max_rank} места и забрать {est_reward}!"
-    else:
-        verdict = f"🟢 **В БЕЗОПАСНОСТИ!** Позиция стабильна. Ожидаемый плюс с учетом комиссий перекрывает затраты."
+    verdict = f"🟢 **В БЕЗОПАСНОСТИ!** Позиция стабильна."
 
     neighbors_text = []
     for item in data["neighbors"]:
@@ -257,18 +290,17 @@ def format_okx_card(user_name, wallet_addr, tour_key, data):
         else:
             neighbors_text.append(f"   {r}: ${v:,.2f}")
             
-    neighbors_block = "\n".join(neighbors_text)
+    neighbors_block = "\n".join(neighbors_text) if neighbors_text else "Нет данных соседей"
     
     msg_text = (
         f"🏆 **OKX Web3 Tournament Tracker**\n"
-        f"👤 **{user_name}** (`{masked}`)\n"
+        f"👤 **{user_name}** (`{masked}` | Сеть: `{chain_label}`)\n"
         f"⚡ **Турнир:** `{conf['name']}` ({conf['type']})\n\n"
         f"📍 **Твое место:** `#{rank}` из `{max_rank}`\n"
         f"📊 **Наторгованный объем:** `${vol:,.2f}`\n"
         f"🎁 **Примерная награда:** `{est_reward}`\n"
         f"⛽ **Затраты (газ + свапы):** `~${estimated_fees:.2f}`\n\n"
-        f"📐 **Зона вокруг тебя (10 выше / 10 ниже):**\n"
-        f"```\n{neighbors_block}\n```\n\n"
+        f"📐 **Зона вокруг тебя:**\n```\n{neighbors_block}\n```\n\n"
         f"💡 **Статус и Вердикт:**\n{verdict}\n\n"
         f"🔄 _Авто-обновление каждые 10 мин | {get_kyiv_time()} (Киев)_"
     )
@@ -287,8 +319,9 @@ def run_okx_autoupdate(chat_id, thread_id, msg_id, user_id, tour_key):
             u_info = USER_WALLETS.get(user_id)
             if not u_info: break
             
-            data = fetch_okx_tournament_leaderboard(tour_key, u_info["address"])
-            card_text = format_okx_card(u_info["name"], u_info["address"], tour_key, data)
+            wallet_to_check = get_user_wallet_for_tournament(user_id, tour_key)
+            data = fetch_okx_tournament_leaderboard(tour_key, wallet_to_check)
+            card_text = format_okx_card(u_info["name"], wallet_to_check, tour_key, data)
             
             markup = InlineKeyboardMarkup()
             markup.add(
@@ -317,7 +350,7 @@ def cmd_okx_start(message):
         return
         
     u_info = USER_WALLETS[user_id]
-    masked = mask_wallet(u_info["address"])
+    masked = mask_wallet(u_info["evm"])
     
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
@@ -330,7 +363,7 @@ def cmd_okx_start(message):
     bot.send_message(
         chat_id=CHAT_ID,
         message_thread_id=TOPICS["WEB3"],
-        text=f"📊 **OKX Web3 Tournament Tracker**\n\n👤 **Пользователь:** {u_info['name']}\n💳 **Кошелек:** `{masked}`\n\nВыберите активный турнир для отслеживания:",
+        text=f"📊 **OKX Web3 Tournament Tracker**\n\n👤 **Пользователь:** {u_info['name']}\n💳 **Кошелек (EVM):** `{masked}`\n\nВыберите активный турнир для отслеживания:",
         parse_mode="Markdown",
         reply_markup=markup
     )
@@ -356,7 +389,7 @@ def handle_okx_callbacks(call):
         bot.edit_message_text(
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
-            text=f"📊 **OKX Web3 Tournament Tracker**\n\n👤 **Пользователь:** {u_info['name']}\n💳 **Кошелек:** `{mask_wallet(u_info['address'])}`\n\nВыберите турнир:",
+            text=f"📊 **OKX Web3 Tournament Tracker**\n\n👤 **Пользователь:** {u_info['name']}\n💳 **Кошелек:** `{mask_wallet(u_info['evm'])}`\n\nВыберите турнир:",
             parse_mode="Markdown",
             reply_markup=markup
         )
@@ -364,8 +397,9 @@ def handle_okx_callbacks(call):
 
     if data.startswith("okx_tour_") or data.startswith("okx_refresh_"):
         tour_key = data.replace("okx_tour_", "").replace("okx_refresh_", "")
-        board_data = fetch_okx_tournament_leaderboard(tour_key, u_info["address"])
-        card_text = format_okx_card(u_info["name"], u_info["address"], tour_key, board_data)
+        wallet_to_check = get_user_wallet_for_tournament(user_id, tour_key)
+        board_data = fetch_okx_tournament_leaderboard(tour_key, wallet_to_check)
+        card_text = format_okx_card(u_info["name"], wallet_to_check, tour_key, board_data)
         
         markup = InlineKeyboardMarkup()
         markup.add(
@@ -777,7 +811,7 @@ def process_item(item_id, raw_text, link, default_topic, msg_element=None):
     send_to_topic(target_topic, ai_result, reply_markup=markup)
     time.sleep(1)
 
-# ==================== TELEGRAM CHANNELS PROMO & WEB3 MONITOR ====================
+# ==================== TELEGRAM CHANNELS PROMO & WEB3 MONITOR (ANTIFLOOD) ====================
 def fetch_telegram_channels_promos():
     channels = {
         "BINANCE": {
@@ -837,6 +871,7 @@ def fetch_telegram_channels_promos():
                     if not res: continue
                     soup = BeautifulSoup(res.text, 'html.parser')
                     messages = soup.find_all('div', class_='tgme_widget_message')
+                    # АНТИФЛУД: строго последнее 1 сообщение
                     for msg in messages[-1:]:
                         msg_id_attr = msg.get('data-post', '')
                         if not msg_id_attr: continue
@@ -856,6 +891,7 @@ def fetch_telegram_channels_promos():
                     if not res: continue
                     soup = BeautifulSoup(res.text, 'html.parser')
                     messages = soup.find_all('div', class_='tgme_widget_message')
+                    # АНТИФЛУД: строго последнее 1 сообщение
                     for msg in messages[-1:]:
                         msg_id_attr = msg.get('data-post', '')
                         if not msg_id_attr: continue
@@ -874,7 +910,7 @@ def fetch_telegram_channels_promos():
             print(f"Telegram Channels & Web3 Monitor Error: {e}")
             time.sleep(60)
 
-# ==================== NEWSMAKER MONITOR (С НАДЕЖНЫМ СКАЧИВАНИЕМ И ОТПРАВКОЙ КАРТИНОК) ====================
+# ==================== NEWSMAKER MONITOR (ANTIFLOOD + IMAGES) ====================
 def fetch_newsmaker_channel():
     print("🟢 NewsMaker Monitor started...")
     newsmaker_username = "nwsmkr" 
@@ -885,7 +921,8 @@ def fetch_newsmaker_channel():
             if res:
                 soup = BeautifulSoup(res.text, 'html.parser')
                 messages = soup.find_all('div', class_='tgme_widget_message')
-                for msg in messages[-3:]:
+                # АНТИФЛУД: строго последнее 1 сообщение
+                for msg in messages[-1:]:
                     msg_id_attr = msg.get('data-post', '')
                     if not msg_id_attr: continue
                     
@@ -1348,7 +1385,6 @@ def run_alpha_session(session_key, symbol):
                 print(f"⏹ [ALPHA DEBUG] Сессия для #{symbol} остановлена принудительно.")
                 break
 
-            # 1. Получаем актуальную цену из универсального поисковика
             ex_prices, ex_vols = fetch_token_prices_on_demand(symbol)
             current_price = 0
             if ex_prices:
@@ -1370,7 +1406,6 @@ def run_alpha_session(session_key, symbol):
             history = alpha_price_memory[session_key]
             history.append((now_ts, current_price))
             
-            # Храним историю цен за последние 10 минут
             alpha_price_memory[session_key] = [item for item in history if now_ts - item[0] <= 600]
             history = alpha_price_memory[session_key]
 
@@ -1378,7 +1413,6 @@ def run_alpha_session(session_key, symbol):
             trend_icon = "🟢"
             action_advice = "✅ Цена стабильна. Можно безопасно крутить лимитками."
 
-            # Вычисляем изменение цены за последние ~25-30 секунд
             if len(history) >= 2:
                 old_price = history[0][1]
                 for t, p in history:
@@ -1388,26 +1422,22 @@ def run_alpha_session(session_key, symbol):
                 if old_price > 0:
                     price_change = ((current_price - old_price) / old_price) * 100
 
-            # Расчет рекомендуемого диапазона ордеров (Buy / Sell)
-            # При стабильном рынке лимитки ставятся с небольшой дельтой (0.25%-0.4%), при простреле — дальше
             spread_offset = 0.003  # 0.3% базовая разница
             if abs(price_change) >= 1.0:
-                spread_offset = 0.006  # При импульсе шире зазор
+                spread_offset = 0.006
 
             suggested_buy = current_price * (1 - spread_offset)
             suggested_sell = current_price * (1 + spread_offset)
 
-            # Форматирование цен с сохранением точных знаков
             buy_str = f"{suggested_buy:.5f}".rstrip('0').rstrip('.')
             sell_str = f"{suggested_sell:.5f}".rstrip('0').rstrip('.')
 
-            # Порог волатильности подняли до 1.0%
             if price_change <= -1.0:
                 trend_icon = "🩸"
-                action_advice = "⚠️ **ВНИМАНИЕ: ДАМП!** Монету резко укатывает вниз. Обратный ордер на продажу может зависнуть — притормози открут или переставь лимитку ближе!"
+                action_advice = "⚠️ **ВНИМАНИЕ: ДАМП!** Монету резко укатывает вниз. Обратный ордер на продажу может зависнуть — притормози открут!"
             elif price_change >= 1.0:
                 trend_icon = "🚀"
-                action_advice = "🔥 **ВНИМАНИЕ: ПАМП!** Резкий импульс вверх. Покупать по текущим рискованно, жди отката или скальпь импульс."
+                action_advice = "🔥 **ВНИМАНИЕ: ПАМП!** Резкий импульс вверх. Покупать по текущим рискованно, жди отката."
             elif price_change < -0.4:
                 trend_icon = "📉"
                 action_advice = "📉 Плавное сползание. Будь аккуратен с продажей."
@@ -1431,7 +1461,6 @@ def run_alpha_session(session_key, symbol):
             
         time.sleep(30)
 
-# Перехватчик команд для запусков в любых топиках
 @bot.message_handler(func=lambda msg: msg.text and msg.text.lower().startswith(('/start', '/run', '/alpha')))
 def cmd_alpha_start_alt(message):
     text = message.text.strip()
@@ -1577,7 +1606,7 @@ def handle_chat_messages(message):
 
 # ==================== MAIN START ====================
 if __name__ == "__main__":
-    print("🚀 Bot starting with Binance Alpha, Vision AI, NewsMaker & OKX Web3 Tournament Tracker...")
+    print("🚀 Bot starting with Multichain Wallets, Dimas Integration, Gate Fix & Anti-Flood...")
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     threading.Thread(target=fetch_newsmaker_channel, daemon=True).start()

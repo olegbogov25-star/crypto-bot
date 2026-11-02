@@ -1104,7 +1104,7 @@ def monitor_funding():
             print(f"❌ Funding Monitor Error: {e}")
         time.sleep(1800)
 
-# ==================== BINANCE ALPHA ЕЖЕМИНУТНЫЙ ПРЕДИКТИВНЫЙ МОНИТОРИНГ ====================
+# ==================== BINANCE ALPHA ПРЕДИКТИВНЫЙ МОНИТОРИНГ (каждые 30 сек) ====================
 def run_alpha_session(session_key, symbol):
     print(f"🚀 [ALPHA DEBUG] Поток запущен для #{symbol} (ключ: {session_key})")
     
@@ -1112,7 +1112,7 @@ def run_alpha_session(session_key, symbol):
         bot.send_message(
             chat_id=CHAT_ID, 
             message_thread_id=TOPICS["ALPHA"], 
-            text=f"🚀 **Binance Alpha сессия запущена для #{symbol}**\nПредиктивный сканер по памяти цен активен.", 
+            text=f"🚀 **Binance Alpha сессия запущена для #{symbol}**\nПредиктивный сканер (30 сек, порог 0.5%) активен.", 
             parse_mode="Markdown"
         )
     except Exception as e:
@@ -1140,10 +1140,10 @@ def run_alpha_session(session_key, symbol):
                 bot.send_message(
                     chat_id=CHAT_ID, 
                     message_thread_id=TOPICS["ALPHA"], 
-                    text=f"🔍 **Alpha | #{symbol}**\n⚠️ Не удалось получить цену с бирж. Повтор через минуту...", 
+                    text=f"🔍 **Alpha | #{symbol}**\n⚠️ Не удалось получить цену с бирж. Повтор через 30 сек...", 
                     parse_mode="Markdown"
                 )
-                time.sleep(60)
+                time.sleep(30)
                 continue
 
             now_ts = time.time()
@@ -1158,29 +1158,29 @@ def run_alpha_session(session_key, symbol):
             trend_icon = "🟢"
             action_advice = "✅ Цена стабильна. Можно безопасно крутить лимитками."
 
-            # Вычисляем изменение цены за последнюю минуту
+            # Вычисляем изменение цены за последние ~30-60 секунд
             if len(history) >= 2:
                 old_price = history[0][1]
                 for t, p in history:
-                    if now_ts - t >= 50:
+                    if now_ts - t >= 25:
                         old_price = p
                         break
                 if old_price > 0:
                     price_change = ((current_price - old_price) / old_price) * 100
 
-            # Анализ под стратегию лимитного открута
-            if price_change <= -0.25:
+            # Порог волатильности 0.5%
+            if price_change <= -0.5:
                 trend_icon = "🩸"
                 action_advice = "⚠️ **ВНИМАНИЕ: ДАМП!** Монету резко укатывает вниз. Обратный ордер на продажу может зависнуть — притормози открут или переставь лимитку ближе!"
-            elif price_change >= 0.25:
+            elif price_change >= 0.5:
                 trend_icon = "🚀"
-                action_advice = "🔥 **ВНИМАНИЕ: ПАМП!** Резкий импульс вверх. Покупать по текущим рискованно, жди отката."
-            elif price_change < -0.1:
+                action_advice = "🔥 **ВНИМАНИЕ: ПАМП!** Резкий импульс вверх. Покупать по текущим рискованно, жди отката или скальпь импульс."
+            elif price_change < -0.2:
                 trend_icon = "📉"
                 action_advice = "📉 Плавное сползание. Будь аккуратен с продажей."
 
             msg_txt = (
-                f"{trend_icon} **Alpha | #{symbol}** | `${current_price}` (`{price_change:+.2f}%` за мин)\n\n"
+                f"{trend_icon} **Alpha | #{symbol}** | `${current_price}` (`{price_change:+.2f}%`)\n\n"
                 f"🎯 **Совет по откруту:**\n_{action_advice}_\n\n"
                 f"🕒 _{get_kyiv_time()}_"
             )
@@ -1195,7 +1195,7 @@ def run_alpha_session(session_key, symbol):
         except Exception as err:
             print(f"❌ [ALPHA CRITICAL ERROR]: {err}")
             
-        time.sleep(60)
+        time.sleep(30)
 
 # Перехватчик команд для запусков в любых топиках
 @bot.message_handler(func=lambda msg: msg.text and msg.text.lower().startswith(('/start', '/run', '/alpha')))
@@ -1210,7 +1210,7 @@ def cmd_alpha_start_alt(message):
         threading.Thread(target=run_alpha_session, args=(session_key, sym), daemon=True).start()
         
         try:
-            bot.reply_to(message, f"✅ Ежеминутный предиктивный сканер для **#{sym}** запущен в топике Alpha!", parse_mode="Markdown")
+            bot.reply_to(message, f"✅ Предиктивный сканер (30 сек) для **#{sym}** запущен в топике Alpha!", parse_mode="Markdown")
         except: pass
         return
     
@@ -1254,11 +1254,11 @@ def handle_chart_screenshots(message):
         base64_image = base64.b64encode(downloaded_file).decode('utf-8')
         
         prompt = """
-Ты — ассистент трейдера, который откручивает Binance Alpha лимитными ордерами. Пользователь скинул скриншот графика/стакана.
-Дай СТРОГО ультра-краткий ответ в 3 строки (без воды):
-1. 📊 **Цена vs Ордер:** (где цена относительно твоей лимитки)
-2. ⚠️ **Риск уката:** (есть ли риск резкого дампа/пампа, который сорвет обратную продажу)
-3. 🎯 **Вердикт:** (крутить дальше / ждать отката / отменять и переставлять ордер)
+Проанализируй этот скриншот графика и стакана для торговой сессии Binance Alpha.
+Дай ультра-краткий ответ строго по пунктам (без лишней воды):
+1. 📊 **Цена vs Ордер:** (где цена относительно лимитки)
+2. ⚠️ **Риск уката:** (риск резких движений)
+3. 🎯 **Вердикт:** (крутить дальше / ждать отката / переставлять ордер)
 """
 
         payload = {

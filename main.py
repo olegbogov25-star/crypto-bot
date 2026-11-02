@@ -1104,7 +1104,7 @@ def monitor_funding():
             print(f"❌ Funding Monitor Error: {e}")
         time.sleep(1800)
 
-# ==================== BINANCE ALPHA ПРЕДИКТИВНЫЙ МОНИТОРИНГ (каждые 30 сек) ====================
+# ==================== BINANCE ALPHA ПРЕДИКТИВНЫЙ МОНИТОРИНГ (30 сек, порог 1.0% + расчет диапазона) ====================
 def run_alpha_session(session_key, symbol):
     print(f"🚀 [ALPHA DEBUG] Поток запущен для #{symbol} (ключ: {session_key})")
     
@@ -1112,7 +1112,7 @@ def run_alpha_session(session_key, symbol):
         bot.send_message(
             chat_id=CHAT_ID, 
             message_thread_id=TOPICS["ALPHA"], 
-            text=f"🚀 **Binance Alpha сессия запущена для #{symbol}**\nПредиктивный сканер (30 сек, порог 0.5%) активен.", 
+            text=f"🚀 **Binance Alpha сессия запущена для #{symbol}**\nПредиктивный сканер (30 сек, порог 1.0%) и расчет диапазона цен активен.", 
             parse_mode="Markdown"
         )
     except Exception as e:
@@ -1158,7 +1158,7 @@ def run_alpha_session(session_key, symbol):
             trend_icon = "🟢"
             action_advice = "✅ Цена стабильна. Можно безопасно крутить лимитками."
 
-            # Вычисляем изменение цены за последние ~30-60 секунд
+            # Вычисляем изменение цены за последние ~25-30 секунд
             if len(history) >= 2:
                 old_price = history[0][1]
                 for t, p in history:
@@ -1168,19 +1168,33 @@ def run_alpha_session(session_key, symbol):
                 if old_price > 0:
                     price_change = ((current_price - old_price) / old_price) * 100
 
-            # Порог волатильности 0.5%
-            if price_change <= -0.5:
+            # Расчет рекомендуемого диапазона ордеров (Buy / Sell)
+            # При стабильном рынке лимитки ставятся с небольшой дельтой (0.25%-0.4%), при простреле — дальше
+            spread_offset = 0.003  # 0.3% базовая разница
+            if abs(price_change) >= 1.0:
+                spread_offset = 0.006  # При импульсе шире зазор
+
+            suggested_buy = current_price * (1 - spread_offset)
+            suggested_sell = current_price * (1 + spread_offset)
+
+            # Форматирование цен с сохранением точных знаков
+            buy_str = f"{suggested_buy:.5f}".rstrip('0').rstrip('.')
+            sell_str = f"{suggested_sell:.5f}".rstrip('0').rstrip('.')
+
+            # Порог волатильности подняли до 1.0%
+            if price_change <= -1.0:
                 trend_icon = "🩸"
                 action_advice = "⚠️ **ВНИМАНИЕ: ДАМП!** Монету резко укатывает вниз. Обратный ордер на продажу может зависнуть — притормози открут или переставь лимитку ближе!"
-            elif price_change >= 0.5:
+            elif price_change >= 1.0:
                 trend_icon = "🚀"
                 action_advice = "🔥 **ВНИМАНИЕ: ПАМП!** Резкий импульс вверх. Покупать по текущим рискованно, жди отката или скальпь импульс."
-            elif price_change < -0.2:
+            elif price_change < -0.4:
                 trend_icon = "📉"
                 action_advice = "📉 Плавное сползание. Будь аккуратен с продажей."
 
             msg_txt = (
                 f"{trend_icon} **Alpha | #{symbol}** | `${current_price}` (`{price_change:+.2f}%`)\n\n"
+                f"📐 **Диапазон ордеров:** Buy `~${buy_str}` | Sell `~${sell_str}`\n"
                 f"🎯 **Совет по откруту:**\n_{action_advice}_\n\n"
                 f"🕒 _{get_kyiv_time()}_"
             )
@@ -1210,7 +1224,7 @@ def cmd_alpha_start_alt(message):
         threading.Thread(target=run_alpha_session, args=(session_key, sym), daemon=True).start()
         
         try:
-            bot.reply_to(message, f"✅ Предиктивный сканер (30 сек) для **#{sym}** запущен в топике Alpha!", parse_mode="Markdown")
+            bot.reply_to(message, f"✅ Предиктивный сканер (30 сек, порог 1.0%) для **#{sym}** запущен в топике Alpha!", parse_mode="Markdown")
         except: pass
         return
     

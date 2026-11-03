@@ -198,10 +198,8 @@ def fetch_token_prices_on_demand(sym):
 
     return ex_prices, ex_vols
 
-# ==================== OKX WEB3 TOURNAMENT ENGINE (SMART MULTICHAIN ROUTING) ====================
+# ==================== OKX WEB3 TOURNAMENT ENGINE (АКТУАЛЬНЫЕ ТУРНИРЫ) ====================
 TOURNAMENTS_CONFIG = {
-    "axis2": {"name": "Axis Robotics II", "type": "X Launch", "chain": "evm", "max_rank": 8000, "est_reward": "$45.00"},
-    "zig": {"name": "ZIG Finance", "type": "X Launch", "chain": "evm", "max_rank": 8000, "est_reward": "$35.00"},
     "solana": {"name": "Solana Eco", "type": "X Trade", "chain": "solana", "max_rank": 1200, "est_reward": "$60.00"},
     "tech": {"name": "Технологический Буст", "type": "X Trade", "chain": "evm", "max_rank": 1000, "est_reward": "$50.00"}
 }
@@ -210,7 +208,7 @@ def get_user_wallet_for_tournament(user_id, t_id):
     """Умный выбор правильного адреса кошелька в зависимости от сети турнира (Solana или EVM)"""
     u_info = USER_WALLETS.get(user_id)
     if not u_info: return ""
-    conf = TOURNAMENTS_CONFIG.get(t_id, TOURNAMENTS_CONFIG["axis2"])
+    conf = TOURNAMENTS_CONFIG.get(t_id, list(TOURNAMENTS_CONFIG.values())[0])
     chain = conf.get("chain", "evm")
     
     if chain == "solana" and u_info.get("solana"):
@@ -219,7 +217,7 @@ def get_user_wallet_for_tournament(user_id, t_id):
 
 def fetch_okx_tournament_leaderboard(t_id, target_wallet):
     """Проверка реального объема по кошельку. Если баланс/объем 0 или адрес не задан, возвращаем честный статус."""
-    conf = TOURNAMENTS_CONFIG.get(t_id, TOURNAMENTS_CONFIG["axis2"])
+    conf = TOURNAMENTS_CONFIG.get(t_id, list(TOURNAMENTS_CONFIG.values())[0])
     max_r = conf["max_rank"]
     
     if not target_wallet:
@@ -258,7 +256,7 @@ def fetch_okx_tournament_leaderboard(t_id, target_wallet):
     }
 
 def format_okx_card(user_name, wallet_addr, tour_key, data):
-    conf = TOURNAMENTS_CONFIG.get(tour_key, TOURNAMENTS_CONFIG["axis2"])
+    conf = TOURNAMENTS_CONFIG.get(tour_key, list(TOURNAMENTS_CONFIG.values())[0])
     rank = data["user_rank"]
     vol = data["user_vol"]
     max_rank = data["max_rank"]
@@ -341,6 +339,12 @@ def run_okx_autoupdate(chat_id, thread_id, msg_id, user_id, tour_key):
             
         time.sleep(600)
 
+def get_tournaments_keyboard():
+    markup = InlineKeyboardMarkup(row_width=2)
+    for key, conf in TOURNAMENTS_CONFIG.items():
+        markup.add(InlineKeyboardButton(f"🏆 {conf['name']}", callback_data=f"okx_tour_{key}"))
+    return markup
+
 # ==================== TELEGRAM HANDLERS FOR WEB3 TOURNAMENTS ====================
 @bot.message_handler(commands=['okx', 'boost', 'web3'])
 def cmd_okx_start(message):
@@ -352,20 +356,12 @@ def cmd_okx_start(message):
     u_info = USER_WALLETS[user_id]
     masked = mask_wallet(u_info["evm"])
     
-    markup = InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        InlineKeyboardButton(" Axis Robotics II", callback_data="okx_tour_axis2"),
-        InlineKeyboardButton(" ZIG Finance", callback_data="okx_tour_zig"),
-        InlineKeyboardButton(" Solana Eco", callback_data="okx_tour_solana"),
-        InlineKeyboardButton(" Техно Буст", callback_data="okx_tour_tech")
-    )
-    
     bot.send_message(
         chat_id=CHAT_ID,
         message_thread_id=TOPICS["WEB3"],
         text=f"📊 **OKX Web3 Tournament Tracker**\n\n👤 **Пользователь:** {u_info['name']}\n💳 **Кошелек (EVM):** `{masked}`\n\nВыберите активный турнир для отслеживания:",
         parse_mode="Markdown",
-        reply_markup=markup
+        reply_markup=get_tournaments_keyboard()
     )
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('okx_'))
@@ -379,24 +375,20 @@ def handle_okx_callbacks(call):
     u_info = USER_WALLETS[user_id]
     
     if data == "okx_select_menu":
-        markup = InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            InlineKeyboardButton(" Axis Robotics II", callback_data="okx_tour_axis2"),
-            InlineKeyboardButton(" ZIG Finance", callback_data="okx_tour_zig"),
-            InlineKeyboardButton(" Solana Eco", callback_data="okx_tour_solana"),
-            InlineKeyboardButton(" Техно Буст", callback_data="okx_tour_tech")
-        )
         bot.edit_message_text(
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
             text=f"📊 **OKX Web3 Tournament Tracker**\n\n👤 **Пользователь:** {u_info['name']}\n💳 **Кошелек:** `{mask_wallet(u_info['evm'])}`\n\nВыберите турнир:",
             parse_mode="Markdown",
-            reply_markup=markup
+            reply_markup=get_tournaments_keyboard()
         )
         return
 
     if data.startswith("okx_tour_") or data.startswith("okx_refresh_"):
         tour_key = data.replace("okx_tour_", "").replace("okx_refresh_", "")
+        if tour_key not in TOURNAMENTS_CONFIG:
+            tour_key = list(TOURNAMENTS_CONFIG.keys())[0]
+            
         wallet_to_check = get_user_wallet_for_tournament(user_id, tour_key)
         board_data = fetch_okx_tournament_leaderboard(tour_key, wallet_to_check)
         card_text = format_okx_card(u_info["name"], wallet_to_check, tour_key, board_data)
@@ -1606,7 +1598,7 @@ def handle_chat_messages(message):
 
 # ==================== MAIN START ====================
 if __name__ == "__main__":
-    print("🚀 Bot starting with Multichain Wallets, Dimas Integration, Gate Fix & Anti-Flood...")
+    print("🚀 Bot starting with Clean OKX Tournaments, Multichain Wallets, Gate Fix & Anti-Flood...")
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     threading.Thread(target=fetch_newsmaker_channel, daemon=True).start()

@@ -1353,7 +1353,7 @@ def monitor_funding():
             print(f"❌ Funding Monitor Error: {e}")
         time.sleep(1800)
 
-# ==================== BINANCE ALPHA ПРЕДИКТИВНЫЙ МОНИТОРИНГ (30 сек, порог 1.0% + расчет диапазона) ====================
+# ==================== BINANCE ALPHA ПРЕДИКТИВНЫЙ МОНИТОРИНГ (30 сек, порог 0.4% + расчет диапазона) ====================
 def run_alpha_session(session_key, symbol):
     print(f"🚀 [ALPHA DEBUG] Поток запущен для #{symbol} (ключ: {session_key})")
     
@@ -1361,7 +1361,7 @@ def run_alpha_session(session_key, symbol):
         bot.send_message(
             chat_id=CHAT_ID, 
             message_thread_id=TOPICS["ALPHA"], 
-            text=f"🚀 **Binance Alpha сессия запущена для #{symbol}**\nПредиктивный сканер (30 сек, порог 1.0%) и расчет диапазона цен активен.", 
+            text=f"🚀 **Binance Alpha сессия запущена для #{symbol}**\nПредиктивный сканер (30 сек, порог 0.4%) и расчет диапазона цен активен.", 
             parse_mode="Markdown"
         )
     except Exception as e:
@@ -1415,7 +1415,7 @@ def run_alpha_session(session_key, symbol):
                     price_change = ((current_price - old_price) / old_price) * 100
 
             spread_offset = 0.003  # 0.3% базовая разница
-            if abs(price_change) >= 1.0:
+            if abs(price_change) >= 0.4:
                 spread_offset = 0.006
 
             suggested_buy = current_price * (1 - spread_offset)
@@ -1424,15 +1424,12 @@ def run_alpha_session(session_key, symbol):
             buy_str = f"{suggested_buy:.5f}".rstrip('0').rstrip('.')
             sell_str = f"{suggested_sell:.5f}".rstrip('0').rstrip('.')
 
-            if price_change <= -1.0:
+            if price_change <= -0.4:
                 trend_icon = "🩸"
-                action_advice = "⚠️ **ВНИМАНИЕ: ДАМП!** Монету резко укатывает вниз. Обратный ордер на продажу может зависнуть — притормози открут!"
-            elif price_change >= 1.0:
+                action_advice = "⚠️ **ВНИМАНИЕ: ДАМП / СПОЛЗАНИЕ!** Монету плавно или резко укатывает вниз. Обратный ордер на продажу может зависнуть — притормози открут!"
+            elif price_change >= 0.4:
                 trend_icon = "🚀"
-                action_advice = "🔥 **ВНИМАНИЕ: ПАМП!** Резкий импульс вверх. Покупать по текущим рискованно, жди отката."
-            elif price_change < -0.4:
-                trend_icon = "📉"
-                action_advice = "📉 Плавное сползание. Будь аккуратен с продажей."
+                action_advice = "🔥 **ВНИМАНИЕ: ПАМП / РАЗГОН!** Заметный импульс вверх. Покупать по текущим рискованно, жди отката."
 
             msg_txt = (
                 f"{trend_icon} **Alpha | #{symbol}** | `${current_price}` (`{price_change:+.2f}%`)\n\n"
@@ -1465,7 +1462,7 @@ def cmd_alpha_start_alt(message):
         threading.Thread(target=run_alpha_session, args=(session_key, sym), daemon=True).start()
         
         try:
-            bot.reply_to(message, f"✅ Предиктивный сканер (30 сек, порог 1.0%) для **#{sym}** запущен в топике Alpha!", parse_mode="Markdown")
+            bot.reply_to(message, f"✅ Предиктивный сканер (30 сек, порог 0.4%) для **#{sym}** запущен в топике Alpha!", parse_mode="Markdown")
         except: pass
         return
     
@@ -1598,7 +1595,7 @@ def handle_chat_messages(message):
 
 # ==================== MAIN START ====================
 if __name__ == "__main__":
-    print("🚀 Bot starting with Clean OKX Tournaments, Multichain Wallets, Gate Fix & Anti-Flood...")
+    print("🚀 Bot starting with Threshold 0.4%, Clean Tournaments, Multichain Wallets & Anti-Flood...")
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     threading.Thread(target=fetch_newsmaker_channel, daemon=True).start()

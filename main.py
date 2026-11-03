@@ -1204,7 +1204,7 @@ def format_countdown(target_timestamp):
 # ==================== SPREAD MONITOR (ANTI-FLOOD & CONVERGENCE CHART) ====================
 def monitor_spread():
     global active_spreads, price_history_long, price_history_short, sent_alerts_cache
-    print("🟢 Spread Monitor started (Threshold: $100k volume, Spread >= 7.0%, Anti-Flood enabled)")
+    print("🟢 Spread Monitor started (Threshold: $50k volume, Spread >= 7.0%, Anti-Flood enabled)")
     while True:
         try:
             prices, volumes, fundings, _ = fetch_futures_data()
@@ -1212,7 +1212,7 @@ def monitor_spread():
 
             for sym, ex_data in prices.items():
                 sym_vols = volumes.get(sym, {})
-                valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 100_000}
+                valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 50_000}
 
                 if len(valid_ex_data) < 2:
                     continue
@@ -1319,7 +1319,7 @@ def monitor_funding():
 
             for sym, ex_funds in fundings.items():
                 sym_vols = volumes.get(sym, {})
-                valid_ex_funds = {ex: rate for ex, rate in ex_funds.items() if sym_vols.get(ex, 0) >= 100_000}
+                valid_ex_funds = {ex: rate for ex, rate in ex_funds.items() if sym_vols.get(ex, 0) >= 50_000}
                 if len(valid_ex_funds) < 2: continue
 
                 max_ex = max(valid_ex_funds, key=valid_ex_funds.get)
@@ -1595,7 +1595,7 @@ def handle_chat_messages(message):
 
 # ==================== MAIN START ====================
 if __name__ == "__main__":
-    print("🚀 Bot starting with Gate.io fixed, Bybit cleaned, Threshold 0.3% & Anti-Flood...")
+    print("🚀 Bot starting with Volume Threshold $50k, 0.3% Scanner & Gate.io/Bybit Fixed...")
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     threading.Thread(target=fetch_newsmaker_channel, daemon=True).start()

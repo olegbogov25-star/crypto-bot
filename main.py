@@ -757,7 +757,7 @@ def extract_official_web_link(msg_element, fallback_link):
         buttons = msg_element.find_all('a', class_='tgme_widget_message_inline_button')
         for btn in buttons:
             href = btn.get('href', '')
-            if href and any(domain in href.lower() for domain in ['binance.com', 'bybit.com', 'okx.com', 'gate.io', 'bitget.com', 'mexc.com', 'bingx.com', 'kucoin.com', 'kraken.com']):
+            if href and any(domain in href.lower() for domain in ['binance.com', 'bybit.com', 'okx.com', 'gate.io', 'gate.com', 'bitget.com', 'mexc.com', 'bingx.com', 'kucoin.com', 'kraken.com']):
                 return href
         
         text_elem = msg_element.find('div', class_='tgme_widget_message_text')
@@ -765,7 +765,7 @@ def extract_official_web_link(msg_element, fallback_link):
             links = text_elem.find_all('a', href=True)
             for a in links:
                 href = a['href']
-                if href and any(domain in href.lower() for domain in ['binance.com', 'bybit.com', 'okx.com', 'gate.io', 'bitget.com', 'mexc.com', 'bingx.com', 'kucoin.com', 'kraken.com']):
+                if href and any(domain in href.lower() for domain in ['binance.com', 'bybit.com', 'okx.com', 'gate.io', 'gate.com', 'bitget.com', 'mexc.com', 'bingx.com', 'kucoin.com', 'kraken.com']):
                     return href
     except: pass
     return fallback_link
@@ -817,7 +817,7 @@ def fetch_telegram_channels_promos():
             "topic": "OKX"
         },
         "BYBIT": {
-            "channels": ["bybitukrainian", "bybitukrainiannews", "Bybit_CIS", "BybitAnnouncements"],
+            "channels": ["bybitukrainian", "Bybit_CIS", "BybitAnnouncements"],
             "web3_channels": ["bybit_web3"],
             "topic": "BYBIT"
         },
@@ -837,7 +837,7 @@ def fetch_telegram_channels_promos():
             "topic": "MEXC"
         },
         "GATE": {
-            "channels": ["GateioOfficialNews", "GateCom_EN", "Gate_Ukrainian", "Gateio_NewList_News"],
+            "channels": ["GateOfficialNews", "Gate_Ukrainian", "GateCom_EN", "Gateio_NewList_News"],
             "web3_channels": [],
             "topic": "GATE"
         },
@@ -1595,7 +1595,7 @@ def handle_chat_messages(message):
 
 # ==================== MAIN START ====================
 if __name__ == "__main__":
-    print("🚀 Bot starting with Threshold 0.3%, Clean Tournaments, Multichain Wallets & Anti-Flood...")
+    print("🚀 Bot starting with Gate.io fixed, Bybit cleaned, Threshold 0.3% & Anti-Flood...")
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     threading.Thread(target=fetch_newsmaker_channel, daemon=True).start()

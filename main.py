@@ -470,7 +470,7 @@ def cmd_scan_wallets(message):
     
     try:
         # Вызываем правильную функцию из scanner.py
-        scanner.run_multichain_leaderboard()
+        scanner.send_multichain_leaderboard()
     except Exception as e:
         bot.reply_to(message, f"❌ Ошибка при сканировании: {e}")
 
@@ -1617,7 +1617,21 @@ def handle_chat_messages(message):
             return
         except: pass
 
-    clean_query = re.sub(r'[^a-zA-Z]', '', text)
+    # Проверяем запрос вида "3 btc", "125000 kor" или просто тикер "btc"
+    match_qty = re.search(r'^([\d\s\.,]+)\s+([a-zA-Z]+)$', text)
+    if match_qty:
+        try:
+            qty_raw = match_qty.group(1).replace(' ', '').replace(',', '.')
+            quantity = float(qty_raw)
+            token_query = match_qty.group(2)
+        except:
+            quantity = 1.0
+            token_query = text
+    else:
+        quantity = 1.0
+        token_query = text
+
+    clean_query = re.sub(r'[^a-zA-Z]', '', token_query)
     if not clean_query:
         return
 
@@ -1629,10 +1643,12 @@ def handle_chat_messages(message):
         bot.reply_to(message, f"⚠️ Монета **#{sym}** не найдена на активных фьючерсах и споте бирж.", parse_mode="Markdown")
         return
     
-    lines = [f"🪙 **Монета: #{sym}**\n"]
+    lines = [f"🪙 **Монета: #{sym}** (Кол-во: `{quantity:,.4f}` из запроса)\n"]
     for ex, p in sorted(sym_prices.items(), key=lambda x: x[1]):
         v = format_volume(sym_vols.get(ex, 0))
-        lines.append(f"🔹 [{ex}]: `${p}` ({v})")
+        total_cost = p * quantity
+        lines.append(f"🔹 [{ex}]: `${p}` | Общая стоимость: **`${total_cost:,.2f}`** ({v})")
+        
     bot.reply_to(message, "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ import pytz
 import requests
 import feedparser
 import telebot
+import scanner
 from bs4 import BeautifulSoup
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from flask import Flask, render_template_string, request, jsonify
@@ -185,7 +186,7 @@ def fetch_token_prices_on_demand(sym):
 
     return ex_prices, ex_vols
 
-# ==================== OKX WEB3 TOURNAMENT ENGINE (ФИКСИРОВАННЫЕ X-TRADE & X-LAUNCH + API) ====================
+# ==================== OKX WEB3 TOURNAMENT ENGINE ====================
 def fetch_dynamic_okx_tournaments():
     tournaments = {
         "akedo": {"name": "Akedo", "type": "X Trade", "chain": "evm", "max_rank": 3000, "est_reward": "320 USDT"},
@@ -456,6 +457,30 @@ def handle_okx_callbacks(call):
         try:
             bot.answer_callback_query(call.id, "✅ Данные турнира обновлены!")
         except Exception: pass
+
+# ==================== /SCAN COMMAND (МУЛЬТИЧЕЙН СКАНЕР КОШЕЛЬКОВ) ====================
+@bot.message_handler(commands=['scan'])
+def cmd_scan_wallets(message):
+    user_id = message.from_user.id
+    if user_id not in USER_WALLETS:
+        bot.reply_to(message, "⚠️ Ваш Telegram ID не привязан к списку кошельков сканера.")
+        return
+        
+    bot.reply_to(message, "🔍 Запускаю мультичейн-сканирование 10 сетей... Пожалуйста, подождите.")
+    
+    try:
+        # Вызываем функцию сканирования из scanner.py
+        report_text = scanner.run_scan_for_user(user_id)
+        
+        # Отправляем отчет в топик WEB3 (ID 5190)
+        bot.send_message(
+            chat_id=CHAT_ID,
+            message_thread_id=TOPICS["WEB3"],
+            text=report_text,
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка при сканировании: {e}")
 
 # ==================== HEALTHCHECK & WEB APP CHART SERVER ====================
 @app.route('/')

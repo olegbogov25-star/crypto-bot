@@ -186,213 +186,92 @@ def fetch_token_prices_on_demand(sym):
 
     return ex_prices, ex_vols
 
-# ==================== OKX WEB3 TOURNAMENT ENGINE ====================
-def fetch_dynamic_okx_tournaments():
-    tournaments = {
-        "akedo": {"name": "Akedo", "type": "X Trade", "chain": "evm", "max_rank": 3000, "est_reward": "320 USDT"},
-        "solana": {"name": "Solana Eco", "type": "X Trade", "chain": "solana", "max_rank": 3000, "est_reward": "$60.00"},
-        "tech": {"name": "Технологический Буст", "type": "X Trade", "chain": "evm", "max_rank": 3000, "est_reward": "$50.00"}
-    }
-    return tournaments
+# ==================== OKX WEB3 TOURNAMENT ENGINE (API-FIRST) ====================
+OKX_TOURNAMENTS = {
+    "bsc": {"id": "akedo", "name": "Akedo (BSC / Aketo)", "max_rank": 3000, "est_reward": "320 USDT"},
+    "xlayer": {"id": "tech", "name": "Технологический Буст (X Layer)", "max_rank": 3000, "est_reward": "$50.00"},
+    "solana": {"id": "solana", "name": "Solana Eco (Solana)", "max_rank": 3000, "est_reward": "$60.00"}
+}
 
-def get_user_wallet_for_tournament(user_id, t_id):
-    u_info = USER_WALLETS.get(user_id)
-    if not u_info: return ""
-    tournaments = fetch_dynamic_okx_tournaments()
-    conf = tournaments.get(t_id, list(tournaments.values())[0])
-    chain = conf.get("chain", "evm")
-    
-    if chain == "solana" and u_info.get("solana"):
-        return u_info["solana"]
-    return u_info.get("evm", "")
-
-def fetch_okx_tournament_leaderboard(t_id, target_wallet):
-    tournaments = fetch_dynamic_okx_tournaments()
-    conf = tournaments.get(t_id, list(tournaments.values())[0])
-    max_r = conf["max_rank"]
-    
-    if not target_wallet:
-        return {
-            "user_rank": "--",
-            "user_vol": 0.0,
-            "max_rank": max_r,
-            "est_reward": conf["est_reward"],
-            "neighbors": [],
-            "participating": False
-        }
-
-    user_rank = "--"
-    user_vol = 0.0
-    neighbors = []
-
-    try:
-        api_url = f"https://www.okx.com/priapi/v1/web3/growth/campaign/leaderboard?campaignId={t_id}&walletAddress={target_wallet}"
-        res = secure_request(api_url, timeout=6)
-        if res and res.status_code == 200:
-            data = res.json().get("data", {})
-            user_info_raw = data.get("userInfo", {})
-            if user_info_raw:
-                user_rank = int(user_info_raw.get("rank", 0) or 0)
-                user_vol = float(user_info_raw.get("volume", 0) or 0)
-            
-            raw_neighbors = data.get("list", [])
-            if raw_neighbors:
-                for item in raw_neighbors:
-                    neighbors.append({
-                        "rank": int(item.get("rank", 0)),
-                        "volume": float(item.get("volume", 0)),
-                        "wallet": item.get("walletAddress", "")
-                    })
-    except Exception as e:
-        print(f"⚠️ OKX API Leaderboard fetch error: {e}")
-
-    if user_rank != "--" and isinstance(user_rank, int):
-        found_target = any(n["rank"] == user_rank for n in neighbors)
-        if not found_target:
-            neighbors.append({"rank": user_rank, "volume": user_vol, "wallet": target_wallet})
-        
-        neighbors = sorted(neighbors, key=lambda x: x["rank"])
-        filtered_neighbors = [n for n in neighbors if user_rank - 5 <= n["rank"] <= user_rank + 5]
-        if filtered_neighbors:
-            neighbors = filtered_neighbors
-
-    if user_rank == "--" or not neighbors:
-        user_rank = 24
-        user_vol = 103.15
-        dummy_wallets = [
-            "0x9f1a...2b3c", "0x3e4d...8a9f", "0x1c2b...7e6d", "0x8f9a...4b2c",
-            "0x5c6d...1a2b", target_wallet, "0x7a8b...3c4d", "0x2d1c...9f8e",
-            "0x6e5f...2b1a", "0x4b3a...7d8c", "0xdcba...ef01"
-        ]
-        for idx, r in enumerate(range(user_rank - 5, user_rank + 6)):
-            if r < 1: continue
-            if r == user_rank:
-                neighbors.append({"rank": r, "volume": user_vol, "wallet": target_wallet})
-            else:
-                fake_vol = round(user_vol + (user_rank - r) * 35.5, 2)
-                if fake_vol < 10.0: fake_vol = 15.0
-                neighbors.append({"rank": r, "volume": fake_vol, "wallet": dummy_wallets[idx % len(dummy_wallets)]})
-
-    return {
-        "user_rank": user_rank,
-        "user_vol": user_vol,
-        "max_rank": max_r,
-        "est_reward": conf["est_reward"],
-        "neighbors": neighbors,
-        "participating": True
-    }
-
-def format_okx_card(user_name, wallet_addr, tour_key, data):
-    tournaments = fetch_dynamic_okx_tournaments()
-    conf = tournaments.get(tour_key, list(tournaments.values())[0])
-    rank = data["user_rank"]
-    vol = data["user_vol"]
-    max_rank = data["max_rank"]
-    est_reward = data["est_reward"]
+def format_okx_tournament_card(user_name, wallet_addr, tour_conf, api_data):
+    conf_name = tour_conf["name"]
+    max_rank = tour_conf["max_rank"]
+    est_reward = tour_conf["est_reward"]
     masked = mask_wallet(wallet_addr)
-    chain_label = "Solana" if conf.get("chain") == "solana" else "EVM"
     
-    if not data["participating"] or rank == "--":
+    user_info = api_data.get("userInfo", {})
+    rank = user_info.get("rank", "--")
+    volume = float(user_info.get("volume", 0) or 0)
+    
+    if not user_info or rank == "--" or rank == 0:
         return (
             f"🏆 **OKX Web3 Tournament Tracker**\n"
-            f"👤 **{user_name}** (`{masked}` | Сеть: `{chain_label}`)\n"
-            f"⚡ **Турнир:** `{conf['name']}` ({conf['type']})\n\n"
+            f"👤 **{user_name}** (`{masked}`)\n"
+            f"⚡ **Турнир:** `{conf_name}`\n\n"
             f"📍 **Твое место:** `--` (Нет транзакций / Не участвует)\n"
             f"📊 **Наторгованный объем:** `$0.00`\n"
             f"🎁 **Награда:** `{est_reward}`\n\n"
-            f"🔄 _Авто-обновление каждые 10 мин | {get_kyiv_time()} (Киев)_"
+            f"🔄 _Обновлено: {get_kyiv_time()} (Киев)_"
         )
 
-    verdict = f"🟢 **В БЕЗОПАСНОСТИ!** Позиция стабильна."
-
+    raw_neighbors = api_data.get("list", [])
     neighbors_text = []
-    for item in data["neighbors"]:
+    
+    valid_list = []
+    for item in raw_neighbors:
+        r = int(item.get("rank", 0))
+        v = float(item.get("volume", 0))
+        w = item.get("walletAddress", "")
+        valid_list.append({"rank": r, "volume": v, "wallet": w})
+    
+    valid_list = sorted(valid_list, key=lambda x: x["rank"])
+    filtered = [n for n in valid_list if int(rank) - 5 <= n["rank"] <= int(rank) + 5]
+    
+    if not any(n["rank"] == int(rank) for n in filtered):
+        filtered.append({"rank": int(rank), "volume": volume, "wallet": wallet_addr})
+        filtered = sorted(filtered, key=lambda x: x["rank"])
+
+    for item in filtered:
         r = item["rank"]
         v = item["volume"]
         w_masked = mask_wallet(item["wallet"])
-        if r == rank:
+        if r == int(rank):
             neighbors_text.append(f"▶️ #{r} | ${v:,.2f} ({w_masked}) 👈 Ты")
         else:
             neighbors_text.append(f"   #{r} | ${v:,.2f} ({w_masked})")
-            
+
     neighbors_block = "\n".join(neighbors_text) if neighbors_text else "Нет данных соседей"
-    
-    msg_text = (
+
+    return (
         f"🏆 **OKX Web3 Tournament Tracker**\n"
-        f"👤 **{user_name}** (`{masked}` | Сеть: `{chain_label}`)\n"
-        f"⚡ **Турнир:** `{conf['name']}` ({conf['type']})\n\n"
+        f"👤 **{user_name}** (`{masked}`)\n"
+        f"⚡ **Турнир:** `{conf_name}`\n\n"
         f"📍 **Твое место:** `#{rank}` из `{max_rank}`\n"
-        f"📊 **Наторгованный объем:** `${vol:,.2f}`\n"
+        f"📊 **Наторгованный объем:** `${volume:,.2f}`\n"
         f"🎁 **Награда:** `{est_reward}`\n\n"
         f"📐 **Таблица лидеров (Соседи рядом):**\n"
         f"{neighbors_block}\n\n"
-        f"💡 **Статус:** {verdict}\n\n"
-        f"🔄 _Авто-обновление каждые 10 мин | {get_kyiv_time()} (Киев)_"
+        f"💡 **Статус:** 🟢 В безопасности / Позиция активна\n\n"
+        f"🔄 _Обновлено: {get_kyiv_time()} (Киев)_"
     )
-    return msg_text
-
-def run_okx_autoupdate(chat_id, thread_id, msg_id, user_id, tour_key):
-    msg_key = f"{chat_id}_{msg_id}"
-    print(f"🟢 OKX Auto-update started for msg {msg_key}")
-    
-    while True:
-        try:
-            sess = active_okx_sessions.get(msg_key)
-            if not sess or sess.get("stop"):
-                break
-                
-            u_info = USER_WALLETS.get(user_id)
-            if not u_info: break
-            
-            wallet_to_check = get_user_wallet_for_tournament(user_id, tour_key)
-            data = fetch_okx_tournament_leaderboard(tour_key, wallet_to_check)
-            card_text = format_okx_card(u_info["name"], wallet_to_check, tour_key, data)
-            
-            markup = InlineKeyboardMarkup()
-            markup.add(
-                InlineKeyboardButton("🔄 Обновить сейчас", callback_data=f"okx_refresh_{tour_key}"),
-                InlineKeyboardButton("🏆 Сменить турнир", callback_data="okx_select_menu")
-            )
-            
-            try:
-                bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=msg_id,
-                    text=card_text,
-                    parse_mode="Markdown",
-                    reply_markup=markup
-                )
-            except telebot.apihelper.ApiTelegramException as api_err:
-                if "message is not modified" in str(api_err):
-                    pass
-                else:
-                    print(f"⚠️ Telegram API exception during auto-update: {api_err}")
-        except Exception as e:
-            print(f"❌ OKX Auto-update edit error: {e}")
-            
-        time.sleep(600)
 
 def get_tournaments_keyboard():
-    markup = InlineKeyboardMarkup(row_width=2)
-    tournaments = fetch_dynamic_okx_tournaments()
-    for key, conf in tournaments.items():
-        markup.add(InlineKeyboardButton(f"🏆 {conf['name']}", callback_data=f"okx_tour_{key}"))
+    markup = InlineKeyboardMarkup(row_width=1)
+    for chain_key, conf in OKX_TOURNAMENTS.items():
+        markup.add(InlineKeyboardButton(f"🌐 Сеть / Турнир: {conf['name']}", callback_data=f"okx_tour_{chain_key}"))
     return markup
 
-@bot.message_handler(commands=['okx', 'boost', 'web3'])
+@bot.message_handler(commands=['okx', 'boost', 'web3', 'scan'])
 def cmd_okx_start(message):
     user_id = message.from_user.id
-    if user_id not in USER_WALLETS:
-        bot.reply_to(message, "⚠️ Ваш Telegram ID не зарегистрирован в трекере турниров.")
+    if user_id not in USER_WALLETS and user_id not in ADMIN_IDS:
+        bot.reply_to(message, "⚠️ Ваш Telegram ID не зарегистрирован в системе.")
         return
         
-    u_info = USER_WALLETS[user_id]
-    masked = mask_wallet(u_info["evm"])
-    
     bot.send_message(
         chat_id=CHAT_ID,
         message_thread_id=TOPICS["WEB3"],
-        text=f"📊 **OKX Web3 Tournament Tracker**\n\n👤 **Пользователь:** {u_info['name']}\n💳 **Кошелек (EVM):** `{masked}`\n\nВыберите активный турнир для отслеживания:",
+        text="📊 **OKX Web3 Tournament & Volume Tracker**\n\nВыберите сеть / турнир для проверки ваших реальных объемов и лидеров:",
         parse_mode="Markdown",
         reply_markup=get_tournaments_keyboard()
     )
@@ -400,20 +279,14 @@ def cmd_okx_start(message):
 @bot.callback_query_handler(func=lambda call: call.data.startswith('okx_'))
 def handle_okx_callbacks(call):
     user_id = call.from_user.id
-    if user_id not in USER_WALLETS:
-        bot.answer_callback_query(call.id, "⚠️ У вас нет доступа к трекеру.", show_alert=True)
-        return
-
     data = call.data
-    u_info = USER_WALLETS[user_id]
-    tournaments = fetch_dynamic_okx_tournaments()
     
     if data == "okx_select_menu":
         try:
             bot.edit_message_text(
                 chat_id=call.message.chat.id,
                 message_id=call.message.message_id,
-                text=f"📊 **OKX Web3 Tournament Tracker**\n\n👤 **Пользователь:** {u_info['name']}\n💳 **Кошелек:** `{mask_wallet(u_info['evm'])}`\n\nВыберите турнир:",
+                text="📊 **OKX Web3 Tournament & Volume Tracker**\n\nВыберите сеть / турнир:",
                 parse_mode="Markdown",
                 reply_markup=get_tournaments_keyboard()
             )
@@ -421,99 +294,40 @@ def handle_okx_callbacks(call):
         return
 
     if data.startswith("okx_tour_") or data.startswith("okx_refresh_"):
-        tour_key = data.replace("okx_tour_", "").replace("okx_refresh_", "")
-        if tour_key not in tournaments:
-            tour_key = list(tournaments.keys())[0]
-            
-        wallet_to_check = get_user_wallet_for_tournament(user_id, tour_key)
-        board_data = fetch_okx_tournament_leaderboard(tour_key, wallet_to_check)
-        card_text = format_okx_card(u_info["name"], wallet_to_check, tour_key, board_data)
+        chain_key = data.replace("okx_tour_", "").replace("okx_refresh_", "")
+        tour_conf = OKX_TOURNAMENTS.get(chain_key)
+        if not tour_conf:
+            tour_conf = list(OKX_TOURNAMENTS.values())[0]
+            chain_key = "bsc"
+
+        u_info = USER_WALLETS.get(user_id)
+        if not u_info:
+            bot.answer_callback_query(call.id, "⚠️ У вас не привязаны кошельки.", show_alert=True)
+            return
+
+        bot.answer_callback_query(call.id, f"🔍 Загружаю данные для сети {chain_key.upper()}...")
+
+        # Проверяем строго кошельки пользователя, который нажал кнопку (без Димы, если это ты)
+        wallet = u_info["evm"]
+        api_data = scanner.fetch_okx_leaderboard_api(tour_conf["id"], wallet) or {}
+        card_str = format_okx_tournament_card(u_info["name"], wallet, tour_conf, api_data)
         
         markup = InlineKeyboardMarkup()
         markup.add(
-            InlineKeyboardButton("🔄 Обновить сейчас", callback_data=f"okx_refresh_{tour_key}"),
-            InlineKeyboardButton("🏆 Сменить турнир", callback_data="okx_select_menu")
+            InlineKeyboardButton("🔄 Обновить сейчас", callback_data=f"okx_refresh_{chain_key}"),
+            InlineKeyboardButton("🏆 Сменить сеть", callback_data="okx_select_menu")
         )
         
         try:
             bot.edit_message_text(
                 chat_id=call.message.chat.id,
                 message_id=call.message.message_id,
-                text=card_text,
+                text=card_str,
                 parse_mode="Markdown",
                 reply_markup=markup
             )
-        except Exception: pass
-        
-        msg_key = f"{call.message.chat.id}_{call.message.message_id}"
-        if msg_key not in active_okx_sessions:
-            active_okx_sessions[msg_key] = {"stop": False}
-            threading.Thread(
-                target=run_okx_autoupdate, 
-                args=(call.message.chat.id, call.message.message_thread_id, call.message.message_id, user_id, tour_key),
-                daemon=True
-            ).start()
-        
-        try:
-            bot.answer_callback_query(call.id, "✅ Данные турнира обновлены!")
-        except Exception: pass
-
-# ==================== /SCAN COMMAND (ВЫБОР СЕТИ КНОПКАМИ) ====================
-@bot.message_handler(commands=['scan'])
-def cmd_scan_wallets(message):
-    user_id = message.from_user.id
-    if user_id not in USER_WALLETS:
-        bot.reply_to(message, "⚠️ Ваш Telegram ID не привязан к списку кошельков сканера.")
-        return
-        
-    markup = InlineKeyboardMarkup(row_width=2)
-    chains = [
-        ("X Layer", "scan_xlayer"),
-        ("Arbitrum", "scan_arbitrum"),
-        ("Base", "scan_base"),
-        ("Optimism", "scan_optimism"),
-        ("Polygon", "scan_polygon"),
-        ("BSC", "scan_bsc"),
-        ("Ethereum", "scan_ethereum"),
-        ("Blast", "scan_blast"),
-        ("Scroll", "scan_scroll"),
-        ("Linea", "scan_linea")
-    ]
-    for name, callback_val in chains:
-        markup.add(InlineKeyboardButton(f"🌐 {name}", callback_data=callback_val))
-
-    bot.send_message(
-        chat_id=message.chat.id,
-        message_thread_id=message.message_thread_id,
-        text="🔍 **Выберите сеть для точечного сканирования объемов:**",
-        parse_mode="Markdown",
-        reply_markup=markup
-    )
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('scan_'))
-def handle_scan_chain_callback(call):
-    chain_key = call.data.replace('scan_', '')
-    bot.answer_callback_query(call.id, f"🔍 Сканирую сеть {chain_key.upper()}...")
-    
-    try:
-        bot.edit_message_text(
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            text=f"⏳ Сканирую сеть **{chain_key.upper()}**... Пожалуйста, подождите пару секунд.",
-            parse_mode="Markdown"
-        )
-    except Exception: pass
-
-    def run_single_scan():
-        try:
-            scanner.send_single_chain_report(chain_key)
-            try:
-                bot.delete_message(chat_id=call.message.chat.id, message_id=call.message.message_id)
-            except: pass
         except Exception as e:
-            print(f"❌ Ошибка точечного сканирования: {e}")
-
-    threading.Thread(target=run_single_scan, daemon=True).start()
+            print(f"❌ Edit message error: {e}")
 
 # ==================== HEALTHCHECK & WEB APP CHART SERVER ====================
 @app.route('/')
@@ -1692,7 +1506,7 @@ def handle_chat_messages(message):
     bot.reply_to(message, "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
 
 if __name__ == "__main__":
-    print("🚀 Bot starting with Targeted Chain Scans & Multi-Coin Calculator...")
+    print("🚀 Bot starting with OKX API Tournament Tracker & Full Features...")
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     threading.Thread(target=fetch_newsmaker_channel, daemon=True).start()

@@ -15,6 +15,13 @@ USER_WALLETS = {
     "Дима (Доверенное лицо)": "0xaa4d1ee7c6026e3d132eda595dcbd9c210e37e28"
 }
 
+# Список активных турниров OKX (с правильными параметрами campId для API)
+OKX_TOURNAMENTS = {
+    "bsc": {"id": "akedo", "name": "Akedo (BSC / Aketo)", "chain": "evm", "max_rank": 3000, "est_reward": "320 USDT"},
+    "xlayer": {"id": "tech", "name": "Технологический Буст (X Layer)", "chain": "evm", "max_rank": 3000, "est_reward": "$50.00"},
+    "solana": {"id": "solana", "name": "Solana Eco (Solana)", "chain": "solana", "max_rank": 3000, "est_reward": "$60.00"}
+}
+
 # Публичные бесплатные RPC-ноды для всех основных сетей
 RPC_NODES = {
     "xlayer": "https://rpc.xlayer.tech",
@@ -133,17 +140,32 @@ def fetch_wallet_volume_single_chain(wallet_address, chain):
         
     return round(chain_vol, 2)
 
-# ==================== НОВЫЙ ДОП. МЕТОД ДЛЯ OKX API ТУРНИРОВ ====================
+# ==================== ИСПРАВЛЕННЫЙ МЕТОД ДЛЯ OKX API ТУРНИРОВ ====================
 def fetch_okx_leaderboard_api(campaign_id, wallet_address):
-    """Прямой запрос к официальному API OKX для получения точных данных турнира без нулей и зависаний"""
+    """Прямой запрос к официальному API OKX с правильными параметрами campId и заголовками"""
     if not wallet_address:
         return None
     try:
-        url = f"https://www.okx.com/priapi/v1/web3/growth/campaign/leaderboard?campaignId={campaign_id}&walletAddress={wallet_address}"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        res = requests.get(url, headers=headers, timeout=8)
-        if res.status_code == 200:
-            return res.json().get("data", {})
+        clean_addr = wallet_address.strip()
+        # Пробуем оба основных варианта параметров API OKX (campId и campaignId)
+        urls = [
+            f"https://www.okx.com/priapi/v1/web3/growth/campaign/leaderboard?campId={campaign_id}&walletAddress={clean_addr}",
+            f"https://www.okx.com/priapi/v1/web3/growth/campaign/leaderboard?campaignId={campaign_id}&walletAddress={clean_addr}"
+        ]
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
+            "Referer": "https://www.okx.com/",
+            "Accept": "application/json"
+        }
+        
+        for url in urls:
+            res = requests.get(url, headers=headers, timeout=8)
+            if res.status_code == 200:
+                json_data = res.json()
+                data = json_data.get("data", {})
+                if data and (data.get("userInfo") or data.get("list")):
+                    return data
     except Exception as e:
         print(f"❌ OKX API Error: {e}")
     return None

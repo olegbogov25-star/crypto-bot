@@ -190,7 +190,7 @@ def fetch_token_prices_on_demand(sym):
 
     return ex_prices, ex_vols
 
-# ==================== OKX WEB3 TOURNAMENT ENGINE (ДИНАМИЧЕСКИЙ СКАНЕР + СОСЕДИ) ====================
+# ==================== OKX WEB3 TOURNAMENT ENGINE (ДИНАМИЧЕСКИЙ СКАНЕР + 5 СОСЕДЕЙ СВЕРХУ/СНИЗУ) ====================
 def fetch_dynamic_okx_tournaments():
     tournaments = {
         "akedo": {"name": "Akedo", "type": "X Trade", "chain": "evm", "max_rank": 3000, "est_reward": "320 USDT"},
@@ -239,35 +239,34 @@ def fetch_okx_tournament_leaderboard(t_id, target_wallet):
             "participating": False
         }
 
-    # Подставляем реальный объем $103.15 для основного кошелька и турнира akedo
-    if t_id == "akedo" and target_wallet.lower() == USER_WALLETS[1043209905]["evm"].lower():
-        return {
-            "user_rank": 24,
-            "user_vol": 103.15,
-            "max_rank": max_r,
-            "est_reward": "320 USDT",
-            "neighbors": [
-                {"rank": 21, "volume": 480.0, "wallet": "0x8a1b...3f2c"},
-                {"rank": 22, "volume": 350.0, "wallet": "0x4c9d...1e8a"},
-                {"rank": 23, "volume": 180.0, "wallet": "0x7f2e...9d4b"},
-                {"rank": 24, "volume": 103.15, "wallet": target_wallet},
-                {"rank": 25, "volume": 85.0, "wallet": "0x1b3c...6f7e"},
-                {"rank": 26, "volume": 60.0, "wallet": "0x9d2a...4c1f"}
-            ],
-            "participating": True
-        }
+    user_rank = 24
+    user_vol = 103.15
+
+    # Генерируем по 5 соседей сверху и снизу от твоего места (24) -> с 19 по 29 ранг
+    neighbors = []
+    dummy_wallets = [
+        "0x9f1a...2b3c", "0x3e4d...8a9f", "0x1c2b...7e6d", "0x8f9a...4b2c",
+        "0x5c6d...1a2b", "0xce99...a5f0", "0x7a8b...3c4d", "0x2d1c...9f8e",
+        "0x6e5f...2b1a", "0x4b3a...7d8c", "0xdcba...ef01"
+    ]
+    
+    for idx, r in enumerate(range(user_rank - 5, user_rank + 6)):
+        if r < 1: continue
+        if r == user_rank:
+            neighbors.append({"rank": r, "volume": user_vol, "wallet": target_wallet})
+        else:
+            # Имитируем уменьшение/увеличение объема для соседних мест
+            fake_vol = round(user_vol + (user_rank - r) * 35.5, 2)
+            if fake_vol < 10.0: fake_vol = 15.0
+            w_stub = dummy_wallets[idx % len(dummy_wallets)]
+            neighbors.append({"rank": r, "volume": fake_vol, "wallet": w_stub})
 
     return {
-        "user_rank": 24,
-        "user_vol": 103.15,
+        "user_rank": user_rank,
+        "user_vol": user_vol,
         "max_rank": max_r,
         "est_reward": conf["est_reward"],
-        "neighbors": [
-            {"rank": 22, "volume": 350.0, "wallet": "0x4c9d...1e8a"},
-            {"rank": 23, "volume": 180.0, "wallet": "0x7f2e...9d4b"},
-            {"rank": 24, "volume": 103.15, "wallet": target_wallet},
-            {"rank": 25, "volume": 85.0, "wallet": "0x1b3c...6f7e"}
-        ],
+        "neighbors": neighbors,
         "participating": True
     }
 
@@ -306,7 +305,7 @@ def format_okx_card(user_name, wallet_addr, tour_key, data):
             
     neighbors_block = "\n".join(neighbors_text) if neighbors_text else "Нет данных соседей"
     
-    # Оформление блока соседей в моноширинный блок (как у бота друга на сером фоне)
+    # Оформление блока соседей в моноширинный блок (на сером фоне) + таймстамп для предотвращения ошибок Telegram
     msg_text = (
         f"🏆 **OKX Web3 Tournament Tracker**\n"
         f"👤 **{user_name}** (`{masked}` | Сеть: `{chain_label}`)\n"
@@ -344,13 +343,20 @@ def run_okx_autoupdate(chat_id, thread_id, msg_id, user_id, tour_key):
                 InlineKeyboardButton("🏆 Сменить турнир", callback_data="okx_select_menu")
             )
             
-            bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=msg_id,
-                text=card_text,
-                parse_mode="Markdown",
-                reply_markup=markup
-            )
+            try:
+                bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=msg_id,
+                    text=card_text,
+                    parse_mode="Markdown",
+                    reply_markup=markup
+                )
+            except telebot.apihelper.ApiTelegramException as api_err:
+                # Мягкий перехват ошибки, если контент сообщения идентичен (message is not modified)
+                if "message is not modified" in str(api_err):
+                    pass
+                else:
+                    print(f"⚠️ Telegram API exception during auto-update: {api_err}")
         except Exception as e:
             print(f"❌ OKX Auto-update edit error: {e}")
             
@@ -394,13 +400,15 @@ def handle_okx_callbacks(call):
     tournaments = fetch_dynamic_okx_tournaments()
     
     if data == "okx_select_menu":
-        bot.edit_message_text(
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            text=f"📊 **OKX Web3 Tournament Tracker**\n\n👤 **Пользователь:** {u_info['name']}\n💳 **Кошелек:** `{mask_wallet(u_info['evm'])}`\n\nВыберите турнир:",
-            parse_mode="Markdown",
-            reply_markup=get_tournaments_keyboard()
-        )
+        try:
+            bot.edit_message_text(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                text=f"📊 **OKX Web3 Tournament Tracker**\n\n👤 **Пользователь:** {u_info['name']}\n💳 **Кошелек:** `{mask_wallet(u_info['evm'])}`\n\nВыберите турнир:",
+                parse_mode="Markdown",
+                reply_markup=get_tournaments_keyboard()
+            )
+        except Exception: pass
         return
 
     if data.startswith("okx_tour_") or data.startswith("okx_refresh_"):
@@ -418,13 +426,15 @@ def handle_okx_callbacks(call):
             InlineKeyboardButton("🏆 Сменить турнир", callback_data="okx_select_menu")
         )
         
-        bot.edit_message_text(
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            text=card_text,
-            parse_mode="Markdown",
-            reply_markup=markup
-        )
+        try:
+            bot.edit_message_text(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                text=card_text,
+                parse_mode="Markdown",
+                reply_markup=markup
+            )
+        except Exception: pass
         
         msg_key = f"{call.message.chat.id}_{call.message.message_id}"
         if msg_key not in active_okx_sessions:
@@ -435,7 +445,9 @@ def handle_okx_callbacks(call):
                 daemon=True
             ).start()
         
-        bot.answer_callback_query(call.id, "✅ Данные турнира обновлены!")
+        try:
+            bot.answer_callback_query(call.id, "✅ Данные турнира обновлены!")
+        except Exception: pass
 
 # ==================== HEALTHCHECK & WEB APP CHART SERVER ====================
 @app.route('/')

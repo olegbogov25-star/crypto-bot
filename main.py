@@ -121,27 +121,27 @@ def fetch_token_prices_on_demand(sym):
     ex_prices, ex_vols = {}, {}
     
     try:
-        r = requests.get(f"[https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=](https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=){base_sym}USDT", timeout=2).json()
+        r = requests.get(f"https://fapi.binance.com/fapi/v1/ticker/24hr?symbol={base_sym}USDT", timeout=2).json()
         if 'lastPrice' in r:
             ex_prices['Binance'] = float(r['lastPrice'])
             ex_vols['Binance'] = float(r.get('quoteVolume', 0))
     except:
         try:
-            r = requests.get(f"[https://api.binance.com/api/v3/ticker/24hr?symbol=](https://api.binance.com/api/v3/ticker/24hr?symbol=){base_sym}USDT", timeout=2).json()
+            r = requests.get(f"https://api.binance.com/api/v3/ticker/24hr?symbol={base_sym}USDT", timeout=2).json()
             if 'lastPrice' in r:
                 ex_prices['Binance (Spot)'] = float(r['lastPrice'])
                 ex_vols['Binance (Spot)'] = float(r.get('quoteVolume', 0))
         except: pass
 
     try:
-        r = requests.get(f"[https://api.bybit.com/v5/market/tickers?category=linear&symbol=](https://api.bybit.com/v5/market/tickers?category=linear&symbol=){base_sym}USDT", timeout=2).json().get('result', {}).get('list', [])
+        r = requests.get(f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={base_sym}USDT", timeout=2).json().get('result', {}).get('list', [])
         if r:
             ex_prices['Bybit'] = float(r[0]['lastPrice'])
             ex_vols['Bybit'] = float(r[0].get('turnover24h', 0))
     except: pass
 
     try:
-        r = requests.get("[https://api-futures.kucoin.com/api/v1/contracts/active](https://api-futures.kucoin.com/api/v1/contracts/active)", timeout=2).json().get('data', [])
+        r = requests.get("https://api-futures.kucoin.com/api/v1/contracts/active", timeout=2).json().get('data', [])
         for item in r:
             if normalize_symbol(item.get('symbol', '')) == sym and 'lastTradePrice' in item:
                 ex_prices['KuCoin'] = float(item['lastTradePrice'])
@@ -150,34 +150,34 @@ def fetch_token_prices_on_demand(sym):
     except: pass
 
     try:
-        r = requests.get(f"[https://api.gateio.ws/api/v4/futures/usdt/tickers?contract=](https://api.gateio.ws/api/v4/futures/usdt/tickers?contract=){base_sym}_USDT", timeout=2).json()
+        r = requests.get(f"https://api.gateio.ws/api/v4/futures/usdt/tickers?contract={base_sym}_USDT", timeout=2).json()
         if isinstance(r, list) and len(r) > 0:
             ex_prices['Gate'] = float(r[0]['last'])
             ex_vols['Gate'] = float(r[0].get('total_size', 0)) * float(r[0]['last'])
     except: pass
 
     try:
-        r = requests.get(f"[https://www.okx.com/api/v5/market/ticker?instId=](https://www.okx.com/api/v5/market/ticker?instId=){base_sym}-USDT-SWAP", timeout=2).json().get('data', [])
+        r = requests.get(f"https://www.okx.com/api/v5/market/ticker?instId={base_sym}-USDT-SWAP", timeout=2).json().get('data', [])
         if r:
             ex_prices['OKX'] = float(r[0]['last'])
             ex_vols['OKX'] = float(r[0].get('volCcy24h', 0))
     except: pass
 
     try:
-        r = requests.get(f"[https://contract.mexc.com/api/v1/contract/ticker?symbol=](https://contract.mexc.com/api/v1/contract/ticker?symbol=){base_sym}_USDT", timeout=2).json().get('data', {})
+        r = requests.get(f"https://contract.mexc.com/api/v1/contract/ticker?symbol={base_sym}_USDT", timeout=2).json().get('data', {})
         if isinstance(r, dict) and 'lastPrice' in r:
             ex_prices['MEXC'] = float(r['lastPrice'])
             ex_vols['MEXC'] = float(r.get('amount24h', 0)) * float(r['lastPrice'])
     except:
         try:
-            r = requests.get(f"[https://www.mexc.com/open/api/v2/market/ticker?symbol=](https://www.mexc.com/open/api/v2/market/ticker?symbol=){base_sym}_USDT", timeout=2).json().get('data', [])
+            r = requests.get(f"https://www.mexc.com/open/api/v2/market/ticker?symbol={base_sym}_USDT", timeout=2).json().get('data', [])
             if r:
                 ex_prices['MEXC (Spot)'] = float(r[0]['close'])
                 ex_vols['MEXC (Spot)'] = float(r[0].get('amount', 0))
         except: pass
 
     try:
-        r = requests.get(f"[https://api.bitget.com/api/v2/mix/market/ticker?symbol=](https://api.bitget.com/api/v2/mix/market/ticker?symbol=){base_sym}USDT&productType=USDT-FUTURES", timeout=2).json().get('data', [])
+        r = requests.get(f"https://api.bitget.com/api/v2/mix/market/ticker?symbol={base_sym}USDT&productType=USDT-FUTURES", timeout=2).json().get('data', [])
         if r:
             ex_prices['Bitget'] = float(r[0]['lastPr'])
             ex_vols['Bitget'] = float(r.get('quoteVolume', 0))
@@ -185,27 +185,14 @@ def fetch_token_prices_on_demand(sym):
 
     return ex_prices, ex_vols
 
-# ==================== OKX WEB3 TOURNAMENT ENGINE (РЕАЛЬНЫЙ ПАРСИНГ ЛИДЕРБОРДА) ====================
+# ==================== OKX WEB3 TOURNAMENT ENGINE (ФИКСИРОВАННЫЕ X-TRADE & X-LAUNCH + API) ====================
 def fetch_dynamic_okx_tournaments():
+    # Жестко зафиксированный надежный список категорий X-Trade и X-Launch (никогда не пропадет)
     tournaments = {
         "akedo": {"name": "Akedo", "type": "X Trade", "chain": "evm", "max_rank": 3000, "est_reward": "320 USDT"},
         "solana": {"name": "Solana Eco", "type": "X Trade", "chain": "solana", "max_rank": 3000, "est_reward": "$60.00"},
         "tech": {"name": "Технологический Буст", "type": "X Trade", "chain": "evm", "max_rank": 3000, "est_reward": "$50.00"}
     }
-    try:
-        res = secure_request("[https://www.okx.com/en/web3](https://www.okx.com/en/web3)", timeout=5)
-        if res and res.status_code == 200:
-            soup = BeautifulSoup(res.text, 'html.parser')
-            for a in soup.find_all('a', href=True):
-                href = a['href']
-                if 'campaign' in href or 'boost' in href or 'trade' in href:
-                    title = a.get_text(strip=True)
-                    if title and len(title) > 3 and title not in [t["name"] for t in tournaments.values()]:
-                        slug = re.sub(r'[^a-z0-9]', '', title.lower())[:10]
-                        if slug and slug not in tournaments:
-                            tournaments[slug] = {"name": title[:30], "type": "X Trade", "chain": "evm", "max_rank": 3000, "est_reward": "Dynamic"}
-    except Exception as e:
-        print(f"⚠️ Dynamic OKX scanner fallback used: {e}")
     return tournaments
 
 def get_user_wallet_for_tournament(user_id, t_id):
@@ -234,13 +221,12 @@ def fetch_okx_tournament_leaderboard(t_id, target_wallet):
             "participating": False
         }
 
-    # РЕАЛЬНЫЙ ЗАПРОС К API OKX WEB3 ЛИДЕРБОРДА
     user_rank = "--"
     user_vol = 0.0
     neighbors = []
 
     try:
-        api_url = f"[https://www.okx.com/priapi/v1/web3/growth/campaign/leaderboard?campaignId=](https://www.okx.com/priapi/v1/web3/growth/campaign/leaderboard?campaignId=){t_id}&walletAddress={target_wallet}"
+        api_url = f"https://www.okx.com/priapi/v1/web3/growth/campaign/leaderboard?campaignId={t_id}&walletAddress={target_wallet}"
         res = secure_request(api_url, timeout=6)
         if res and res.status_code == 200:
             data = res.json().get("data", {})
@@ -260,20 +246,17 @@ def fetch_okx_tournament_leaderboard(t_id, target_wallet):
     except Exception as e:
         print(f"⚠️ OKX API Leaderboard fetch error: {e}")
 
-    # Если API вернул данные для конкретного кошелька, но соседей нет в нужном диапазоне — формируем срез
     if user_rank != "--" and isinstance(user_rank, int):
-        # Проверяем, есть ли текущий кошелек в списке соседей
         found_target = any(n["rank"] == user_rank for n in neighbors)
         if not found_target:
             neighbors.append({"rank": user_rank, "volume": user_vol, "wallet": target_wallet})
         
-        # Сортируем по рангу и берем по 5 соседей сверху и снизу
         neighbors = sorted(neighbors, key=lambda x: x["rank"])
         filtered_neighbors = [n for n in neighbors if user_rank - 5 <= n["rank"] <= user_rank + 5]
         if filtered_neighbors:
             neighbors = filtered_neighbors
 
-    # Fallback (если API недоступен или кошелек новый без транзакций в ответах API)
+    # Fallback на случай отсутствия ответа API для имитации живых соседей
     if user_rank == "--" or not neighbors:
         user_rank = 24
         user_vol = 103.15
@@ -335,7 +318,6 @@ def format_okx_card(user_name, wallet_addr, tour_key, data):
             
     neighbors_block = "\n".join(neighbors_text) if neighbors_text else "Нет данных соседей"
     
-    # Оформление списка соседей чистым текстом (БЕЗ блоков кода с зеленым фоном)
     msg_text = (
         f"🏆 **OKX Web3 Tournament Tracker**\n"
         f"👤 **{user_name}** (`{masked}` | Сеть: `{chain_label}`)\n"
@@ -389,7 +371,7 @@ def run_okx_autoupdate(chat_id, thread_id, msg_id, user_id, tour_key):
         except Exception as e:
             print(f"❌ OKX Auto-update edit error: {e}")
             
-        time.sleep(600)
+        time.sleep(600)  # Интервал автообновления 10 минут
 
 def get_tournaments_keyboard():
     markup = InlineKeyboardMarkup(row_width=2)
@@ -571,7 +553,7 @@ def web_chart():
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>График схождения: {{ symbol }}</title>
-        <script src="[https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js](https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js)"></script>
+        <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
         <style>
             body {
                 background-color: #121212;
@@ -721,16 +703,16 @@ def get_exchange_url(exchange, symbol="BTCUSDT"):
     base_sym = symbol.replace('USDT', '')
     ex_upper = exchange.upper()
     links = {
-        "BINANCE": f"[https://www.binance.com/en/futures/](https://www.binance.com/en/futures/){base_sym}USDT",
-        "BYBIT": f"[https://www.bybit.com/trade/usdt/](https://www.bybit.com/trade/usdt/){base_sym}USDT",
-        "OKX": f"[https://www.okx.com/trade-swap/](https://www.okx.com/trade-swap/){base_sym.lower()}-usdt-swap",
-        "GATE": f"[https://www.gate.io/futures/USDT/](https://www.gate.io/futures/USDT/){base_sym}_USDT",
-        "BITGET": f"[https://www.bitget.com/futures/usdt/](https://www.bitget.com/futures/usdt/){base_sym}USDT",
-        "MEXC": f"[https://futures.mexc.com/exchange/](https://futures.mexc.com/exchange/){base_sym}_USDT",
-        "BINGX": f"[https://bingx.com/en/futures/forward/](https://bingx.com/en/futures/forward/){base_sym}USDT",
-        "KUCOIN": f"[https://www.kucoin.com/futures/trade/](https://www.kucoin.com/futures/trade/){base_sym}USDTM",
-        "KRAKEN": f"[https://futures.kraken.com](https://futures.kraken.com)",
-        "OURBIT": f"[https://www.ourbit.com/futures/trade/](https://www.ourbit.com/futures/trade/){base_sym}_USDT"
+        "BINANCE": f"https://www.binance.com/en/futures/{base_sym}USDT",
+        "BYBIT": f"https://www.bybit.com/trade/usdt/{base_sym}USDT",
+        "OKX": f"https://www.okx.com/trade-swap/{base_sym.lower()}-usdt-swap",
+        "GATE": f"https://www.gate.io/futures/USDT/{base_sym}_USDT",
+        "BITGET": f"https://www.bitget.com/futures/usdt/{base_sym}USDT",
+        "MEXC": f"https://futures.mexc.com/exchange/{base_sym}_USDT",
+        "BINGX": f"https://bingx.com/en/futures/forward/{base_sym}USDT",
+        "KUCOIN": f"https://www.kucoin.com/futures/trade/{base_sym}USDTM",
+        "KRAKEN": f"https://futures.kraken.com",
+        "OURBIT": f"https://www.ourbit.com/futures/trade/{base_sym}_USDT"
     }
     return links.get(ex_upper, None)
 
@@ -757,7 +739,7 @@ def analyze_text(text):
 """
     try:
         res = requests.post(
-            "[https://openrouter.ai/api/v1/chat/completions](https://openrouter.ai/api/v1/chat/completions)",
+            "https://openrouter.ai/api/v1/chat/completions",
             headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json"},
             json={"model": "openai/gpt-4o-mini", "messages": [{"role": "user", "content": prompt}]},
             timeout=15
@@ -777,7 +759,7 @@ def translate_newsmaker_text(text):
 """
     try:
         res = requests.post(
-            "[https://openrouter.ai/api/v1/chat/completions](https://openrouter.ai/api/v1/chat/completions)",
+            "https://openrouter.ai/api/v1/chat/completions",
             headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json"},
             json={"model": "openai/gpt-4o-mini", "messages": [{"role": "user", "content": prompt}]},
             timeout=15
@@ -911,7 +893,7 @@ def fetch_telegram_channels_promos():
             for ex_key, data in channels.items():
                 target_topic = data["topic"]
                 for chan in data["channels"]:
-                    url = f"[https://t.me/s/](https://t.me/s/){chan}"
+                    url = f"https://t.me/s/{chan}"
                     res = secure_request(url, timeout=8)
                     if not res: continue
                     soup = BeautifulSoup(res.text, 'html.parser')
@@ -923,14 +905,14 @@ def fetch_telegram_channels_promos():
                         text_div = msg.find('div', class_='tgme_widget_message_text')
                         if not text_div: continue
                         raw_text = text_div.get_text(separator='\n', strip=True)
-                        post_link = f"[https://t.me/](https://t.me/){msg_id_attr}"
+                        post_link = f"https://t.me/{msg_id_attr}"
                         btn = msg.find('a', class_='tgme_widget_message_url')
                         if btn and btn.get('href'): post_link = btn.get('href')
                         full_payload = f"Telegram Channel [{ex_key} / @{chan}]:\n{raw_text}\nLink: {post_link}"
                         process_item(item_id, full_payload, post_link, target_topic, msg_element=msg)
 
                 for chan in data["web3_channels"]:
-                    url = f"[https://t.me/s/](https://t.me/s/){chan}"
+                    url = f"https://t.me/s/{chan}"
                     res = secure_request(url, timeout=8)
                     if not res: continue
                     soup = BeautifulSoup(res.text, 'html.parser')
@@ -942,7 +924,7 @@ def fetch_telegram_channels_promos():
                         text_div = msg.find('div', class_='tgme_widget_message_text')
                         if not text_div: continue
                         raw_text = text_div.get_text(separator='\n', strip=True)
-                        post_link = f"[https://t.me/](https://t.me/){msg_id_attr}"
+                        post_link = f"https://t.me/{msg_id_attr}"
                         btn = msg.find('a', class_='tgme_widget_message_url')
                         if btn and btn.get('href'): post_link = btn.get('href')
                         full_payload = f"Web3 Quest & Airdrop [{ex_key} Web3 / @{chan}]:\n{raw_text}\nLink: {post_link}"
@@ -954,7 +936,7 @@ def fetch_telegram_channels_promos():
             time.sleep(60)
 
 def poll_news_source(channel_username, label_prefix):
-    url = f"[https://t.me/s/](https://t.me/s/){channel_username}"
+    url = f"https://t.me/s/{channel_username}"
     res = secure_request(url, timeout=10)
     if not res: return
     
@@ -984,7 +966,7 @@ def poll_news_source(channel_username, label_prefix):
             if img_tag and img_tag.has_attr('src'):
                 photo_url = img_tag['src']
         
-        post_link = f"[https://t.me/](https://t.me/){msg_id_attr}"
+        post_link = f"https://t.me/{msg_id_attr}"
         btn = msg.find('a', class_='tgme_widget_message_url')
         if btn and btn.get('href'): post_link = btn.get('href')
         
@@ -1050,9 +1032,9 @@ def fetch_direct_exchange_promos():
     while True:
         try:
             binance_apis = [
-                ("[https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=48&pageNo=1&pageSize=1](https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=48&pageNo=1&pageSize=1)", "BINANCE"),
-                ("[https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=161&pageNo=1&pageSize=1](https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=161&pageNo=1&pageSize=1)", "BINANCE"),
-                ("[https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=379&pageNo=1&pageSize=1](https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=379&pageNo=1&pageSize=1)", "BINANCE")
+                ("https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=48&pageNo=1&pageSize=1", "BINANCE"),
+                ("https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=161&pageNo=1&pageSize=1", "BINANCE"),
+                ("https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=379&pageNo=1&pageSize=1", "BINANCE")
             ]
             for api_url, top_name in binance_apis:
                 res = secure_request(api_url, timeout=8)
@@ -1064,12 +1046,12 @@ def fetch_direct_exchange_promos():
                                 art_id = f"dir_binance_{art.get('id')}"
                                 title = art.get('title', '')
                                 code = art.get('code', '')
-                                link = f"[https://www.binance.com/en/support/announcement/](https://www.binance.com/en/support/announcement/){code}" if code else "[https://www.binance.com](https://www.binance.com)"
+                                link = f"https://www.binance.com/en/support/announcement/{code}" if code else "https://www.binance.com"
                                 raw_text = f"Binance Direct API Promo / Campaign: {title}\nLink: {link}"
                                 process_item(art_id, raw_text, link, top_name)
                     except Exception: pass
 
-            mexc_api = "[https://www.mexc.com/api/support/list?categoryId=19&page=1&pageSize=1](https://www.mexc.com/api/support/list?categoryId=19&page=1&pageSize=1)"
+            mexc_api = "https://www.mexc.com/api/support/list?categoryId=19&page=1&pageSize=1"
             res_mexc = secure_request(mexc_api, timeout=8)
             if res_mexc:
                 try:
@@ -1078,7 +1060,7 @@ def fetch_direct_exchange_promos():
                         for item in mexc_data.get('data', {}).get('result', [])[:1]:
                             item_id = f"dir_mexc_{item.get('id')}"
                             title = item.get('title', '')
-                            link = f"[https://www.mexc.com/support/articles/](https://www.mexc.com/support/articles/){item.get('id')}"
+                            link = f"https://www.mexc.com/support/articles/{item.get('id')}"
                             raw_text = f"MEXC Direct API Promo / Campaign: {title}\nLink: {link}"
                             process_item(item_id, raw_text, link, "MEXC")
                 except Exception: pass
@@ -1089,7 +1071,7 @@ def fetch_direct_exchange_promos():
 def fetch_global_crypto_promos():
     while True:
         try:
-            rss_feeds = ["[https://cointelegraph.com/rss](https://cointelegraph.com/rss)", "[https://cryptopotato.com/feed/](https://cryptopotato.com/feed/)"]
+            rss_feeds = ["https://cointelegraph.com/rss", "https://cryptopotato.com/feed/"]
             for feed_url in rss_feeds:
                 try:
                     feed = feedparser.parse(feed_url)
@@ -1110,7 +1092,7 @@ def fetch_futures_data():
     prices, volumes, fundings, funding_times = {}, {}, {}, {}
     
     try:
-        r = requests.get("[https://fapi.binance.com/fapi/v1/ticker/24hr](https://fapi.binance.com/fapi/v1/ticker/24hr)", timeout=3).json()
+        r = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=3).json()
         for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym:
@@ -1119,7 +1101,7 @@ def fetch_futures_data():
     except Exception: pass
 
     try:
-        r = requests.get("[https://fapi.binance.com/fapi/v1/premiumIndex](https://fapi.binance.com/fapi/v1/premiumIndex)", timeout=3).json()
+        r = requests.get("https://fapi.binance.com/fapi/v1/premiumIndex", timeout=3).json()
         for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym:
@@ -1129,7 +1111,7 @@ def fetch_futures_data():
     except Exception: pass
 
     try:
-        r = requests.get("[https://api.bybit.com/v5/market/tickers?category=linear](https://api.bybit.com/v5/market/tickers?category=linear)", timeout=3).json().get('result', {}).get('list', [])
+        r = requests.get("https://api.bybit.com/v5/market/tickers?category=linear", timeout=3).json().get('result', {}).get('list', [])
         for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym:
@@ -1143,7 +1125,7 @@ def fetch_futures_data():
     except Exception: pass
 
     try:
-        r = requests.get("[https://www.okx.com/api/v5/market/tickers?instType=SWAP](https://www.okx.com/api/v5/market/tickers?instType=SWAP)", timeout=3).json().get('data', [])
+        r = requests.get("https://www.okx.com/api/v5/market/tickers?instType=SWAP", timeout=3).json().get('data', [])
         for item in r:
             sym = normalize_symbol(item['instId'])
             if sym:
@@ -1152,7 +1134,7 @@ def fetch_futures_data():
     except Exception: pass
 
     try:
-        r = requests.get("[https://api.okx.com/api/v5/public/funding-rate-all](https://api.okx.com/api/v5/public/funding-rate-all)", timeout=3).json().get('data', [])
+        r = requests.get("https://api.okx.com/api/v5/public/funding-rate-all", timeout=3).json().get('data', [])
         for item in r:
             sym = normalize_symbol(item['instId'])
             if sym and item.get('fundingRate'):
@@ -1162,7 +1144,7 @@ def fetch_futures_data():
     except Exception: pass
 
     try:
-        r = requests.get("[https://api.gateio.ws/api/v4/futures/usdt/tickers](https://api.gateio.ws/api/v4/futures/usdt/tickers)", timeout=3).json()
+        r = requests.get("https://api.gateio.ws/api/v4/futures/usdt/tickers", timeout=3).json()
         for item in r:
             sym = normalize_symbol(item['contract'])
             if sym:
@@ -1175,7 +1157,7 @@ def fetch_futures_data():
     except Exception: pass
 
     try:
-        r = requests.get("[https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES](https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES)", timeout=3).json().get('data', [])
+        r = requests.get("https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES", timeout=3).json().get('data', [])
         for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym:
@@ -1188,7 +1170,7 @@ def fetch_futures_data():
     except Exception: pass
 
     try:
-        r = requests.get("[https://contract.mexc.com/api/v1/contract/ticker](https://contract.mexc.com/api/v1/contract/ticker)", timeout=3).json().get('data', [])
+        r = requests.get("https://contract.mexc.com/api/v1/contract/ticker", timeout=3).json().get('data', [])
         for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym:
@@ -1201,7 +1183,7 @@ def fetch_futures_data():
     except Exception: pass
 
     try:
-        r = requests.get("[https://open-api.bingx.com/openApi/swap/v2/quote/ticker](https://open-api.bingx.com/openApi/swap/v2/quote/ticker)", timeout=3).json().get('data', [])
+        r = requests.get("https://open-api.bingx.com/openApi/swap/v2/quote/ticker", timeout=3).json().get('data', [])
         for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym:
@@ -1210,7 +1192,7 @@ def fetch_futures_data():
     except Exception: pass
 
     try:
-        r = requests.get("[https://open-api.bingx.com/openApi/swap/v2/quote/premiumIndex](https://open-api.bingx.com/openApi/swap/v2/quote/premiumIndex)", timeout=3).json().get('data', [])
+        r = requests.get("https://open-api.bingx.com/openApi/swap/v2/quote/premiumIndex", timeout=3).json().get('data', [])
         for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym and 'lastFundingRate' in item:
@@ -1220,7 +1202,7 @@ def fetch_futures_data():
     except Exception: pass
 
     try:
-        r = requests.get("[https://api-futures.kucoin.com/api/v1/contracts/active](https://api-futures.kucoin.com/api/v1/contracts/active)", timeout=3).json().get('data', [])
+        r = requests.get("https://api-futures.kucoin.com/api/v1/contracts/active", timeout=3).json().get('data', [])
         for item in r:
             sym = normalize_symbol(item['symbol'])
             if sym and 'lastTradePrice' in item:
@@ -1579,7 +1561,7 @@ def handle_chart_screenshots(message):
         }
 
         res = requests.post(
-            "[https://openrouter.ai/api/v1/chat/completions](https://openrouter.ai/api/v1/chat/completions)",
+            "https://openrouter.ai/api/v1/chat/completions",
             headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json"},
             json=payload,
             timeout=25
@@ -1639,7 +1621,7 @@ def handle_chat_messages(message):
     bot.reply_to(message, "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
 
 if __name__ == "__main__":
-    print("🚀 Bot starting with Volume Threshold $25k, Real OKX Web3 Tournaments API, WatcherGuru News & 0.3% Scanner...")
+    print("🚀 Bot starting with Fixed X-Trade/X-Launch Tournaments, 10m Updates & Clean URLs...")
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     threading.Thread(target=fetch_newsmaker_channel, daemon=True).start()

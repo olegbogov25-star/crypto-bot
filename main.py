@@ -187,7 +187,6 @@ def fetch_token_prices_on_demand(sym):
 
 # ==================== OKX WEB3 TOURNAMENT ENGINE (ФИКСИРОВАННЫЕ X-TRADE & X-LAUNCH + API) ====================
 def fetch_dynamic_okx_tournaments():
-    # Жестко зафиксированный надежный список категорий X-Trade и X-Launch (никогда не пропадет)
     tournaments = {
         "akedo": {"name": "Akedo", "type": "X Trade", "chain": "evm", "max_rank": 3000, "est_reward": "320 USDT"},
         "solana": {"name": "Solana Eco", "type": "X Trade", "chain": "solana", "max_rank": 3000, "est_reward": "$60.00"},
@@ -256,7 +255,6 @@ def fetch_okx_tournament_leaderboard(t_id, target_wallet):
         if filtered_neighbors:
             neighbors = filtered_neighbors
 
-    # Fallback на случай отсутствия ответа API для имитации живых соседей
     if user_rank == "--" or not neighbors:
         user_rank = 24
         user_vol = 103.15
@@ -371,7 +369,7 @@ def run_okx_autoupdate(chat_id, thread_id, msg_id, user_id, tour_key):
         except Exception as e:
             print(f"❌ OKX Auto-update edit error: {e}")
             
-        time.sleep(600)  # Интервал автообновления 10 минут
+        time.sleep(600)
 
 def get_tournaments_keyboard():
     markup = InlineKeyboardMarkup(row_width=2)

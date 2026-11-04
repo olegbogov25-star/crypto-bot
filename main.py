@@ -469,16 +469,8 @@ def cmd_scan_wallets(message):
     bot.reply_to(message, "🔍 Запускаю мультичейн-сканирование 10 сетей... Пожалуйста, подождите.")
     
     try:
-        # Вызываем функцию сканирования из scanner.py
-        report_text = scanner.run_scan_for_user(user_id)
-        
-        # Отправляем отчет в топик WEB3 (ID 5190)
-        bot.send_message(
-            chat_id=CHAT_ID,
-            message_thread_id=TOPICS["WEB3"],
-            text=report_text,
-            parse_mode="Markdown"
-        )
+        # Вызываем правильную функцию из scanner.py
+        scanner.run_multichain_leaderboard()
     except Exception as e:
         bot.reply_to(message, f"❌ Ошибка при сканировании: {e}")
 

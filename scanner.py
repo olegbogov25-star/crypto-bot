@@ -1,59 +1,136 @@
 import os
+import time
 import requests
 from web3 import Web3
 
+# ==================== КОНФИГУРАЦИЯ ====================
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+CHAT_ID = "-1004451728851"
+WEB3_TOPIC_ID = 5190  # ID твоего топика WEB3
+
+# Твои кошельки (если сеть EVM, они подходят во все эти сети автоматически)
+USER_WALLETS = {
+    "Аккаунт #1 (Основной)": "0xce99d5ef9f01b5c1f68c848448bc35b885f2a5f0",
+    "Аккаунт #2 (Второй телефон)": "0x6c72b72f5c4b8fedda40dc20277b5f4a6f639326",
+    "Дима (Доверенное лицо)": "0xaa4d1ee7c6026e3d132eda595dcbd9c210e37e28"
+}
+
+# Публичные бесплатные RPC-ноды для всех основных сетей
 RPC_NODES = {
     "xlayer": "https://rpc.xlayer.tech",
     "arbitrum": "https://arb1.arbitrum.io/rpc",
-    "base": "https://mainnet.base.org"
+    "base": "https://mainnet.base.org",
+    "optimism": "https://mainnet.optimism.io",
+    "polygon": "https://polygon-rpc.com",
+    "bsc": "https://bsc-dataseed.binance.org",
+    "ethereum": "https://eth.llamarpc.com",
+    "blast": "https://rpc.blast.io",
+    "scroll": "https://rpc.scroll.io",
+    "linea": "https://rpc.linea.build"
 }
 
-OKX_DEX_ROUTERS = {
-    "xlayer": "0x68097d1dfc8ffb097b69352e4a947d1a5814d9a5",
+# Основные роутеры (DEX/Мосты) в каждой сети для отслеживания свопов и объемов
+DEX_ROUTERS = {
+    "xlayer": "0x68097d1dfc8ffb097b69352e4a947d1a5814d9a5", # OKX DEX Router (X Layer)
+    "arbitrum": "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45", # Uniswap V3 Router
+    "base": "0x2626664c2603336e57b271c5c0b26f421741e481",     # Uniswap V3 Router
+    "optimism": "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45",
+    "polygon": "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45",
+    "bsc": "0x10ed43c718714eb63d5aa57b78b54704e256024e",      # PancakeSwap Router
+    "ethereum": "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45",
+    "blast": "0x1d69dc0d1e345b88ce8d89e02c6101ec9b07efcf",
+    "scroll": "0x569ee73bce4f17789f21f1da83e60a37b3f46f4b",
+    "linea": "0x1d69dc0d1e345b88ce8d89e02c6101ec9b07efcf"
 }
 
-def get_web3_connection(chain="xlayer"):
-    rpc_url = RPC_NODES.get(chain, RPC_NODES["xlayer"])
+def get_web3_connection(chain):
+    rpc_url = RPC_NODES.get(chain)
+    if not rpc_url:
+        return None
     try:
-        w3 = Web3(Web3.HTTPProvider(rpc_url))
+        w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={'timeout': 5}))
         if w3.is_connected():
             return w3
-    except Exception as e:
-        print(f"❌ Ошибка подключения к RPC ноде {chain}: {e}")
+    except Exception:
+        pass
     return None
 
-def fetch_wallet_swap_volume(wallet_address, chain="xlayer", start_block=0):
-    w3 = get_web3_connection(chain)
-    if not w3:
-        return 0.0
+def fetch_wallet_volume_multichain(wallet_address):
+    """Сканирует объемы кошелька по всем подключенным EVM-сетям"""
+    if not wallet_address or len(wallet_address) < 10:
+        return 0.0, {}
 
     target_wallet = Web3.to_checksum_address(wallet_address)
-    router_address = Web3.to_checksum_address(OKX_DEX_ROUTERS.get(chain, OKX_DEX_ROUTERS["xlayer"]))
+    total_global_volume = 0.0
+    chain_volumes = {}
+
+    for chain, rpc_url in RPC_NODES.items():
+        w3 = get_web3_connection(chain)
+        if not w3:
+            continue
+        
+        router = DEX_ROUTERS.get(chain)
+        if not router:
+            continue
+        router_address = Web3.to_checksum_address(router)
+        
+        chain_vol = 0.0
+        try:
+            latest_block = w3.eth.block_number
+            # Сканируем небольшой срез последних блоков для скорости (на бесплатных нодах)
+            scan_window = 1500  
+            start_scan = max(latest_block - scan_window, 0)
+
+            for block_num in range(latest_block, start_scan, -1):
+                block = w3.eth.get_block(block_num, full_transactions=True)
+                for tx in block.transactions:
+                    if tx['from'] and tx['from'].lower() == target_wallet.lower():
+                        if tx['to'] and tx['to'].lower() == router_address.lower():
+                            value_in_native = w3.from_wei(tx['value'], 'ether')
+                            # Грубая оценка в USD в зависимости от сети (ETH/BNB/MATIC)
+                            multiplier = 2600.0 if chain in ["ethereum", "arbitrum", "optimism", "base", "blast", "scroll", "linea", "xlayer"] else (600.0 if chain == "bsc" else 0.5)
+                            chain_vol += float(value_in_native) * multiplier
+        except Exception:
+            pass
+            
+        if chain_vol > 0:
+            chain_volumes[chain] = round(chain_vol, 2)
+            total_global_volume += chain_vol
+
+    return round(total_global_volume, 2), chain_volumes
+
+def send_multichain_leaderboard():
+    if not TELEGRAM_TOKEN:
+        print("⚠️ TELEGRAM_TOKEN не задан!")
+        return
+
+    lines = ["🌐 **Мультичейн-трекер объемов (Все сети)**\n"]
     
-    total_volume_usd = 0.0
+    for name, wallet in USER_WALLETS.items():
+        masked = f"{wallet[:6]}...{wallet[-4:]}"
+        total_vol, breakdown = fetch_wallet_volume_multichain(wallet)
+        
+        breakdown_str = ", ".join([f"`{c.upper()}: ${v:,.0f}`" for c, v in breakdown.items()]) if breakdown else "Нет активности"
+        
+        lines.append(f"👤 **{name}** (`{masked}`)\n📊 Общий объем: **`${total_vol:,.2f}`**\n⚡ Сети: {breakdown_str}\n")
+
+    lines.append("🔄 _Обновлено автоматически через мультичейн-сканер._")
+    message_text = "\n".join(lines)
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID,
+        "message_thread_id": WEB3_TOPIC_ID,
+        "text": message_text,
+        "parse_mode": "Markdown"
+    }
 
     try:
-        latest_block = w3.eth.block_number
-        scan_window = 5000  
-        start_scan = max(latest_block - scan_window, start_block)
-
-        print(f"🔍 Сканируем блокчейн {chain} от блока {start_scan} до {latest_block} для кошелька {target_wallet}...")
-
-        for block_num in range(latest_block, start_scan, -1):
-            block = w3.eth.get_block(block_num, full_transactions=True)
-            for tx in block.transactions:
-                if tx['from'] and tx['from'].lower() == target_wallet.lower():
-                    if tx['to'] and tx['to'].lower() == router_address.lower():
-                        value_in_eth = w3.from_wei(tx['value'], 'ether')
-                        total_volume_usd += float(value_in_eth) * 2600.0  
-
+        res = requests.post(url, json=payload, timeout=15)
+        print(f"📤 Мультичейн-отчет отправлен в Telegram, статус: {res.status_code}")
     except Exception as e:
-        print(f"❌ Ошибка при чтении блокчейна: {e}")
-
-    return round(total_volume_usd, 2)
+        print(f"❌ Ошибка отправки: {e}")
 
 if __name__ == "__main__":
-    print("🚀 Блокчейн-сканер OKX Web3 запущен...")
-    test_wallet = "0xce99d5ef9f01b5c1f68c848448bc35b885f2a5f0"
-    vol = fetch_wallet_swap_volume(test_wallet, chain="xlayer")
-    print(f"📊 Наторгованный объем: ${vol}")
+    print("🚀 Мультичейн-сканер запущен...")
+    send_multichain_leaderboard()

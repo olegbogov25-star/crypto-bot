@@ -33,14 +33,14 @@ TOPICS = {
     "BINGX": 70,    
     "KUCOIN": 71,   
     "KRAKEN": 73,   
-    "GATE": 67,      # Точный ID топика Gate
-    "OKX": 6,        # Точный ID топика OKX
+    "GATE": 67,      
+    "OKX": 6,        
     "FUNDING": 76,  
     "SPREAD": 77,
-    "WEB3": 5190,    # ID топика для OKX Web3 Турниров
-    "NEWSMAKER": 4203, # Топик для новостей NewsMaker
-    "ALPHA": 4273,  # Топик для Binance Alpha (x4)
-    "CHAT": 1       # ID топика «Чат» для калькулятора, /vol и запросов монет
+    "WEB3": 5190,    
+    "NEWSMAKER": 4203, 
+    "ALPHA": 4273,  
+    "CHAT": 1       
 }
 
 # ==================== MAPPING TELEGRAM ID -> MULTICHAIN WALLETS ====================
@@ -458,7 +458,7 @@ def handle_okx_callbacks(call):
             bot.answer_callback_query(call.id, "✅ Данные турнира обновлены!")
         except Exception: pass
 
-# ==================== /SCAN COMMAND (МУЛЬТИЧЕЙН СКАНЕР КОШЕЛЬКОВ) ====================
+# ==================== /SCAN COMMAND (ВЫБОР СЕТИ КНОПКАМИ) ====================
 @bot.message_handler(commands=['scan'])
 def cmd_scan_wallets(message):
     user_id = message.from_user.id
@@ -466,13 +466,54 @@ def cmd_scan_wallets(message):
         bot.reply_to(message, "⚠️ Ваш Telegram ID не привязан к списку кошельков сканера.")
         return
         
-    bot.reply_to(message, "🔍 Запускаю мультичейн-сканирование 10 сетей... Пожалуйста, подождите.")
+    markup = InlineKeyboardMarkup(row_width=2)
+    chains = [
+        ("X Layer", "scan_xlayer"),
+        ("Arbitrum", "scan_arbitrum"),
+        ("Base", "scan_base"),
+        ("Optimism", "scan_optimism"),
+        ("Polygon", "scan_polygon"),
+        ("BSC", "scan_bsc"),
+        ("Ethereum", "scan_ethereum"),
+        ("Blast", "scan_blast"),
+        ("Scroll", "scan_scroll"),
+        ("Linea", "scan_linea")
+    ]
+    for name, callback_val in chains:
+        markup.add(InlineKeyboardButton(f"🌐 {name}", callback_data=callback_val))
+
+    bot.send_message(
+        chat_id=message.chat.id,
+        message_thread_id=message.message_thread_id,
+        text="🔍 **Выберите сеть для точечного сканирования объемов:**",
+        parse_mode="Markdown",
+        reply_markup=markup
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('scan_'))
+def handle_scan_chain_callback(call):
+    chain_key = call.data.replace('scan_', '')
+    bot.answer_callback_query(call.id, f"🔍 Сканирую сеть {chain_key.upper()}...")
     
     try:
-        # Вызываем правильную функцию из scanner.py
-        scanner.send_multichain_leaderboard()
-    except Exception as e:
-        bot.reply_to(message, f"❌ Ошибка при сканировании: {e}")
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=f"⏳ Сканирую сеть **{chain_key.upper()}**... Пожалуйста, подождите пару секунд.",
+            parse_mode="Markdown"
+        )
+    except Exception: pass
+
+    def run_single_scan():
+        try:
+            scanner.send_single_chain_report(chain_key)
+            try:
+                bot.delete_message(chat_id=call.message.chat.id, message_id=call.message.message_id)
+            except: pass
+        except Exception as e:
+            print(f"❌ Ошибка точечного сканирования: {e}")
+
+    threading.Thread(target=run_single_scan, daemon=True).start()
 
 # ==================== HEALTHCHECK & WEB APP CHART SERVER ====================
 @app.route('/')
@@ -1617,7 +1658,6 @@ def handle_chat_messages(message):
             return
         except: pass
 
-    # Проверяем запрос вида "3 btc", "125000 kor" или просто тикер "btc"
     match_qty = re.search(r'^([\d\s\.,]+)\s+([a-zA-Z]+)$', text)
     if match_qty:
         try:
@@ -1652,7 +1692,7 @@ def handle_chat_messages(message):
     bot.reply_to(message, "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
 
 if __name__ == "__main__":
-    print("🚀 Bot starting with Fixed X-Trade/X-Launch Tournaments, 10m Updates & Clean URLs...")
+    print("🚀 Bot starting with Targeted Chain Scans & Multi-Coin Calculator...")
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     threading.Thread(target=fetch_newsmaker_channel, daemon=True).start()

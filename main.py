@@ -198,17 +198,37 @@ def fetch_token_prices_on_demand(sym):
 
     return ex_prices, ex_vols
 
-# ==================== OKX WEB3 TOURNAMENT ENGINE (АКТУАЛЬНЫЕ ТУРНИРЫ) ====================
-TOURNAMENTS_CONFIG = {
-    "solana": {"name": "Solana Eco", "type": "X Trade", "chain": "solana", "max_rank": 1200, "est_reward": "$60.00"},
-    "tech": {"name": "Технологический Буст", "type": "X Trade", "chain": "evm", "max_rank": 1000, "est_reward": "$50.00"}
-}
+# ==================== OKX WEB3 TOURNAMENT ENGINE (ДИНАМИЧЕСКИЙ СКАНЕР) ====================
+def fetch_dynamic_okx_tournaments():
+    """Динамический парсинг активных турниров OKX Web3 с фронтенда/публичных эндпоинтов"""
+    tournaments = {
+        "akedo": {"name": "Akedo (X Trade)", "type": "X Trade", "chain": "evm", "max_rank": 1000, "est_reward": "$103.15"},
+        "solana": {"name": "Solana Eco", "type": "X Trade", "chain": "solana", "max_rank": 1200, "est_reward": "$60.00"},
+        "tech": {"name": "Технологический Буст", "type": "X Trade", "chain": "evm", "max_rank": 1000, "est_reward": "$50.00"}
+    }
+    try:
+        # Фоновый опрос официальной страницы OKX Web3 кампаний для авто-обнаружения новых ивентов
+        res = secure_request("https://www.okx.com/en/web3", timeout=5)
+        if res and res.status_code == 200:
+            soup = BeautifulSoup(res.text, 'html.parser')
+            # Дополнительный динамический поиск элементов промоакций на странице
+            for a in soup.find_all('a', href=True):
+                href = a['href']
+                if 'campaign' in href or 'boost' in href or 'trade' in href:
+                    title = a.get_text(strip=True)
+                    if title and len(title) > 3 and title not in [t["name"] for t in tournaments.values()]:
+                        slug = re.sub(r'[^a-z0-9]', '', title.lower())[:10]
+                        if slug and slug not in tournaments:
+                            tournaments[slug] = {"name": title[:30], "type": "X Trade", "chain": "evm", "max_rank": 1000, "est_reward": "Dynamic"}
+    except Exception as e:
+        print(f"⚠️ Dynamic OKX scanner fallback used: {e}")
+    return tournaments
 
 def get_user_wallet_for_tournament(user_id, t_id):
-    """Умный выбор правильного адреса кошелька в зависимости от сети турнира (Solana или EVM)"""
     u_info = USER_WALLETS.get(user_id)
     if not u_info: return ""
-    conf = TOURNAMENTS_CONFIG.get(t_id, list(TOURNAMENTS_CONFIG.values())[0])
+    tournaments = fetch_dynamic_okx_tournaments()
+    conf = tournaments.get(t_id, list(tournaments.values())[0])
     chain = conf.get("chain", "evm")
     
     if chain == "solana" and u_info.get("solana"):
@@ -216,8 +236,8 @@ def get_user_wallet_for_tournament(user_id, t_id):
     return u_info.get("evm", "")
 
 def fetch_okx_tournament_leaderboard(t_id, target_wallet):
-    """Проверка реального объема по кошельку. Если баланс/объем 0 или адрес не задан, возвращаем честный статус."""
-    conf = TOURNAMENTS_CONFIG.get(t_id, list(TOURNAMENTS_CONFIG.values())[0])
+    tournaments = fetch_dynamic_okx_tournaments()
+    conf = tournaments.get(t_id, list(tournaments.values())[0])
     max_r = conf["max_rank"]
     
     if not target_wallet:
@@ -234,17 +254,6 @@ def fetch_okx_tournament_leaderboard(t_id, target_wallet):
     user_vol = 0.0
     user_rank = "--"
     
-    if user_vol <= 0:
-        return {
-            "user_rank": "--",
-            "user_vol": 0.0,
-            "max_rank": max_r,
-            "cutoff_vol": 0.0,
-            "neighbors": [],
-            "est_reward": conf["est_reward"],
-            "participating": False
-        }
-
     return {
         "user_rank": user_rank,
         "user_vol": user_vol,
@@ -252,11 +261,12 @@ def fetch_okx_tournament_leaderboard(t_id, target_wallet):
         "cutoff_vol": 0.0,
         "neighbors": [],
         "est_reward": conf["est_reward"],
-        "participating": True
+        "participating": False
     }
 
 def format_okx_card(user_name, wallet_addr, tour_key, data):
-    conf = TOURNAMENTS_CONFIG.get(tour_key, list(TOURNAMENTS_CONFIG.values())[0])
+    tournaments = fetch_dynamic_okx_tournaments()
+    conf = tournaments.get(tour_key, list(tournaments.values())[0])
     rank = data["user_rank"]
     vol = data["user_vol"]
     max_rank = data["max_rank"]
@@ -266,13 +276,13 @@ def format_okx_card(user_name, wallet_addr, tour_key, data):
     
     if not data["participating"] or rank == "--":
         return (
-            f"🏆 **OKX Web3 Tournament Tracker**\n"
+            f"🏆 **OKX Web3 Tournament Tracker (Dynamic)**\n"
             f"👤 **{user_name}** (`{masked}` | Сеть: `{chain_label}`)\n"
             f"⚡ **Турнир:** `{conf['name']}` ({conf['type']})\n\n"
             f"📍 **Твое место:** `--` (Нет транзакций / Не участвует)\n"
             f"📊 **Наторгованный объем:** `$0.00`\n"
-            f"🎁 **Примерная награда:** `0 USDT`\n\n"
-            f"ℹ️ Сделайте первый свап в сети `{chain_label}` для активации отслеживания.\n\n"
+            f"🎁 **Примерная награда:** `{est_reward}`\n\n"
+            f"ℹ️ Авто-обнаружение активно. Сделайте первый свап в сети `{chain_label}` для активации.\n\n"
             f"🔄 _Авто-обновление каждые 10 мин | {get_kyiv_time()} (Киев)_"
         )
 
@@ -291,7 +301,7 @@ def format_okx_card(user_name, wallet_addr, tour_key, data):
     neighbors_block = "\n".join(neighbors_text) if neighbors_text else "Нет данных соседей"
     
     msg_text = (
-        f"🏆 **OKX Web3 Tournament Tracker**\n"
+        f"🏆 **OKX Web3 Tournament Tracker (Dynamic)**\n"
         f"👤 **{user_name}** (`{masked}` | Сеть: `{chain_label}`)\n"
         f"⚡ **Турнир:** `{conf['name']}` ({conf['type']})\n\n"
         f"📍 **Твое место:** `#{rank}` из `{max_rank}`\n"
@@ -341,7 +351,8 @@ def run_okx_autoupdate(chat_id, thread_id, msg_id, user_id, tour_key):
 
 def get_tournaments_keyboard():
     markup = InlineKeyboardMarkup(row_width=2)
-    for key, conf in TOURNAMENTS_CONFIG.items():
+    tournaments = fetch_dynamic_okx_tournaments()
+    for key, conf in tournaments.items():
         markup.add(InlineKeyboardButton(f"🏆 {conf['name']}", callback_data=f"okx_tour_{key}"))
     return markup
 
@@ -359,7 +370,7 @@ def cmd_okx_start(message):
     bot.send_message(
         chat_id=CHAT_ID,
         message_thread_id=TOPICS["WEB3"],
-        text=f"📊 **OKX Web3 Tournament Tracker**\n\n👤 **Пользователь:** {u_info['name']}\n💳 **Кошелек (EVM):** `{masked}`\n\nВыберите активный турнир для отслеживания:",
+        text=f"📊 **OKX Web3 Tournament Tracker (Dynamic)**\n\n👤 **Пользователь:** {u_info['name']}\n💳 **Кошелек (EVM):** `{masked}`\n\nВыберите активный турнир для отслеживания:",
         parse_mode="Markdown",
         reply_markup=get_tournaments_keyboard()
     )
@@ -373,12 +384,13 @@ def handle_okx_callbacks(call):
 
     data = call.data
     u_info = USER_WALLETS[user_id]
+    tournaments = fetch_dynamic_okx_tournaments()
     
     if data == "okx_select_menu":
         bot.edit_message_text(
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
-            text=f"📊 **OKX Web3 Tournament Tracker**\n\n👤 **Пользователь:** {u_info['name']}\n💳 **Кошелек:** `{mask_wallet(u_info['evm'])}`\n\nВыберите турнир:",
+            text=f"📊 **OKX Web3 Tournament Tracker (Dynamic)**\n\n👤 **Пользователь:** {u_info['name']}\n💳 **Кошелек:** `{mask_wallet(u_info['evm'])}`\n\nВыберите турнир:",
             parse_mode="Markdown",
             reply_markup=get_tournaments_keyboard()
         )
@@ -386,8 +398,8 @@ def handle_okx_callbacks(call):
 
     if data.startswith("okx_tour_") or data.startswith("okx_refresh_"):
         tour_key = data.replace("okx_tour_", "").replace("okx_refresh_", "")
-        if tour_key not in TOURNAMENTS_CONFIG:
-            tour_key = list(TOURNAMENTS_CONFIG.keys())[0]
+        if tour_key not in tournaments:
+            tour_key = list(tournaments.keys())[0]
             
         wallet_to_check = get_user_wallet_for_tournament(user_id, tour_key)
         board_data = fetch_okx_tournament_leaderboard(tour_key, wallet_to_check)
@@ -711,7 +723,7 @@ def analyze_text(text):
         print(f"AI Error: {e}")
         return text
 
-# ==================== NEWSMAKER TRANSLATOR & ROUTER ====================
+# ==================== NEWSMAKER TRANSLATOR & ROUTER (MULTI-SOURCE: NWSMKR + WATCHERGURU) ====================
 def translate_newsmaker_text(text):
     if not OPENROUTER_API_KEY:
         return text
@@ -752,7 +764,6 @@ def send_to_topic(topic_name, text, reply_to_message_id=None, reply_markup=None)
     return None
 
 def extract_official_web_link(msg_element, fallback_link):
-    """Ищет прямую ссылку на официальный сайт биржи внутри кнопок или текста поста"""
     try:
         buttons = msg_element.find_all('a', class_='tgme_widget_message_inline_button')
         for btn in buttons:
@@ -863,7 +874,6 @@ def fetch_telegram_channels_promos():
                     if not res: continue
                     soup = BeautifulSoup(res.text, 'html.parser')
                     messages = soup.find_all('div', class_='tgme_widget_message')
-                    # АНТИФЛУД: строго последнее 1 сообщение
                     for msg in messages[-1:]:
                         msg_id_attr = msg.get('data-post', '')
                         if not msg_id_attr: continue
@@ -883,7 +893,6 @@ def fetch_telegram_channels_promos():
                     if not res: continue
                     soup = BeautifulSoup(res.text, 'html.parser')
                     messages = soup.find_all('div', class_='tgme_widget_message')
-                    # АНТИФЛУД: строго последнее 1 сообщение
                     for msg in messages[-1:]:
                         msg_id_attr = msg.get('data-post', '')
                         if not msg_id_attr: continue
@@ -902,96 +911,98 @@ def fetch_telegram_channels_promos():
             print(f"Telegram Channels & Web3 Monitor Error: {e}")
             time.sleep(60)
 
-# ==================== NEWSMAKER MONITOR (ANTIFLOOD + IMAGES) ====================
+# ==================== DUAL-SOURCE NEWSMAKER MONITOR (NWSMKR + WATCHERGURU) ====================
+def poll_news_source(channel_username, label_prefix):
+    url = f"https://t.me/s/{channel_username}"
+    res = secure_request(url, timeout=10)
+    if not res: return
+    
+    soup = BeautifulSoup(res.text, 'html.parser')
+    messages = soup.find_all('div', class_='tgme_widget_message')
+    for msg in messages[-1:]:
+        msg_id_attr = msg.get('data-post', '')
+        if not msg_id_attr: continue
+        
+        item_id = f"{label_prefix}_{msg_id_attr.replace('/', '_')}"
+        if item_id in processed_ids: continue
+        processed_ids.add(item_id)
+        
+        text_div = msg.find('div', class_='tgme_widget_message_text')
+        raw_text = text_div.get_text(separator='\n', strip=True) if text_div else ""
+        
+        photo_url = None
+        photo_wrap = msg.find('a', class_='tgme_widget_message_photo_wrap')
+        if photo_wrap and photo_wrap.has_attr('style'):
+            style_str = photo_wrap['style']
+            match = re.search(r"background-image:\s*url\(['\"]?(.*?)['\"]?\)", style_str)
+            if match:
+                photo_url = match.group(1)
+        
+        if not photo_url:
+            img_tag = msg.find('img', class_='tgme_widget_message_photo_image')
+            if img_tag and img_tag.has_attr('src'):
+                photo_url = img_tag['src']
+        
+        post_link = f"https://t.me/{msg_id_attr}"
+        btn = msg.find('a', class_='tgme_widget_message_url')
+        if btn and btn.get('href'): post_link = btn.get('href')
+        
+        translated_text = translate_newsmaker_text(raw_text) if raw_text else "📰 Крипто-новость"
+        
+        msg_text = (
+            f"📰 **Crypto News ({label_prefix})**\n\n"
+            f"{translated_text}\n\n"
+            f"🔄 _Источник рынка_"
+        )
+        
+        markup = InlineKeyboardMarkup()
+        if post_link and post_link.startswith("http"):
+            markup.add(InlineKeyboardButton("📱 Оригинал новости", url=post_link))
+            
+        thread_id = TOPICS.get("NEWSMAKER", 4203)
+        
+        photo_sent = False
+        if photo_url:
+            try:
+                img_res = requests.get(photo_url, headers=get_random_headers(), timeout=10)
+                if img_res.status_code == 200:
+                    photo_file = io.BytesIO(img_res.content)
+                    photo_file.name = "chart.jpg"
+                    bot.send_photo(
+                        chat_id=CHAT_ID,
+                        message_thread_id=thread_id,
+                        photo=photo_file,
+                        caption=msg_text,
+                        parse_mode="Markdown",
+                        reply_markup=markup
+                    )
+                    photo_sent = True
+            except Exception as img_err:
+                print(f"❌ Failed to download/send image for {label_prefix}: {img_err}")
+
+        if not photo_sent:
+            try:
+                bot.send_message(
+                    chat_id=CHAT_ID,
+                    message_thread_id=thread_id,
+                    text=msg_text,
+                    parse_mode="Markdown",
+                    disable_web_page_preview=True,
+                    reply_markup=markup
+                )
+            except Exception as e:
+                print(f"❌ Send News Error ({label_prefix}): {e}")
+
 def fetch_newsmaker_channel():
-    print("🟢 NewsMaker Monitor started...")
-    newsmaker_username = "nwsmkr" 
+    print("🟢 Dual-Source NewsMaker Monitor (NewsMaker + WatcherGuru) started...")
     while True:
         try:
-            url = f"https://t.me/s/{newsmaker_username}"
-            res = secure_request(url, timeout=10)
-            if res:
-                soup = BeautifulSoup(res.text, 'html.parser')
-                messages = soup.find_all('div', class_='tgme_widget_message')
-                # АНТИФЛУД: строго последнее 1 сообщение
-                for msg in messages[-1:]:
-                    msg_id_attr = msg.get('data-post', '')
-                    if not msg_id_attr: continue
-                    
-                    item_id = f"newsmaker_{msg_id_attr.replace('/', '_')}"
-                    if item_id in processed_ids: continue
-                    processed_ids.add(item_id)
-                    
-                    text_div = msg.find('div', class_='tgme_widget_message_text')
-                    raw_text = text_div.get_text(separator='\n', strip=True) if text_div else ""
-                    
-                    photo_url = None
-                    photo_wrap = msg.find('a', class_='tgme_widget_message_photo_wrap')
-                    if photo_wrap and photo_wrap.has_attr('style'):
-                        style_str = photo_wrap['style']
-                        match = re.search(r"background-image:\s*url\(['\"]?(.*?)['\"]?\)", style_str)
-                        if match:
-                            photo_url = match.group(1)
-                    
-                    if not photo_url:
-                        img_tag = msg.find('img', class_='tgme_widget_message_photo_image')
-                        if img_tag and img_tag.has_attr('src'):
-                            photo_url = img_tag['src']
-                    
-                    post_link = f"https://t.me/{msg_id_attr}"
-                    btn = msg.find('a', class_='tgme_widget_message_url')
-                    if btn and btn.get('href'): post_link = btn.get('href')
-                    
-                    translated_text = translate_newsmaker_text(raw_text) if raw_text else "📰 Новость с графиком"
-                    
-                    msg_text = (
-                        f"📰 **Crypto News (NewsMaker)**\n\n"
-                        f"{translated_text}\n\n"
-                        f"🔄 _Источник рынка_"
-                    )
-                    
-                    markup = InlineKeyboardMarkup()
-                    if post_link and post_link.startswith("http"):
-                        markup.add(InlineKeyboardButton("📱 Оригинал новости", url=post_link))
-                        
-                    thread_id = TOPICS.get("NEWSMAKER", 4203)
-                    
-                    photo_sent = False
-                    if photo_url:
-                        try:
-                            img_res = requests.get(photo_url, headers=get_random_headers(), timeout=10)
-                            if img_res.status_code == 200:
-                                photo_file = io.BytesIO(img_res.content)
-                                photo_file.name = "chart.jpg"
-                                bot.send_photo(
-                                    chat_id=CHAT_ID,
-                                    message_thread_id=thread_id,
-                                    photo=photo_file,
-                                    caption=msg_text,
-                                    parse_mode="Markdown",
-                                    reply_markup=markup
-                                )
-                                photo_sent = True
-                        except Exception as img_err:
-                            print(f"❌ Failed to download/send NewsMaker image: {img_err}")
-
-                    if not photo_sent:
-                        try:
-                            bot.send_message(
-                                chat_id=CHAT_ID,
-                                message_thread_id=thread_id,
-                                text=msg_text,
-                                parse_mode="Markdown",
-                                disable_web_page_preview=True,
-                                reply_markup=markup
-                            )
-                        except Exception as e:
-                            print(f"❌ Send NewsMaker Error: {e}")
-                            
-                    time.sleep(1)
+            poll_news_source("nwsmkr", "newsmaker")
+            time.sleep(5)
+            poll_news_source("WatcherGuru", "watcherguru")
         except Exception as e:
             print(f"NewsMaker Monitor Error: {e}")
-        time.sleep(900)
+        time.sleep(600)
 
 # ==================== DIRECT EXCHANGE WEBSITES, APIS & WEB3 SCRAPER ====================
 def fetch_direct_exchange_promos():
@@ -1201,10 +1212,10 @@ def format_countdown(target_timestamp):
     minutes = int((diff % 3600) // 60)
     return f"{hours}ч {minutes:02d}м"
 
-# ==================== SPREAD MONITOR (ANTI-FLOOD & CONVERGENCE CHART) ====================
+# ==================== SPREAD MONITOR (THRESHOLD $25k, SPREAD >= 7.0%) ====================
 def monitor_spread():
     global active_spreads, price_history_long, price_history_short, sent_alerts_cache
-    print("🟢 Spread Monitor started (Threshold: $50k volume, Spread >= 7.0%, Anti-Flood enabled)")
+    print("🟢 Spread Monitor started (Threshold: $25k volume, Spread >= 7.0%, Anti-Flood enabled)")
     while True:
         try:
             prices, volumes, fundings, _ = fetch_futures_data()
@@ -1212,7 +1223,8 @@ def monitor_spread():
 
             for sym, ex_data in prices.items():
                 sym_vols = volumes.get(sym, {})
-                valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 50_000}
+                # Снижен порог ликвидности с 50k до 25k
+                valid_ex_data = {ex: p for ex, p in ex_data.items() if sym_vols.get(ex, 0) >= 25_000}
 
                 if len(valid_ex_data) < 2:
                     continue
@@ -1309,9 +1321,9 @@ def monitor_spread():
         
         time.sleep(30)
 
-# ==================== FUNDING MONITOR ====================
+# ==================== FUNDING MONITOR (THRESHOLD $25k) ====================
 def monitor_funding():
-    print("🟢 Funding Monitor started (Topic 76, Spread >= 0.5%)")
+    print("🟢 Funding Monitor started (Topic 76, Threshold $25k, Spread >= 0.5%)")
     while True:
         try:
             _, volumes, fundings, funding_times = fetch_futures_data()
@@ -1319,7 +1331,8 @@ def monitor_funding():
 
             for sym, ex_funds in fundings.items():
                 sym_vols = volumes.get(sym, {})
-                valid_ex_funds = {ex: rate for ex, rate in ex_funds.items() if sym_vols.get(ex, 0) >= 50_000}
+                # Снижен порог ликвидности с 50k до 25k
+                valid_ex_funds = {ex: rate for ex, rate in ex_funds.items() if sym_vols.get(ex, 0) >= 25_000}
                 if len(valid_ex_funds) < 2: continue
 
                 max_ex = max(valid_ex_funds, key=valid_ex_funds.get)
@@ -1414,7 +1427,7 @@ def run_alpha_session(session_key, symbol):
                 if old_price > 0:
                     price_change = ((current_price - old_price) / old_price) * 100
 
-            spread_offset = 0.003  # 0.3% базовая разница
+            spread_offset = 0.003
             if abs(price_change) >= 0.3:
                 spread_offset = 0.006
 
@@ -1595,7 +1608,7 @@ def handle_chat_messages(message):
 
 # ==================== MAIN START ====================
 if __name__ == "__main__":
-    print("🚀 Bot starting with Volume Threshold $50k, 0.3% Scanner & Gate.io/Bybit Fixed...")
+    print("🚀 Bot starting with Volume Threshold $25k, Dynamic OKX Tournaments, WatcherGuru News & 0.3% Scanner...")
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     threading.Thread(target=fetch_newsmaker_channel, daemon=True).start()

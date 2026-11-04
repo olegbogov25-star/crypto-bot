@@ -3,19 +3,16 @@ import time
 import requests
 from web3 import Web3
 
-# ==================== КОНФИГУРАЦИЯ ====================
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = "-1004451728851"
-WEB3_TOPIC_ID = 5190  # ID твоего топика WEB3
+WEB3_TOPIC_ID = 5190
 
-# Твои кошельки (если сеть EVM, они подходят во все эти сети автоматически)
 USER_WALLETS = {
     "Аккаунт #1 (Основной)": "0xce99d5ef9f01b5c1f68c848448bc35b885f2a5f0",
     "Аккаунт #2 (Второй телефон)": "0x6c72b72f5c4b8fedda40dc20277b5f4a6f639326",
     "Дима (Доверенное лицо)": "0xaa4d1ee7c6026e3d132eda595dcbd9c210e37e28"
 }
 
-# Публичные бесплатные RPC-ноды для всех основных сетей
 RPC_NODES = {
     "xlayer": "https://rpc.xlayer.tech",
     "arbitrum": "https://arb1.arbitrum.io/rpc",
@@ -29,14 +26,13 @@ RPC_NODES = {
     "linea": "https://rpc.linea.build"
 }
 
-# Основные роутеры (DEX/Мосты) в каждой сети для отслеживания свопов и объемов
 DEX_ROUTERS = {
-    "xlayer": "0x68097d1dfc8ffb097b69352e4a947d1a5814d9a5", # OKX DEX Router (X Layer)
-    "arbitrum": "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45", # Uniswap V3 Router
-    "base": "0x2626664c2603336e57b271c5c0b26f421741e481",     # Uniswap V3 Router
+    "xlayer": "0x68097d1dfc8ffb097b69352e4a947d1a5814d9a5",
+    "arbitrum": "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45",
+    "base": "0x2626664c2603336e57b271c5c0b26f421741e481",
     "optimism": "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45",
     "polygon": "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45",
-    "bsc": "0x10ed43c718714eb63d5aa57b78b54704e256024e",      # PancakeSwap Router
+    "bsc": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
     "ethereum": "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45",
     "blast": "0x1d69dc0d1e345b88ce8d89e02c6101ec9b07efcf",
     "scroll": "0x569ee73bce4f17789f21f1da83e60a37b3f46f4b",
@@ -45,76 +41,65 @@ DEX_ROUTERS = {
 
 def get_web3_connection(chain):
     rpc_url = RPC_NODES.get(chain)
-    if not rpc_url:
-        return None
+    if not rpc_url: return None
     try:
-        w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={'timeout': 5}))
+        w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={'timeout': 3}))
         if w3.is_connected():
             return w3
     except Exception:
         pass
     return None
 
-def fetch_wallet_volume_multichain(wallet_address):
-    """Сканирует объемы кошелька по всем подключенным EVM-сетям"""
+def fetch_wallet_volume_single_chain(wallet_address, chain):
+    """Сканирует объем конкретного кошелька строго в одной выбранной сети для молниеносного ответа"""
     if not wallet_address or len(wallet_address) < 10:
-        return 0.0, {}
+        return 0.0
 
+    w3 = get_web3_connection(chain)
+    if not w3: return 0.0
+    
+    router = DEX_ROUTERS.get(chain)
+    if not router: return 0.0
+    
     target_wallet = Web3.to_checksum_address(wallet_address)
-    total_global_volume = 0.0
-    chain_volumes = {}
+    router_address = Web3.to_checksum_address(router)
+    
+    chain_vol = 0.0
+    try:
+        latest_block = w3.eth.block_number
+        scan_window = 400  # Оптимальный срез блоков для скорости
+        start_scan = max(latest_block - scan_window, 0)
 
-    for chain, rpc_url in RPC_NODES.items():
-        w3 = get_web3_connection(chain)
-        if not w3:
-            continue
-        
-        router = DEX_ROUTERS.get(chain)
-        if not router:
-            continue
-        router_address = Web3.to_checksum_address(router)
-        
-        chain_vol = 0.0
-        try:
-            latest_block = w3.eth.block_number
-            # Сканируем небольшой срез последних блоков для скорости (на бесплатных нодах)
-            scan_window = 1500  
-            start_scan = max(latest_block - scan_window, 0)
-
-            for block_num in range(latest_block, start_scan, -1):
+        for block_num in range(latest_block, start_scan, -1):
+            try:
                 block = w3.eth.get_block(block_num, full_transactions=True)
                 for tx in block.transactions:
-                    if tx['from'] and tx['from'].lower() == target_wallet.lower():
-                        if tx['to'] and tx['to'].lower() == router_address.lower():
-                            value_in_native = w3.from_wei(tx['value'], 'ether')
-                            # Грубая оценка в USD в зависимости от сети (ETH/BNB/MATIC)
+                    if tx.get('from') and tx['from'].lower() == target_wallet.lower():
+                        if tx.get('to') and tx['to'].lower() == router_address.lower():
+                            value_in_native = w3.from_wei(tx.get('value', 0), 'ether')
                             multiplier = 2600.0 if chain in ["ethereum", "arbitrum", "optimism", "base", "blast", "scroll", "linea", "xlayer"] else (600.0 if chain == "bsc" else 0.5)
                             chain_vol += float(value_in_native) * multiplier
-        except Exception:
-            pass
-            
-        if chain_vol > 0:
-            chain_volumes[chain] = round(chain_vol, 2)
-            total_global_volume += chain_vol
+            except Exception:
+                continue
+    except Exception:
+        pass
+        
+    return round(chain_vol, 2)
 
-    return round(total_global_volume, 2), chain_volumes
-
-def send_multichain_leaderboard():
+def send_single_chain_report(chain_key):
+    """Отправляет отчет по конкретной выбранной сети"""
     if not TELEGRAM_TOKEN:
-        print("⚠️ TELEGRAM_TOKEN не задан!")
         return
 
-    lines = ["🌐 **Мультичейн-трекер объемов (Все сети)**\n"]
+    chain_name = chain_key.upper()
+    lines = [f"🌐 **Мультичейн-трекер: сеть `{chain_name}`**\n"]
     
     for name, wallet in USER_WALLETS.items():
         masked = f"{wallet[:6]}...{wallet[-4:]}"
-        total_vol, breakdown = fetch_wallet_volume_multichain(wallet)
-        
-        breakdown_str = ", ".join([f"`{c.upper()}: ${v:,.0f}`" for c, v in breakdown.items()]) if breakdown else "Нет активности"
-        
-        lines.append(f"👤 **{name}** (`{masked}`)\n📊 Общий объем: **`${total_vol:,.2f}`**\n⚡ Сети: {breakdown_str}\n")
+        vol = fetch_wallet_volume_single_chain(wallet, chain_key)
+        lines.append(f"👤 **{name}** (`{masked}`)\n📊 Объем в `{chain_name}`: **`${vol:,.2f}`**\n")
 
-    lines.append("🔄 _Обновлено автоматически через мультичейн-сканер._")
+    lines.append(f"🔄 _Точечный сканирование сети {chain_name} завершено._")
     message_text = "\n".join(lines)
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -126,11 +111,6 @@ def send_multichain_leaderboard():
     }
 
     try:
-        res = requests.post(url, json=payload, timeout=15)
-        print(f"📤 Мультичейн-отчет отправлен в Telegram, статус: {res.status_code}")
+        requests.post(url, json=payload, timeout=10)
     except Exception as e:
-        print(f"❌ Ошибка отправки: {e}")
-
-if __name__ == "__main__":
-    print("🚀 Мультичейн-сканер запущен...")
-    send_multichain_leaderboard()
+        print(f"❌ Ошибка отправки отчета по сети: {e}")

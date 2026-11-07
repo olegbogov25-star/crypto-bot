@@ -121,7 +121,7 @@ def fetch_token_prices_on_demand(sym):
     base_sym = sym.replace('USDT', '')
     ex_prices, ex_vols = {}, {}
     
-    # 1. BINANCE (Spot Depth OrderBook - Точная живая цена стакана для Alpha)
+    # Прямой высокоточный парсинг стакана Binance Spot Depth (основа для Alpha)
     try:
         r = requests.get(f"https://api.binance.com/api/v3/depth?symbol={base_sym}USDT&limit=5", timeout=2).json()
         if 'bids' in r and 'asks' in r and len(r['bids']) > 0 and len(r['asks']) > 0:
@@ -142,21 +142,6 @@ def fetch_token_prices_on_demand(sym):
                 mid_price = (bid + ask) / 2
                 ex_prices['Binance (Spot)'] = mid_price
                 ex_prices['Binance'] = mid_price
-        except: pass
-
-    try:
-        r = requests.get(f"https://fapi.binance.com/fapi/v1/ticker/24hr?symbol={base_sym}USDT", timeout=2).json()
-        if 'lastPrice' in r:
-            if 'Binance' not in ex_prices:
-                ex_prices['Binance'] = float(r['lastPrice'])
-            ex_vols['Binance'] = float(r.get('quoteVolume', 0))
-    except:
-        try:
-            r = requests.get(f"https://api.binance.com/api/v3/ticker/24hr?symbol={base_sym}USDT", timeout=2).json()
-            if 'lastPrice' in r:
-                if 'Binance (Spot)' not in ex_prices:
-                    ex_prices['Binance (Spot)'] = float(r['lastPrice'])
-                ex_vols['Binance (Spot)'] = float(r.get('quoteVolume', 0))
         except: pass
 
     try:
@@ -1427,14 +1412,18 @@ def monitor_funding():
 def run_alpha_session(session_key, symbol):
     print(f"🚀 [ALPHA DEBUG] Поток запущен для #{symbol} (ключ: {session_key})")
     
+    # Отправляем первое стартовое сообщение и сохраняем его message_id для последующего редактирования
+    msg_id = None
     try:
-        bot.send_message(
+        res = bot.send_message(
             chat_id=CHAT_ID, 
             message_thread_id=TOPICS["ALPHA"], 
-            text=f"🚀 **Binance Alpha сессия запущена для #{symbol}**\nПредиктивный сканер (30 сек, порог 0.3%) и расчет диапазона цен активен.", 
+            text=f"🚀 **Binance Alpha сессия запущена для #{symbol}**\nИнициализация стакана...", 
             parse_mode="Markdown",
             disable_web_page_preview=True
         )
+        if res:
+            msg_id = res.message_id
     except Exception as e:
         print(f"❌ [ALPHA ERROR] Не удалось отправить стартовое сообщение: {e}")
     
@@ -1446,6 +1435,15 @@ def run_alpha_session(session_key, symbol):
             session = active_alpha_sessions.get(session_key)
             if not session or session.get("stop"):
                 print(f"⏹ [ALPHA DEBUG] Сессия для #{symbol} остановлена принудительно.")
+                if msg_id:
+                    try:
+                        bot.edit_message_text(
+                            chat_id=CHAT_ID,
+                            message_id=msg_id,
+                            text=f"⏹ **Alpha | #{symbol}**\nСессия остановлена.",
+                            parse_mode="Markdown"
+                        )
+                    except: pass
                 break
 
             ex_prices, ex_vols = fetch_token_prices_on_demand(symbol)
@@ -1456,14 +1454,17 @@ def run_alpha_session(session_key, symbol):
                     current_price = list(ex_prices.values())[0]
 
             if current_price <= 0:
-                bot.send_message(
-                    chat_id=CHAT_ID, 
-                    message_thread_id=TOPICS["ALPHA"], 
-                    text=f"🔍 **Alpha | #{symbol}**\n⚠️ Не удалось получить цену с бирж. Повтор через 30 сек...", 
-                    parse_mode="Markdown",
-                    disable_web_page_preview=True
-                )
-                time.sleep(30)
+                if msg_id:
+                    try:
+                        bot.edit_message_text(
+                            chat_id=CHAT_ID,
+                            message_id=msg_id,
+                            text=f"🔍 **Alpha | #{symbol}**\n⚠️ Не удалось получить цену из стакана. Повтор...",
+                            parse_mode="Markdown",
+                            disable_web_page_preview=True
+                        )
+                    except: pass
+                time.sleep(7)
                 continue
 
             now_ts = time.time()
@@ -1486,9 +1487,10 @@ def run_alpha_session(session_key, symbol):
                 if old_price > 0:
                     price_change = ((current_price - old_price) / old_price) * 100
 
-            spread_offset = 0.0015
+            # Плотный отступ 0.1% - 0.15% для безопасного открута maker ордеров
+            spread_offset = 0.0012
             if abs(price_change) >= 0.3:
-                spread_offset = 0.003
+                spread_offset = 0.0025
 
             suggested_buy = current_price * (1 - spread_offset)
             suggested_sell = current_price * (1 + spread_offset)
@@ -1498,10 +1500,10 @@ def run_alpha_session(session_key, symbol):
 
             if price_change <= -0.3:
                 trend_icon = "🩸"
-                action_advice = "⚠️ **ВНИМАНИЕ: ДАМП / СПОЛЗАНИЕ!** Монету плавно или резко укатывает вниз. Обратный ордер на продажу может зависнуть — притормози открут!"
+                action_advice = "⚠️ **ВНИМАНИЕ: ДАМП / СПОЛЗАНИЕ!** Монета просела на >= 0.3%. Обратный ордер на продажу может зависнуть — притормози открут!"
             elif price_change >= 0.3:
                 trend_icon = "🚀"
-                action_advice = "🔥 **ВНИМАНИЕ: ПАМП / РАЗГОН!** Заметный импульс вверх. Покупать по текущим рискованно, жди отката."
+                action_advice = "🔥 **ВНИМАНИЕ: ПАМП / РАЗГОН!** Заметный импульс вверх на >= 0.3%. Жди отката."
 
             msg_txt = (
                 f"{trend_icon} **Alpha | #{symbol}** | `${current_price}` (`{price_change:+.2f}%`)\n\n"
@@ -1509,19 +1511,36 @@ def run_alpha_session(session_key, symbol):
                 f"🎯 **Совет по откруту:**\n_{action_advice}_\n\n"
                 f"🕒 _{get_kyiv_time()}_"
             )
-                
-            bot.send_message(
-                chat_id=CHAT_ID, 
-                message_thread_id=TOPICS["ALPHA"], 
-                text=msg_txt, 
-                parse_mode="Markdown",
-                disable_web_page_preview=True
-            )
+            
+            # Редактируем существующее сообщение вместо отправки нового (спам-фильтр Telegram обойден)
+            if msg_id:
+                try:
+                    bot.edit_message_text(
+                        chat_id=CHAT_ID,
+                        message_id=msg_id,
+                        text=msg_txt,
+                        parse_mode="Markdown",
+                        disable_web_page_preview=True
+                    )
+                except Exception as edit_err:
+                    # Если вдруг сообщение было удалено вручную, отправляем новое и запоминаем ID
+                    if "message to edit not found" in str(edit_err).lower():
+                        try:
+                            res = bot.send_message(
+                                chat_id=CHAT_ID,
+                                message_thread_id=TOPICS["ALPHA"],
+                                text=msg_txt,
+                                parse_mode="Markdown",
+                                disable_web_page_preview=True
+                            )
+                            if res:
+                                msg_id = res.message_id
+                        except: pass
 
         except Exception as err:
             print(f"❌ [ALPHA CRITICAL ERROR]: {err}")
             
-        time.sleep(30)
+        time.sleep(7)
 
 @bot.message_handler(func=lambda msg: msg.text and msg.text.lower().startswith(('/start', '/run', '/alpha')))
 def cmd_alpha_start_alt(message):
@@ -1535,7 +1554,7 @@ def cmd_alpha_start_alt(message):
         threading.Thread(target=run_alpha_session, args=(session_key, sym), daemon=True).start()
         
         try:
-            bot.reply_to(message, f"✅ Предиктивный сканер (30 сек, порог 0.3%) для **#{sym}** запущен в топике Alpha!", parse_mode="Markdown")
+            bot.reply_to(message, f"✅ Предиктивный сканер (7 сек, live-редактирование) для **#{sym}** запущен в топике Alpha!", parse_mode="Markdown")
         except: pass
         return
     

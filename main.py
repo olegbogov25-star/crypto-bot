@@ -129,32 +129,32 @@ def fetch_binance_alpha_price(token_query):
     query = token_query.strip()
 
     try:
-        # Добавляем случайный параметр (антикэш), чтобы Cloudflare и API отдавали свежие данные
         anti_cache = int(time.time() * 1000)
-        if query.startswith("0x") or len(query) > 15:
-            url = f"https://api.dexscreener.com/latest/dex/tokens/{query}?_t={anti_cache}"
-        else:
-            url = f"https://api.dexscreener.com/latest/dex/search?q={query}&_t={anti_cache}"
+        urls = [
+            f"https://api.dexscreener.com/latest/dex/tokens/{query}?_t={anti_cache}",
+            f"https://api.dexscreener.com/latest/dex/search?q={query}&_t={anti_cache}"
+        ]
+        
+        for url in urls:
+            res = requests.get(url, headers=get_random_headers(), timeout=4)
+            if res.status_code == 200:
+                data = res.json()
+                pairs = data.get("pairs", [])
+                if pairs:
+                    usdt_pairs = []
+                    for p in pairs:
+                        quote_token = p.get("quoteToken", {})
+                        q_symbol = quote_token.get("symbol", "").upper()
+                        if "USDT" in q_symbol and p.get("priceUsd"):
+                            usdt_pairs.append(p)
+                    
+                    target_pairs = usdt_pairs if usdt_pairs else [p for p in pairs if p.get("priceUsd")]
 
-        res = requests.get(url, headers=get_random_headers(), timeout=4)
-        if res.status_code == 200:
-            data = res.json()
-            pairs = data.get("pairs", [])
-            if pairs:
-                usdt_pairs = []
-                for p in pairs:
-                    quote_token = p.get("quoteToken", {})
-                    q_symbol = quote_token.get("symbol", "").upper()
-                    if "USDT" in q_symbol and p.get("priceUsd"):
-                        usdt_pairs.append(p)
-                
-                target_pairs = usdt_pairs if usdt_pairs else [p for p in pairs if p.get("priceUsd")]
-
-                if target_pairs:
-                    target_pairs.sort(key=lambda x: float(x.get("volume", {}).get("h24", 0) or 0), reverse=True)
-                    price = float(target_pairs[0].get("priceUsd", 0))
-                    if price > 0:
-                        return price
+                    if target_pairs:
+                        target_pairs.sort(key=lambda x: float(x.get("volume", {}).get("h24", 0) or 0), reverse=True)
+                        price = float(target_pairs[0].get("priceUsd", 0))
+                        if price > 0:
+                            return price
     except Exception as e:
         print(f"❌ DEXScreener Alpha Error for {query}: {e}")
 
@@ -1441,6 +1441,7 @@ def run_alpha_session(session_key, token_identifier):
         alpha_price_memory[session_key] = []
 
     last_sent_text = ""
+    cached_valid_price = 0.0
 
     while True:
         try:
@@ -1459,9 +1460,15 @@ def run_alpha_session(session_key, token_identifier):
                 break
 
             current_price = fetch_binance_alpha_price(token_identifier)
-            if current_price <= 0:
-                ex_prices, _ = fetch_token_prices_on_demand(token_identifier)
-                current_price = ex_prices.get('Binance Alpha', 0) or ex_prices.get('Binance', 0)
+            
+            if current_price > 0:
+                cached_valid_price = current_price
+            else:
+                if cached_valid_price > 0:
+                    current_price = cached_valid_price
+                else:
+                    ex_prices, _ = fetch_token_prices_on_demand(token_identifier)
+                    current_price = ex_prices.get('Binance Alpha', 0) or ex_prices.get('Binance', 0)
 
             if current_price <= 0:
                 if msg_id:
@@ -1474,7 +1481,7 @@ def run_alpha_session(session_key, token_identifier):
                             disable_web_page_preview=True
                         )
                     except: pass
-                time.sleep(7)
+                time.sleep(12)
                 continue
 
             now_ts = time.time()
@@ -1491,7 +1498,7 @@ def run_alpha_session(session_key, token_identifier):
             if len(history) >= 2:
                 old_price = history[0][1]
                 for t, p in history:
-                    if now_ts - t >= 25:
+                    if now_ts - t >= 30:
                         old_price = p
                         break
                 if old_price > 0:
@@ -1536,9 +1543,7 @@ def run_alpha_session(session_key, token_identifier):
                     last_sent_text = msg_txt
                 except Exception as edit_err:
                     err_str = str(edit_err).lower()
-                    if "message is not modified" in err_str:
-                        pass
-                    elif "message to edit not found" in err_str:
+                    if "message to edit not found" in err_str:
                         try:
                             res = bot.send_message(
                                 chat_id=CHAT_ID,
@@ -1554,7 +1559,7 @@ def run_alpha_session(session_key, token_identifier):
         except Exception as err:
             print(f"❌ [ALPHA CRITICAL ERROR]: {err}")
             
-        time.sleep(7)
+        time.sleep(12)
 
 @bot.message_handler(func=lambda msg: msg.text and msg.text.lower().startswith(('/start', '/run', '/alpha')))
 def cmd_alpha_start_alt(message):
@@ -1567,7 +1572,7 @@ def cmd_alpha_start_alt(message):
         threading.Thread(target=run_alpha_session, args=(session_key, contract_addr), daemon=True).start()
         
         try:
-            bot.reply_to(message, f"✅ Предиктивный сканер (7 сек, live-редактирование) для контракта/монеты запущен в топике Alpha!", parse_mode="Markdown")
+            bot.reply_to(message, f"✅ Предиктивный сканер (12 сек, live-редактирование) для контракта/монеты запущен в топике Alpha!", parse_mode="Markdown")
         except: pass
         return
     
@@ -1709,7 +1714,7 @@ def handle_chat_messages(message):
     bot.reply_to(message, "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
 
 if __name__ == "__main__":
-    print("🚀 Bot starting with DEXScreener Contract-Based Alpha Connector...")
+    print("🚀 Bot starting with Optimized DEXScreener Alpha Connector...")
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     threading.Thread(target=fetch_newsmaker_channel, daemon=True).start()

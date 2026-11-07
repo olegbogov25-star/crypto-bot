@@ -116,17 +116,10 @@ def normalize_symbol(raw_sym):
         sym = sym[:-4]
     return sym
 
-# ==================== DIRECT BSC RPC NODE ALPHA CONNECTOR (PANCAKESWAP V2) ====================
-# Если известен адрес конкретного пула (Pair Address) на BSC, можно прописать его сюда для мгновенного опроса.
-# Если передается просто тикер (например, CT), бот автоматически найдет активный пул через DEXScreener по прямому контракту или запасному каналу.
-KNOWN_BSC_PAIRS = {
-    "CT": "0x...", # Здесь при необходимости можно захардкодить точный address пары PancakeSwap
-}
-
+# ==================== ALPHA CONNECTOR (BY TICKER / SYMBOL - LIVE DEX SCREENER) ====================
 def fetch_binance_alpha_price(token_query):
     """
-    Прямое чтение блокчейна BSC через RPC-ноду или резервный высокоточный метод пула.
-    Исключает зависания и кэширование сторонних поисковиков.
+    Быстрый и чистый поиск цены по тикеру/символу с приоритетом пулов BSC по объему.
     """
     if not token_query:
         return 0.0
@@ -134,68 +127,30 @@ def fetch_binance_alpha_price(token_query):
     query = token_query.strip().upper()
     base_clean = normalize_symbol(query)
 
-    # 1. Если это адрес контракта или пары напрямую
-    if query.startswith("0X") and len(query) == 42:
-        pair_address = query
-    else:
-        # Проверяем справочник известных пар или ищем через актуальный endpoint DEXScreener по точному контракту пары
-        pair_address = KNOWN_BSC_PAIRS.get(base_clean, "")
-        
-    if pair_address and pair_address.startswith("0X"):
-        try:
-            # Вызов getReserves() через публичную ноду BSC RPC
-            rpc_payload = {
-                "jsonrpc": "2.0",
-                "method": "eth_call",
-                "params": [{
-                    "to": pair_address,
-                    "data": "0x0902f1ac"  # Сигнатура функции getReserves() в Uniswap/PancakeSwap v2
-                }, "latest"],
-                "id": 1
-            }
-            # Используем стабильные публичные ноды BSC
-            rpc_nodes = [
-                "https://bsc-dataseed.binance.org/",
-                "https://rpc.ankr.com/bsc",
-                "https://bsc-dataseed1.defibit.io/"
-            ]
-            for node in rpc_nodes:
-                try:
-                    r = requests.post(node, json=rpc_payload, timeout=3)
-                    if r.status_code == 200:
-                        res_data = r.json().get("result")
-                        if res_data and res_data != "0x" and len(res_data) >= 130:
-                            # Парсим hex-ответ резервов (reserve0 и reserve1)
-                            clean_hex = res_data[2:]
-                            reserve0 = int(clean_hex[0:64], 16)
-                            reserve1 = int(clean_hex[64:128], 16)
-                            if reserve0 > 0 and reserve1 > 0:
-                                # Определяем соотношение (цена)
-                                price = float(reserve1) / float(reserve0)
-                                if price > 0:
-                                    return price
-                except:
-                    continue
-        except Exception as e:
-            print(f"❌ BSC RPC Error: {e}")
-
-    # 2. Быстрый резервный метод через прямой поиск пары по токену в BSC чересчур точный API без старого кэша
     try:
-        url = f"https://api.dexscreener.com/latest/dex/tokens/{query}" if query.startswith("0X") else f"https://api.dexscreener.com/latest/dex/search?q={base_clean}"
+        url = f"https://api.dexscreener.com/latest/dex/search?q={base_clean}"
         res = requests.get(url, headers=get_random_headers(), timeout=4)
         if res.status_code == 200:
             data = res.json()
             pairs = data.get("pairs", [])
             if pairs:
                 bsc_pairs = [p for p in pairs if p.get("chainId", "").lower() in ["bsc", "binancecoin"] and float(p.get("priceUsd", 0) or 0) > 0]
-                if bsc_pairs:
-                    bsc_pairs.sort(key=lambda x: float(x.get("volume", {}).get("h24", 0) or 0), reverse=True)
-                    return float(bsc_pairs[0].get("priceUsd", 0))
+                target_pairs = bsc_pairs if bsc_pairs else [p for p in pairs if float(p.get("priceUsd", 0) or 0) > 0]
+                
+                if target_pairs:
+                    target_pairs.sort(key=lambda x: float(x.get("volume", {}).get("h24", 0) or 0), reverse=True)
+                    price = float(target_pairs[0].get("priceUsd", 0))
+                    if price > 0:
+                        return price
     except Exception as e:
-        print(f"❌ Alpha Direct Fallback Error: {e}")
+        print(f"❌ Alpha Price Error: {e}")
 
-    # 3. Финальный запасной вариант через биржевой сканер
     ex_prices, _ = fetch_token_prices_on_demand(base_clean)
+    if 'Binance Alpha' in ex_prices:
+        return ex_prices['Binance Alpha']
+    if 'Binance' in ex_prices:
+        return ex_prices['Binance']
+    
     valid = [p for p in ex_prices.values() if p > 0]
     return valid[0] if valid else 0.0
 
@@ -1512,7 +1467,8 @@ def run_alpha_session(session_key, token_identifier):
             history = alpha_price_memory[session_key]
             history.append((now_ts, current_price))
             
-            alpha_price_memory[session_key] = [item for item in history if now_ts - item[0] <= 600]
+            # Храним историю скользящего окна (последние 120 секунд для накопленного тренда)
+            alpha_price_memory[session_key] = [item for item in history if now_ts - item[0] <= 120]
             history = alpha_price_memory[session_key]
 
             price_change = 0.0
@@ -1521,13 +1477,10 @@ def run_alpha_session(session_key, token_identifier):
 
             if len(history) >= 2:
                 old_price = history[0][1]
-                for t, p in history:
-                    if now_ts - t >= 20:
-                        old_price = p
-                        break
                 if old_price > 0:
                     price_change = ((current_price - old_price) / old_price) * 100
 
+            # Настраиваем вилку лимиток: база ±0.27%, при импульсе/пампе/дампе `>= 0.3%` расширяем до ±0.45%
             spread_offset = 0.0027
             if abs(price_change) >= 0.3:
                 spread_offset = 0.0045
@@ -1544,8 +1497,6 @@ def run_alpha_session(session_key, token_identifier):
             elif price_change >= 0.3:
                 trend_icon = "🚀"
                 action_advice = "🔥 **ВНИМАНИЕ: ПАМП / РАЗГОН!** Заметный импульс вверх на >= 0.3%. Покупать по текущим рискованно, жди отката."
-
-            current_time_label = get_kyiv_time()
 
             msg_txt = (
                 f"{trend_icon} **Alpha** | `{display_symbol}` |\n"
@@ -1582,7 +1533,7 @@ def run_alpha_session(session_key, token_identifier):
         except Exception as err:
             print(f"❌ [ALPHA ERROR]: {err}")
             
-        time.sleep(7)
+        time.sleep(25)  # Интервал опроса и обновления сессии — 25 секунд
 
 @bot.message_handler(func=lambda msg: msg.text and msg.text.lower().startswith(('/start', '/run', '/alpha')))
 def cmd_alpha_start_alt(message):
@@ -1595,7 +1546,7 @@ def cmd_alpha_start_alt(message):
         threading.Thread(target=run_alpha_session, args=(session_key, token_query), daemon=True).start()
         
         try:
-            bot.reply_to(message, f"✅ Предиктивный сканер (7 сек, live-редактирование) запущен в топике Alpha!", parse_mode="Markdown")
+            bot.reply_to(message, f"✅ Предиктивный сканер (25 сек, live-редактирование) запущен в топике Alpha!", parse_mode="Markdown")
         except: pass
         return
     
@@ -1737,7 +1688,7 @@ def handle_chat_messages(message):
     bot.reply_to(message, "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
 
 if __name__ == "__main__":
-    print("🚀 Bot starting with Direct BSC RPC Node Alpha Connector...")
+    print("🚀 Bot starting with Restored Ticker-Based Alpha Connector...")
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     threading.Thread(target=fetch_newsmaker_channel, daemon=True).start()

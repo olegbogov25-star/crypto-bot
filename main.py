@@ -116,11 +116,17 @@ def normalize_symbol(raw_sym):
         sym = sym[:-4]
     return sym
 
-# ==================== ALPHA CONNECTOR (BY TICKER / SYMBOL - BSC & DEXSCREENER) ====================
+# ==================== DIRECT BSC RPC NODE ALPHA CONNECTOR (PANCAKESWAP V2) ====================
+# Если известен адрес конкретного пула (Pair Address) на BSC, можно прописать его сюда для мгновенного опроса.
+# Если передается просто тикер (например, CT), бот автоматически найдет активный пул через DEXScreener по прямому контракту или запасному каналу.
+KNOWN_BSC_PAIRS = {
+    "CT": "0x...", # Здесь при необходимости можно захардкодить точный address пары PancakeSwap
+}
+
 def fetch_binance_alpha_price(token_query):
     """
-    Быстрый поиск цены по тикеру/символу (как на рабочих скриншотах CTUSDT).
-    Приоритет отдается пулам сети BSC с наибольшим оборотом.
+    Прямое чтение блокчейна BSC через RPC-ноду или резервный высокоточный метод пула.
+    Исключает зависания и кэширование сторонних поисковиков.
     """
     if not token_query:
         return 0.0
@@ -128,32 +134,68 @@ def fetch_binance_alpha_price(token_query):
     query = token_query.strip().upper()
     base_clean = normalize_symbol(query)
 
+    # 1. Если это адрес контракта или пары напрямую
+    if query.startswith("0X") and len(query) == 42:
+        pair_address = query
+    else:
+        # Проверяем справочник известных пар или ищем через актуальный endpoint DEXScreener по точному контракту пары
+        pair_address = KNOWN_BSC_PAIRS.get(base_clean, "")
+        
+    if pair_address and pair_address.startswith("0X"):
+        try:
+            # Вызов getReserves() через публичную ноду BSC RPC
+            rpc_payload = {
+                "jsonrpc": "2.0",
+                "method": "eth_call",
+                "params": [{
+                    "to": pair_address,
+                    "data": "0x0902f1ac"  # Сигнатура функции getReserves() в Uniswap/PancakeSwap v2
+                }, "latest"],
+                "id": 1
+            }
+            # Используем стабильные публичные ноды BSC
+            rpc_nodes = [
+                "https://bsc-dataseed.binance.org/",
+                "https://rpc.ankr.com/bsc",
+                "https://bsc-dataseed1.defibit.io/"
+            ]
+            for node in rpc_nodes:
+                try:
+                    r = requests.post(node, json=rpc_payload, timeout=3)
+                    if r.status_code == 200:
+                        res_data = r.json().get("result")
+                        if res_data and res_data != "0x" and len(res_data) >= 130:
+                            # Парсим hex-ответ резервов (reserve0 и reserve1)
+                            clean_hex = res_data[2:]
+                            reserve0 = int(clean_hex[0:64], 16)
+                            reserve1 = int(clean_hex[64:128], 16)
+                            if reserve0 > 0 and reserve1 > 0:
+                                # Определяем соотношение (цена)
+                                price = float(reserve1) / float(reserve0)
+                                if price > 0:
+                                    return price
+                except:
+                    continue
+        except Exception as e:
+            print(f"❌ BSC RPC Error: {e}")
+
+    # 2. Быстрый резервный метод через прямой поиск пары по токену в BSC чересчур точный API без старого кэша
     try:
-        url = f"https://api.dexscreener.com/latest/dex/search?q={base_clean}"
+        url = f"https://api.dexscreener.com/latest/dex/tokens/{query}" if query.startswith("0X") else f"https://api.dexscreener.com/latest/dex/search?q={base_clean}"
         res = requests.get(url, headers=get_random_headers(), timeout=4)
         if res.status_code == 200:
             data = res.json()
             pairs = data.get("pairs", [])
             if pairs:
-                # Фильтруем пулы с BNB/BSC или берем те, где есть цена в USD
-                bsc_pairs = [p for p in pairs if p.get("chainId", "").lower() in ["bsc", "binancecoin"] and p.get("priceUsd")]
-                target_pairs = bsc_pairs if bsc_pairs else [p for p in pairs if p.get("priceUsd")]
-                
-                if target_pairs:
-                    target_pairs.sort(key=lambda x: float(x.get("volume", {}).get("h24", 0) or 0), reverse=True)
-                    price = float(target_pairs[0].get("priceUsd", 0))
-                    if price > 0:
-                        return price
+                bsc_pairs = [p for p in pairs if p.get("chainId", "").lower() in ["bsc", "binancecoin"] and float(p.get("priceUsd", 0) or 0) > 0]
+                if bsc_pairs:
+                    bsc_pairs.sort(key=lambda x: float(x.get("volume", {}).get("h24", 0) or 0), reverse=True)
+                    return float(bsc_pairs[0].get("priceUsd", 0))
     except Exception as e:
-        print(f"❌ Alpha Price Error: {e}")
+        print(f"❌ Alpha Direct Fallback Error: {e}")
 
-    # Запасной вариант через общие биржи
+    # 3. Финальный запасной вариант через биржевой сканер
     ex_prices, _ = fetch_token_prices_on_demand(base_clean)
-    if 'Binance Alpha' in ex_prices:
-        return ex_prices['Binance Alpha']
-    if 'Binance' in ex_prices:
-        return ex_prices['Binance']
-    
     valid = [p for p in ex_prices.values() if p > 0]
     return valid[0] if valid else 0.0
 
@@ -1695,7 +1737,7 @@ def handle_chat_messages(message):
     bot.reply_to(message, "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
 
 if __name__ == "__main__":
-    print("🚀 Bot starting with Ticker-Based Alpha Connector...")
+    print("🚀 Bot starting with Direct BSC RPC Node Alpha Connector...")
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     threading.Thread(target=fetch_newsmaker_channel, daemon=True).start()

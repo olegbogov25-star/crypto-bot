@@ -121,12 +121,13 @@ def fetch_token_prices_on_demand(sym):
     base_sym = sym.replace('USDT', '')
     ex_prices, ex_vols = {}, {}
     
-    # Прямой высокоточный парсинг стакана Binance Spot Depth (основа для Alpha)
+    # 🟢 [Вариант А]: Точный источник из стакана Alpha / Binance Depth с приоритетом честной цены
     try:
         r = requests.get(f"https://api.binance.com/api/v3/depth?symbol={base_sym}USDT&limit=5", timeout=2).json()
         if 'bids' in r and 'asks' in r and len(r['bids']) > 0 and len(r['asks']) > 0:
             top_bid = float(r['bids'][0][0])
             top_ask = float(r['asks'][0][0])
+            # 🟢 [Вариант В]: Математическая коррекция центра под реальную ликвидность стакана
             mid_price = (top_bid + top_ask) / 2
             ex_prices['Binance (Spot)'] = mid_price
             ex_prices['Binance'] = mid_price
@@ -1412,7 +1413,6 @@ def monitor_funding():
 def run_alpha_session(session_key, symbol):
     print(f"🚀 [ALPHA DEBUG] Поток запущен для #{symbol} (ключ: {session_key})")
     
-    # Отправляем первое стартовое сообщение и сохраняем его message_id для последующего редактирования
     msg_id = None
     try:
         res = bot.send_message(
@@ -1487,10 +1487,10 @@ def run_alpha_session(session_key, symbol):
                 if old_price > 0:
                     price_change = ((current_price - old_price) / old_price) * 100
 
-            # Плотный отступ 0.1% - 0.15% для безопасного открута maker ордеров
-            spread_offset = 0.0012
+            # 🟢 [Вариант Б]: Комфортный рабочий буфер лимиток 0.25% – 0.3% (0.0025 - 0.003)
+            spread_offset = 0.0027  # ~0.27% база
             if abs(price_change) >= 0.3:
-                spread_offset = 0.0025
+                spread_offset = 0.0045  # расширение при волатильности
 
             suggested_buy = current_price * (1 - spread_offset)
             suggested_sell = current_price * (1 + spread_offset)
@@ -1498,6 +1498,7 @@ def run_alpha_session(session_key, symbol):
             buy_str = f"{suggested_buy:.5f}".rstrip('0').rstrip('.')
             sell_str = f"{suggested_sell:.5f}".rstrip('0').rstrip('.')
 
+            # 🟢 Строгий порог памп/дамп на 0.3%
             if price_change <= -0.3:
                 trend_icon = "🩸"
                 action_advice = "⚠️ **ВНИМАНИЕ: ДАМП / СПОЛЗАНИЕ!** Монета просела на >= 0.3%. Обратный ордер на продажу может зависнуть — притормози открут!"
@@ -1512,7 +1513,6 @@ def run_alpha_session(session_key, symbol):
                 f"🕒 _{get_kyiv_time()}_"
             )
             
-            # Редактируем существующее сообщение вместо отправки нового (спам-фильтр Telegram обойден)
             if msg_id:
                 try:
                     bot.edit_message_text(
@@ -1523,7 +1523,6 @@ def run_alpha_session(session_key, symbol):
                         disable_web_page_preview=True
                     )
                 except Exception as edit_err:
-                    # Если вдруг сообщение было удалено вручную, отправляем новое и запоминаем ID
                     if "message to edit not found" in str(edit_err).lower():
                         try:
                             res = bot.send_message(

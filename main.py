@@ -121,6 +121,7 @@ def fetch_binance_alpha_price(token_query):
     """
     Получение реальной цены из ончейн пулов через DEXScreener API 
     по адресу контракта (CA) или точному поисковому запросу.
+    С жесткой фильтрацией исключительно по пулам с USDT и максимальным объемом торгов.
     """
     if not token_query:
         return 0.0
@@ -139,11 +140,21 @@ def fetch_binance_alpha_price(token_query):
             data = res.json()
             pairs = data.get("pairs", [])
             if pairs:
-                valid_pairs = [p for p in pairs if p.get("priceUsd")]
-                if valid_pairs:
-                    # Сортируем пары по ликвидности USD в пуле, чтобы брать самый живой рынок
-                    valid_pairs.sort(key=lambda x: float(x.get("liquidity", {}).get("usd", 0) or 0), reverse=True)
-                    price = float(valid_pairs[0].get("priceUsd", 0))
+                # Фильтруем пары: котируемый токен должен быть USDT (проверяем символ или имя)
+                usdt_pairs = []
+                for p in pairs:
+                    quote_token = p.get("quoteToken", {})
+                    q_symbol = quote_token.get("symbol", "").upper()
+                    if "USDT" in q_symbol and p.get("priceUsd"):
+                        usdt_pairs.append(p)
+                
+                # Если пулов с USDT не нашлось, берем любые валидные с ценой как резерв
+                target_pairs = usdt_pairs if usdt_pairs else [p for p in pairs if p.get("priceUsd")]
+
+                if target_pairs:
+                    # Сортируем по суточному объему торгов USD (h24), чтобы брать самый живой и актуальный стакан
+                    target_pairs.sort(key=lambda x: float(x.get("volume", {}).get("h24", 0) or 0), reverse=True)
+                    price = float(target_pairs[0].get("priceUsd", 0))
                     if price > 0:
                         return price
     except Exception as e:
@@ -155,7 +166,7 @@ def fetch_token_prices_on_demand(sym):
     base_sym = normalize_symbol(sym)
     ex_prices, ex_vols = {}, {}
     
-    # 🟢 Берем точную цену из ончейн пулов
+    # 🟢 Берем точную цену из ончейн пулов с фильтрацией по USDT
     alpha_p = fetch_binance_alpha_price(sym)
     if alpha_p > 0:
         ex_prices['Binance Alpha'] = alpha_p

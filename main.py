@@ -1486,9 +1486,9 @@ def run_alpha_session(session_key, symbol):
                 if old_price > 0:
                     price_change = ((current_price - old_price) / old_price) * 100
 
-            spread_offset = 0.003
+            spread_offset = 0.0015
             if abs(price_change) >= 0.3:
-                spread_offset = 0.006
+                spread_offset = 0.003
 
             suggested_buy = current_price * (1 - spread_offset)
             suggested_sell = current_price * (1 + spread_offset)
@@ -1690,3 +1690,4 @@ if __name__ == "__main__":
     threading.Thread(target=monitor_funding, daemon=True).start()
     print("🤖 Telegram bot polling started...")
     bot.infinity_polling(skip_pending=True)
+```[cite: 7]

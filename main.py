@@ -121,35 +121,41 @@ def fetch_token_prices_on_demand(sym):
     base_sym = sym.replace('USDT', '')
     ex_prices, ex_vols = {}, {}
     
-    # 1. BINANCE (Orderbook BookTicker & Spot/Futures Last)
+    # 1. BINANCE (Spot Depth OrderBook - Точная живая цена стакана для Alpha)
     try:
-        r = requests.get(f"https://api.binance.com/api/v3/ticker/bookTicker?symbol={base_sym}USDT", timeout=2).json()
-        if 'bidPrice' in r and 'askPrice' in r:
-            bid = float(r['bidPrice'])
-            ask = float(r['askPrice'])
-            mid_price = (bid + ask) / 2
+        r = requests.get(f"https://api.binance.com/api/v3/depth?symbol={base_sym}USDT&limit=5", timeout=2).json()
+        if 'bids' in r and 'asks' in r and len(r['bids']) > 0 and len(r['asks']) > 0:
+            top_bid = float(r['bids'][0][0])
+            top_ask = float(r['asks'][0][0])
+            mid_price = (top_bid + top_ask) / 2
             ex_prices['Binance (Spot)'] = mid_price
             ex_prices['Binance'] = mid_price
-    except: pass
+    except Exception as e:
+        print(f"Binance Depth Error: {e}")
 
     if 'Binance' not in ex_prices:
         try:
-            r = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={base_sym}USDT", timeout=2).json()
-            if 'price' in r:
-                ex_prices['Binance (Spot)'] = float(r['price'])
-                ex_prices['Binance'] = float(r['price'])
+            r = requests.get(f"https://api.binance.com/api/v3/ticker/bookTicker?symbol={base_sym}USDT", timeout=2).json()
+            if 'bidPrice' in r and 'askPrice' in r:
+                bid = float(r['bidPrice'])
+                ask = float(r['askPrice'])
+                mid_price = (bid + ask) / 2
+                ex_prices['Binance (Spot)'] = mid_price
+                ex_prices['Binance'] = mid_price
         except: pass
 
     try:
         r = requests.get(f"https://fapi.binance.com/fapi/v1/ticker/24hr?symbol={base_sym}USDT", timeout=2).json()
         if 'lastPrice' in r:
-            ex_prices['Binance'] = float(r['lastPrice'])
+            if 'Binance' not in ex_prices:
+                ex_prices['Binance'] = float(r['lastPrice'])
             ex_vols['Binance'] = float(r.get('quoteVolume', 0))
     except:
         try:
             r = requests.get(f"https://api.binance.com/api/v3/ticker/24hr?symbol={base_sym}USDT", timeout=2).json()
             if 'lastPrice' in r:
-                ex_prices['Binance (Spot)'] = float(r['lastPrice'])
+                if 'Binance (Spot)' not in ex_prices:
+                    ex_prices['Binance (Spot)'] = float(r['lastPrice'])
                 ex_vols['Binance (Spot)'] = float(r.get('quoteVolume', 0))
         except: pass
 

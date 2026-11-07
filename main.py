@@ -121,7 +121,7 @@ def fetch_binance_alpha_price(token_query):
     """
     Получение реальной цены из ончейн пулов через DEXScreener API 
     по адресу контракта (CA) или точному поисковому запросу.
-    С жесткой фильтрацией исключительно по пулам с USDT и максимальным объемом торгов.
+    С защитой от кеширования и жесткой фильтрацией по пулам с USDT.
     """
     if not token_query:
         return 0.0
@@ -129,18 +129,18 @@ def fetch_binance_alpha_price(token_query):
     query = token_query.strip()
 
     try:
-        # Если это похоже на адрес контракта (начинает с 0x или длинное хэш-значение)
+        # Добавляем случайный параметр (антикэш), чтобы Cloudflare и API отдавали свежие данные
+        anti_cache = int(time.time() * 1000)
         if query.startswith("0x") or len(query) > 15:
-            url = f"https://api.dexscreener.com/latest/dex/tokens/{query}"
+            url = f"https://api.dexscreener.com/latest/dex/tokens/{query}?_t={anti_cache}"
         else:
-            url = f"https://api.dexscreener.com/latest/dex/search?q={query}"
+            url = f"https://api.dexscreener.com/latest/dex/search?q={query}&_t={anti_cache}"
 
         res = requests.get(url, headers=get_random_headers(), timeout=4)
         if res.status_code == 200:
             data = res.json()
             pairs = data.get("pairs", [])
             if pairs:
-                # Фильтруем пары: котируемый токен должен быть USDT (проверяем символ или имя)
                 usdt_pairs = []
                 for p in pairs:
                     quote_token = p.get("quoteToken", {})
@@ -148,11 +148,9 @@ def fetch_binance_alpha_price(token_query):
                     if "USDT" in q_symbol and p.get("priceUsd"):
                         usdt_pairs.append(p)
                 
-                # Если пулов с USDT не нашлось, берем любые валидные с ценой как резерв
                 target_pairs = usdt_pairs if usdt_pairs else [p for p in pairs if p.get("priceUsd")]
 
                 if target_pairs:
-                    # Сортируем по суточному объему торгов USD (h24), чтобы брать самый живой и актуальный стакан
                     target_pairs.sort(key=lambda x: float(x.get("volume", {}).get("h24", 0) or 0), reverse=True)
                     price = float(target_pairs[0].get("priceUsd", 0))
                     if price > 0:
@@ -166,13 +164,11 @@ def fetch_token_prices_on_demand(sym):
     base_sym = normalize_symbol(sym)
     ex_prices, ex_vols = {}, {}
     
-    # 🟢 Берем точную цену из ончейн пулов с фильтрацией по USDT
     alpha_p = fetch_binance_alpha_price(sym)
     if alpha_p > 0:
         ex_prices['Binance Alpha'] = alpha_p
         ex_prices['Binance'] = alpha_p
 
-    # Обязательные резервные площадки для остальных проверок спредов/токенов
     try:
         r = requests.get(f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={base_sym}USDT", timeout=2).json().get('result', {}).get('list', [])
         if r:

@@ -121,12 +121,24 @@ def fetch_token_prices_on_demand(sym):
     base_sym = sym.replace('USDT', '')
     ex_prices, ex_vols = {}, {}
     
+    # 1. BINANCE (Orderbook BookTicker & Spot/Futures Last)
     try:
-        r = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={base_sym}USDT", timeout=2).json()
-        if 'price' in r:
-            ex_prices['Binance (Spot)'] = float(r['price'])
-            ex_prices['Binance'] = float(r['price'])
+        r = requests.get(f"https://api.binance.com/api/v3/ticker/bookTicker?symbol={base_sym}USDT", timeout=2).json()
+        if 'bidPrice' in r and 'askPrice' in r:
+            bid = float(r['bidPrice'])
+            ask = float(r['askPrice'])
+            mid_price = (bid + ask) / 2
+            ex_prices['Binance (Spot)'] = mid_price
+            ex_prices['Binance'] = mid_price
     except: pass
+
+    if 'Binance' not in ex_prices:
+        try:
+            r = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={base_sym}USDT", timeout=2).json()
+            if 'price' in r:
+                ex_prices['Binance (Spot)'] = float(r['price'])
+                ex_prices['Binance'] = float(r['price'])
+        except: pass
 
     try:
         r = requests.get(f"https://fapi.binance.com/fapi/v1/ticker/24hr?symbol={base_sym}USDT", timeout=2).json()
@@ -267,7 +279,8 @@ def cmd_okx_start(message):
         message_thread_id=TOPICS["WEB3"],
         text="📊 **OKX Web3 Tournament & Volume Tracker**\n\nВыберите сеть / турнир для проверки ваших реальных объемов и лидеров:",
         parse_mode="Markdown",
-        reply_markup=get_tournaments_keyboard()
+        reply_markup=get_tournaments_keyboard(),
+        disable_web_page_preview=True
     )
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('okx_'))
@@ -282,7 +295,8 @@ def handle_okx_callbacks(call):
                 message_id=call.message.message_id,
                 text="📊 **OKX Web3 Tournament & Volume Tracker**\n\nВыберите сеть / турнир:",
                 parse_mode="Markdown",
-                reply_markup=get_tournaments_keyboard()
+                reply_markup=get_tournaments_keyboard(),
+                disable_web_page_preview=True
             )
         except Exception: pass
         return
@@ -317,7 +331,8 @@ def handle_okx_callbacks(call):
                 message_id=call.message.message_id,
                 text=card_str,
                 parse_mode="Markdown",
-                reply_markup=markup
+                reply_markup=markup,
+                disable_web_page_preview=True
             )
         except Exception as e:
             print(f"❌ Edit message error: {e}")
@@ -1215,7 +1230,7 @@ def monitor_spread():
                     if old_p > 0:
                         change_pct = abs((min_p - old_p) / old_p) * 100
                         if change_pct >= 2.0: # Если монета дернула более чем на 2% за минуту
-                            is_momentum = true
+                            is_momentum = True
 
                 # Рабочий диапазон спреда от 5.0% до 30.0%
                 if 5.0 <= spread <= 30.0:
@@ -1272,7 +1287,7 @@ def monitor_spread():
                     else:
                         badge = "⚡ **STRONG SPREAD (>= 5%)**"
 
-                    # Живое сообщение (Live Message)
+                    # Живое сообщение (Live Message) без превью ссылок
                     if chart_key not in live_spread_posts:
                         history_lines = [f"• `{curr_time_str}` — Стартовый спред: **`{spread:.2f}%`**"]
 
@@ -1324,7 +1339,8 @@ def monitor_spread():
                                 message_id=msg_id,
                                 text=updated_text,
                                 parse_mode="Markdown",
-                                reply_markup=markup
+                                reply_markup=markup,
+                                disable_web_page_preview=True
                             )
                         except Exception: pass
 
@@ -1347,6 +1363,7 @@ def monitor_spread():
                                 message_thread_id=TOPICS["SPREAD"],
                                 text=convergence_text,
                                 parse_mode="Markdown",
+                                disable_web_page_preview=True,
                                 reply_to_message_id=msg_id
                             )
                         except Exception: pass
@@ -1409,7 +1426,8 @@ def run_alpha_session(session_key, symbol):
             chat_id=CHAT_ID, 
             message_thread_id=TOPICS["ALPHA"], 
             text=f"🚀 **Binance Alpha сессия запущена для #{symbol}**\nПредиктивный сканер (30 сек, порог 0.3%) и расчет диапазона цен активен.", 
-            parse_mode="Markdown"
+            parse_mode="Markdown",
+            disable_web_page_preview=True
         )
     except Exception as e:
         print(f"❌ [ALPHA ERROR] Не удалось отправить стартовое сообщение: {e}")
@@ -1436,7 +1454,8 @@ def run_alpha_session(session_key, symbol):
                     chat_id=CHAT_ID, 
                     message_thread_id=TOPICS["ALPHA"], 
                     text=f"🔍 **Alpha | #{symbol}**\n⚠️ Не удалось получить цену с бирж. Повтор через 30 сек...", 
-                    parse_mode="Markdown"
+                    parse_mode="Markdown",
+                    disable_web_page_preview=True
                 )
                 time.sleep(30)
                 continue
@@ -1489,7 +1508,8 @@ def run_alpha_session(session_key, symbol):
                 chat_id=CHAT_ID, 
                 message_thread_id=TOPICS["ALPHA"], 
                 text=msg_txt, 
-                parse_mode="Markdown"
+                parse_mode="Markdown",
+                disable_web_page_preview=True
             )
 
         except Exception as err:
@@ -1654,7 +1674,7 @@ def handle_chat_messages(message):
     bot.reply_to(message, "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
 
 if __name__ == "__main__":
-    print("🚀 Bot starting with OKX API Tournament Tracker & Full Features...")
+    print("🚀 Bot starting with OKX API Tournament Tracker & Clean Spreads...")
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     threading.Thread(target=fetch_newsmaker_channel, daemon=True).start()

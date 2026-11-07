@@ -110,41 +110,63 @@ def normalize_symbol(raw_sym):
     sym = raw_sym.upper().replace('_', '').replace('-', '').replace('/', '')
     if sym.endswith('USDTM'):
         sym = sym[:-1]
-    if not sym.endswith('USDT'):
-        if sym.endswith('USD'):
-            sym = sym[:-3] + 'USDT'
-        else:
-            sym += 'USDT'
+    if sym.endswith('USDT'):
+        sym = sym[:-4]
+    if sym.endswith('USDC'):
+        sym = sym[:-4]
     return sym
 
+# ==================== BINANCE ALPHA DIRECT API CONNECTOR ====================
+def fetch_binance_alpha_price(base_sym):
+    """
+    Прямой запрос к официальным шлюзам Binance Alpha / Web3 для получения реальной цены и стакана.
+    """
+    clean_sym = base_sym.upper().replace('USDT', '').replace('USDC', '')
+    
+    # Попытка через публичные шлюзы поиска / котировок Binance Alpha
+    endpoints = [
+        f"https://www.binance.com/bapi/asset/v1/public/asset-service/product/get-product-by-symbol?symbol={clean_sym}",
+        f"https://www.binance.com/bapi/composite/v1/public/alpha/market/symbol?symbol={clean_sym}",
+        f"https://api.binance.com/api/v3/ticker/price?symbol={clean_sym}USDC"
+    ]
+    
+    for url in endpoints:
+        try:
+            r = requests.get(url, headers=get_random_headers(), timeout=3).json()
+            # Проверяем различные форматы ответа Binance API
+            if isinstance(r, dict):
+                if 'data' in r and isinstance(r['data'], dict):
+                    p = float(r['data'].get('price', 0) or r['data'].get('lastPrice', 0) or r['data'].get('spotPrice', 0))
+                    if p > 0:
+                        return p
+                if 'price' in r:
+                    p = float(r['price'])
+                    if p > 0:
+                        return p
+        except Exception:
+            continue
+
+    # Если через стандартные api не удалось, делаем резервный поиск по агрегаторам ликвидности Альфы
+    try:
+        r = requests.get(f"https://dex.binance.org/api/v1/ticker/24hr?symbol={clean_sym}_USDC", timeout=3).json()
+        if isinstance(r, list) and len(r) > 0:
+            p = float(r[0].get('lastPrice', 0))
+            if p > 0: return p
+    except: pass
+
+    return 0.0
+
 def fetch_token_prices_on_demand(sym):
-    base_sym = sym.replace('USDT', '')
+    base_sym = normalize_symbol(sym)
     ex_prices, ex_vols = {}, {}
     
-    # 🟢 [Вариант А]: Точный источник из стакана Alpha / Binance Depth с приоритетом честной цены
-    try:
-        r = requests.get(f"https://api.binance.com/api/v3/depth?symbol={base_sym}USDT&limit=5", timeout=2).json()
-        if 'bids' in r and 'asks' in r and len(r['bids']) > 0 and len(r['asks']) > 0:
-            top_bid = float(r['bids'][0][0])
-            top_ask = float(r['asks'][0][0])
-            # 🟢 [Вариант В]: Математическая коррекция центра под реальную ликвидность стакана
-            mid_price = (top_bid + top_ask) / 2
-            ex_prices['Binance (Spot)'] = mid_price
-            ex_prices['Binance'] = mid_price
-    except Exception as e:
-        print(f"Binance Depth Error: {e}")
+    # 🟢 Берем точную цену из контура Binance Alpha
+    alpha_p = fetch_binance_alpha_price(base_sym)
+    if alpha_p > 0:
+        ex_prices['Binance Alpha'] = alpha_p
+        ex_prices['Binance'] = alpha_p
 
-    if 'Binance' not in ex_prices:
-        try:
-            r = requests.get(f"https://api.binance.com/api/v3/ticker/bookTicker?symbol={base_sym}USDT", timeout=2).json()
-            if 'bidPrice' in r and 'askPrice' in r:
-                bid = float(r['bidPrice'])
-                ask = float(r['askPrice'])
-                mid_price = (bid + ask) / 2
-                ex_prices['Binance (Spot)'] = mid_price
-                ex_prices['Binance'] = mid_price
-        except: pass
-
+    # Обязательные резервные площадки для остальных проверок спредов/токенов
     try:
         r = requests.get(f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={base_sym}USDT", timeout=2).json().get('result', {}).get('list', [])
         if r:
@@ -155,7 +177,7 @@ def fetch_token_prices_on_demand(sym):
     try:
         r = requests.get("https://api-futures.kucoin.com/api/v1/contracts/active", timeout=2).json().get('data', [])
         for item in r:
-            if normalize_symbol(item.get('symbol', '')) == sym and 'lastTradePrice' in item:
+            if normalize_symbol(item.get('symbol', '')) == base_sym and 'lastTradePrice' in item:
                 ex_prices['KuCoin'] = float(item['lastTradePrice'])
                 ex_vols['KuCoin'] = float(item.get('turnoverOf24h', 0))
                 break
@@ -570,7 +592,7 @@ def secure_request(url, timeout=12):
         return None
 
 def get_exchange_url(exchange, symbol="BTCUSDT"):
-    base_sym = symbol.replace('USDT', '')
+    base_sym = normalize_symbol(symbol)
     ex_upper = exchange.upper()
     links = {
         "BINANCE": f"https://www.binance.com/en/futures/{base_sym}USDT",
@@ -1131,7 +1153,6 @@ def fetch_futures_data():
                     if next_time > 0: funding_times.setdefault(sym, {})['KuCoin'] = next_time
     except Exception: pass
 
-    # Заполняем кэш цен для чата
     for sym, b_dict in bids.items():
         if b_dict:
             latest_prices_cache[sym] = list(b_dict.values())[0]
@@ -1151,12 +1172,11 @@ def format_countdown(target_timestamp):
     minutes = int((diff % 3600) // 60)
     return f"{hours}ч {minutes:02d}м"
 
-# Глобальная память для детекции импульсов (Momentum)
 symbol_price_tracker = {}
 
 def monitor_spread():
     global active_spreads, price_history_long, price_history_short, sent_alerts_cache, symbol_price_tracker
-    print("🟢 Advanced Spread Monitor started (Threshold: $12k volume, Spread >= 5.0%, OrderBook Bid/Ask & Momentum enabled)")
+    print("🟢 Advanced Spread Monitor started...")
     
     live_spread_posts = {}
 
@@ -1164,10 +1184,8 @@ def monitor_spread():
         try:
             bids, asks, volumes, fundings, _ = fetch_futures_data()
             curr_time_str = get_kyiv_time()
-            current_active_keys = set()
             now_ts = int(time.time())
 
-            # Объединяем все доступные символы со всех бирж
             all_symbols = set(bids.keys()).union(set(asks.keys()))
 
             for sym in all_symbols:
@@ -1175,18 +1193,15 @@ def monitor_spread():
                 sym_asks = asks.get(sym, {})
                 sym_vols = volumes.get(sym, {})
 
-                # Отфильтровываем биржи по ликвидности ($12k)
                 valid_bids = {ex: p for ex, p in sym_bids.items() if sym_vols.get(ex, 0) >= 12_000 and p > 0}
                 valid_asks = {ex: p for ex, p in sym_asks.items() if sym_vols.get(ex, 0) >= 12_000 and p > 0}
 
                 if len(valid_bids) < 1 or len(valid_asks) < 1:
                     continue
 
-                # Ищем лучший Bid (куда продать/Long) и лучший Ask (где купить/Short) из стаканов
                 min_ex = min(valid_bids, key=valid_bids.get)
                 max_ex = max(valid_asks, key=valid_asks.get)
 
-                # Биржи должны быть разными для реального арбитража
                 if min_ex == max_ex and len(valid_bids) > 1:
                     sorted_bids = sorted(valid_bids.items(), key=lambda x: x[1])
                     min_ex = sorted_bids[0][0]
@@ -1203,14 +1218,11 @@ def monitor_spread():
 
                 if min_p <= 0 or max_p <= 0: continue
 
-                # Расчет честного OrderBook спреда
                 spread = ((max_p - min_p) / min_p) * 100
                 if spread < 0: continue
 
                 chart_key = f"{sym}_{min_ex}_{max_ex}"
-                current_active_keys.add(chart_key)
 
-                # 🟢 Детекция импульсов (Momentum Filter) за последние 30-60 секунд
                 if sym not in symbol_price_tracker:
                     symbol_price_tracker[sym] = []
                 symbol_price_tracker[sym].append((now_ts, min_p))
@@ -1221,10 +1233,9 @@ def monitor_spread():
                     old_p = symbol_price_tracker[sym][0][1]
                     if old_p > 0:
                         change_pct = abs((min_p - old_p) / old_p) * 100
-                        if change_pct >= 2.0: # Если монета дернула более чем на 2% за минуту
+                        if change_pct >= 2.0:
                             is_momentum = True
 
-                # Рабочий диапазон спреда от 5.0% до 30.0%
                 if 5.0 <= spread <= 30.0:
                     if chart_key not in price_history_long:
                         price_history_long[chart_key] = []
@@ -1269,7 +1280,6 @@ def monitor_spread():
                     else:
                         markup.add(InlineKeyboardButton("🌐 Биржа Long", url=get_exchange_url(min_ex, sym)))
 
-                    # Формирование брейджей
                     if is_momentum:
                         badge = "⚡⚡ **MOMENTUM / PUMP SPREAD**"
                     elif spread >= 15.0:
@@ -1279,7 +1289,6 @@ def monitor_spread():
                     else:
                         badge = "⚡ **STRONG SPREAD (>= 5%)**"
 
-                    # Живое сообщение (Live Message) без превью ссылок
                     if chart_key not in live_spread_posts:
                         history_lines = [f"• `{curr_time_str}` — Стартовый спред: **`{spread:.2f}%`**"]
 
@@ -1337,7 +1346,6 @@ def monitor_spread():
                         except Exception: pass
 
                 else:
-                    # Уведомление о сведении спреда
                     if chart_key in live_spread_posts:
                         post_info = live_spread_posts[chart_key]
                         msg_id = post_info["msg_id"]
@@ -1368,7 +1376,7 @@ def monitor_spread():
         time.sleep(30)
 
 def monitor_funding():
-    print("🟢 Funding Monitor started (Topic 76, Threshold $25k, Spread >= 0.5%)")
+    print("🟢 Funding Monitor started...")
     while True:
         try:
             _, _, volumes, fundings, funding_times = fetch_futures_data()
@@ -1446,12 +1454,10 @@ def run_alpha_session(session_key, symbol):
                     except: pass
                 break
 
-            ex_prices, ex_vols = fetch_token_prices_on_demand(symbol)
-            current_price = 0
-            if ex_prices:
-                current_price = ex_prices.get('Binance (Spot)', 0) or ex_prices.get('Binance', 0)
-                if not current_price:
-                    current_price = list(ex_prices.values())[0]
+            current_price = fetch_binance_alpha_price(symbol)
+            if current_price <= 0:
+                ex_prices, _ = fetch_token_prices_on_demand(symbol)
+                current_price = ex_prices.get('Binance Alpha', 0) or ex_prices.get('Binance', 0)
 
             if current_price <= 0:
                 if msg_id:
@@ -1459,7 +1465,7 @@ def run_alpha_session(session_key, symbol):
                         bot.edit_message_text(
                             chat_id=CHAT_ID,
                             message_id=msg_id,
-                            text=f"🔍 **Alpha | #{symbol}**\n⚠️ Не удалось получить цену из стакана. Повтор...",
+                            text=f"🔍 **Alpha | #{symbol}**\n⚠️ Не удалось получить цену из Альфы. Повтор...",
                             parse_mode="Markdown",
                             disable_web_page_preview=True
                         )
@@ -1487,18 +1493,18 @@ def run_alpha_session(session_key, symbol):
                 if old_price > 0:
                     price_change = ((current_price - old_price) / old_price) * 100
 
-            # 🟢 [Вариант Б]: Комфортный рабочий буфер лимиток 0.25% – 0.3% (0.0025 - 0.003)
-            spread_offset = 0.0027  # ~0.27% база
+            # 🟢 Комфортные буферы лимиток 0.25% – 0.3%
+            spread_offset = 0.0027
             if abs(price_change) >= 0.3:
-                spread_offset = 0.0045  # расширение при волатильности
+                spread_offset = 0.0045
 
             suggested_buy = current_price * (1 - spread_offset)
             suggested_sell = current_price * (1 + spread_offset)
 
-            buy_str = f"{suggested_buy:.5f}".rstrip('0').rstrip('.')
-            sell_str = f"{suggested_sell:.5f}".rstrip('0').rstrip('.')
+            buy_str = f"{suggested_buy:.8f}".rstrip('0').rstrip('.')
+            sell_str = f"{suggested_sell:.8f}".rstrip('0').rstrip('.')
 
-            # 🟢 Строгий порог памп/дамп на 0.3%
+            # 🟢 Строгий триггер памп/дамп на 0.3%
             if price_change <= -0.3:
                 trend_icon = "🩸"
                 action_advice = "⚠️ **ВНИМАНИЕ: ДАМП / СПОЛЗАНИЕ!** Монета просела на >= 0.3%. Обратный ордер на продажу может зависнуть — притормози открут!"
@@ -1686,7 +1692,7 @@ def handle_chat_messages(message):
     sym_prices, sym_vols = fetch_token_prices_on_demand(sym)
     
     if not sym_prices:
-        bot.reply_to(message, f"⚠️ Монета **#{sym}** не найдена на активных фьючерсах и споте бирж.", parse_mode="Markdown")
+        bot.reply_to(message, f"⚠️ Монета **#{sym}** не найдена в Альфе и на биржах.", parse_mode="Markdown")
         return
     
     lines = [f"🪙 **Монета: #{sym}** (Кол-во: `{quantity:,.4f}` из запроса)\n"]
@@ -1698,7 +1704,7 @@ def handle_chat_messages(message):
     bot.reply_to(message, "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
 
 if __name__ == "__main__":
-    print("🚀 Bot starting with OKX API Tournament Tracker & Clean Spreads...")
+    print("🚀 Bot starting with Binance Alpha Direct Connector...")
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     threading.Thread(target=fetch_newsmaker_channel, daemon=True).start()

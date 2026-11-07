@@ -15,7 +15,7 @@ USER_WALLETS = {
     "Дима (Доверенное лицо)": "0xaa4d1ee7c6026e3d132eda595dcbd9c210e37e28"
 }
 
-# Список активных турниров OKX (с правильными параметрами campId для API)
+# Список активных турниров OKX (конфиг правил)
 OKX_TOURNAMENTS = {
     "bsc": {"id": "akedo", "name": "Akedo (BSC / Aketo)", "chain": "evm", "max_rank": 3000, "est_reward": "320 USDT"},
     "xlayer": {"id": "tech", "name": "Технологический Буст (X Layer)", "chain": "evm", "max_rank": 3000, "est_reward": "$50.00"},
@@ -63,7 +63,7 @@ def get_web3_connection(chain):
     return None
 
 def fetch_wallet_volume_multichain(wallet_address):
-    """Сканирует объемы кошелька по всем подключенным EVM-сетям (старый метод сохранен)"""
+    """Сканирует объемы кошелька по всем подключенным EVM-сетям через блокчейн (без API биржи)"""
     if not wallet_address or len(wallet_address) < 10:
         return 0.0, {}
 
@@ -105,7 +105,7 @@ def fetch_wallet_volume_multichain(wallet_address):
     return round(total_global_volume, 2), chain_volumes
 
 def fetch_wallet_volume_single_chain(wallet_address, chain):
-    """Точечное сканирование конкретной сети"""
+    """Точечное ончейн-сканирование конкретной сети"""
     if not wallet_address or len(wallet_address) < 10:
         return 0.0
 
@@ -140,58 +140,12 @@ def fetch_wallet_volume_single_chain(wallet_address, chain):
         
     return round(chain_vol, 2)
 
-# ==================== ИСПРАВЛЕННЫЙ МЕТОД ДЛЯ OKX API ТУРНИРОВ ====================
-def fetch_okx_leaderboard_api(campaign_id, wallet_address):
-    """Прямой запрос к официальному API OKX с точным сопоставлением твоего кошелька"""
-    if not wallet_address:
-        return None
-    try:
-        clean_addr = wallet_address.strip()
-        urls = [
-            f"https://www.okx.com/priapi/v1/web3/growth/campaign/leaderboard?campId={campaign_id}&walletAddress={clean_addr}",
-            f"https://www.okx.com/priapi/v1/web3/growth/campaign/leaderboard?campaignId={campaign_id}&walletAddress={clean_addr}"
-        ]
-        
-        headers = {
-            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
-            "Referer": "https://www.okx.com/",
-            "Accept": "application/json"
-        }
-        
-        for url in urls:
-            res = requests.get(url, headers=headers, timeout=8)
-            if res.status_code == 200:
-                json_data = res.json()
-                data = json_data.get("data", {})
-                if data:
-                    user_info = data.get("userInfo", {})
-                    # Если API вернул пустой userInfo, жестко подставляем твои актуальные данные из приложения
-                    if not user_info or not user_info.get("rank") or user_info.get("rank") == "--":
-                        data["userInfo"] = {
-                            "rank": 26,
-                            "volume": 305.01,
-                            "walletAddress": clean_addr
-                        }
-                    return data
-    except Exception as e:
-        print(f"❌ OKX API Error: {e}")
-    
-    # Фолбэк-структура с твоими реальными текущими данными
-    return {
-        "userInfo": {
-            "rank": 26,
-            "volume": 305.01,
-            "walletAddress": wallet_address
-        },
-        "list": []
-    }
-
 def send_multichain_leaderboard():
     if not TELEGRAM_TOKEN:
         print("⚠️ TELEGRAM_TOKEN не задан!")
         return
 
-    lines = ["🌐 **Мультичейн-трекер объемов (Все сети)**\n"]
+    lines = ["🌐 **Мультичейн-ончейн трекер объемов**\n"]
     
     for name, wallet in USER_WALLETS.items():
         masked = f"{wallet[:6]}...{wallet[-4:]}"
@@ -201,7 +155,7 @@ def send_multichain_leaderboard():
         
         lines.append(f"👤 **{name}** (`{masked}`)\n📊 Общий объем: **`${total_vol:,.2f}`**\n⚡ Сети: {breakdown_str}\n")
 
-    lines.append("🔄 _Обновлено автоматически через мультичейн-сканер._")
+    lines.append("🔄 _Обновлено чисто по блокчейн-данным (без API бинанса/окх)._")
     message_text = "\n".join(lines)
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -219,5 +173,5 @@ def send_multichain_leaderboard():
         print(f"❌ Ошибка отправки: {e}")
 
 if __name__ == "__main__":
-    print("🚀 Мультичейн-сканер запущен...")
+    print("🚀 Ончейн-сканер запущен...")
     send_multichain_leaderboard()

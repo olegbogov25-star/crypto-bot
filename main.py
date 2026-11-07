@@ -1444,6 +1444,8 @@ def run_alpha_session(session_key, token_identifier):
     if session_key not in alpha_price_memory:
         alpha_price_memory[session_key] = []
 
+    last_sent_text = ""
+
     while True:
         try:
             session = active_alpha_sessions.get(session_key)
@@ -1499,7 +1501,6 @@ def run_alpha_session(session_key, token_identifier):
                 if old_price > 0:
                     price_change = ((current_price - old_price) / old_price) * 100
 
-            # 🟢 Комфортные буферы лимиток 0.25% – 0.3%
             spread_offset = 0.0027
             if abs(price_change) >= 0.3:
                 spread_offset = 0.0045
@@ -1510,7 +1511,6 @@ def run_alpha_session(session_key, token_identifier):
             buy_str = f"{suggested_buy:.8f}".rstrip('0').rstrip('.')
             sell_str = f"{suggested_sell:.8f}".rstrip('0').rstrip('.')
 
-            # 🟢 Строгий триггер памп/дамп на 0.3%
             if price_change <= -0.3:
                 trend_icon = "🩸"
                 action_advice = "⚠️ **ВНИМАНИЕ: ДАМП / СПОЛЗАНИЕ!** Монета просела на >= 0.3%. Обратный ордер на продажу может зависнуть — притормози открут!"
@@ -1518,15 +1518,17 @@ def run_alpha_session(session_key, token_identifier):
                 trend_icon = "🚀"
                 action_advice = "🔥 **ВНИМАНИЕ: ПАМП / РАЗГОН!** Заметный импульс вверх на >= 0.3%. Жди отката."
 
+            current_time_label = get_kyiv_time()
+
             msg_txt = (
                 f"{trend_icon} **Alpha Contract** | `${current_price}` (`{price_change:+.2f}%`)\n"
                 f"📝 `...{token_identifier[-8:]}`\n\n"
                 f"📐 **Диапазон ордеров:** Buy `~${buy_str}` | Sell `~${sell_str}`\n"
                 f"🎯 **Совет по откруту:**\n_{action_advice}_\n\n"
-                f"🕒 _{get_kyiv_time()}_"
+                f"🕒 _Обновлено: {current_time_label}_"
             )
             
-            if msg_id:
+            if msg_id and msg_txt != last_sent_text:
                 try:
                     bot.edit_message_text(
                         chat_id=CHAT_ID,
@@ -1535,8 +1537,12 @@ def run_alpha_session(session_key, token_identifier):
                         parse_mode="Markdown",
                         disable_web_page_preview=True
                     )
+                    last_sent_text = msg_txt
                 except Exception as edit_err:
-                    if "message to edit not found" in str(edit_err).lower():
+                    err_str = str(edit_err).lower()
+                    if "message is not modified" in err_str:
+                        pass
+                    elif "message to edit not found" in err_str:
                         try:
                             res = bot.send_message(
                                 chat_id=CHAT_ID,

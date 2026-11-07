@@ -116,49 +116,46 @@ def normalize_symbol(raw_sym):
         sym = sym[:-4]
     return sym
 
-# ==================== DEXSCREENER ON-CHAIN ALPHA CONNECTOR (BY CONTRACT / QUERY) ====================
+# ==================== ALPHA CONNECTOR (BY TICKER / SYMBOL - BSC & DEXSCREENER) ====================
 def fetch_binance_alpha_price(token_query):
     """
-    Получение реальной цены из ончейн пулов через DEXScreener API 
-    по адресу контракта (CA) или точному поисковому запросу.
-    С защитой от кеширования и жесткой фильтрацией по пулам с USDT.
+    Быстрый поиск цены по тикеру/символу (как на рабочих скриншотах CTUSDT).
+    Приоритет отдается пулам сети BSC с наибольшим оборотом.
     """
     if not token_query:
         return 0.0
 
-    query = token_query.strip()
+    query = token_query.strip().upper()
+    base_clean = normalize_symbol(query)
 
     try:
-        anti_cache = int(time.time() * 1000)
-        urls = [
-            f"https://api.dexscreener.com/latest/dex/tokens/{query}?_t={anti_cache}",
-            f"https://api.dexscreener.com/latest/dex/search?q={query}&_t={anti_cache}"
-        ]
-        
-        for url in urls:
-            res = requests.get(url, headers=get_random_headers(), timeout=4)
-            if res.status_code == 200:
-                data = res.json()
-                pairs = data.get("pairs", [])
-                if pairs:
-                    usdt_pairs = []
-                    for p in pairs:
-                        quote_token = p.get("quoteToken", {})
-                        q_symbol = quote_token.get("symbol", "").upper()
-                        if "USDT" in q_symbol and p.get("priceUsd"):
-                            usdt_pairs.append(p)
-                    
-                    target_pairs = usdt_pairs if usdt_pairs else [p for p in pairs if p.get("priceUsd")]
-
-                    if target_pairs:
-                        target_pairs.sort(key=lambda x: float(x.get("volume", {}).get("h24", 0) or 0), reverse=True)
-                        price = float(target_pairs[0].get("priceUsd", 0))
-                        if price > 0:
-                            return price
+        url = f"https://api.dexscreener.com/latest/dex/search?q={base_clean}"
+        res = requests.get(url, headers=get_random_headers(), timeout=4)
+        if res.status_code == 200:
+            data = res.json()
+            pairs = data.get("pairs", [])
+            if pairs:
+                # Фильтруем пулы с BNB/BSC или берем те, где есть цена в USD
+                bsc_pairs = [p for p in pairs if p.get("chainId", "").lower() in ["bsc", "binancecoin"] and p.get("priceUsd")]
+                target_pairs = bsc_pairs if bsc_pairs else [p for p in pairs if p.get("priceUsd")]
+                
+                if target_pairs:
+                    target_pairs.sort(key=lambda x: float(x.get("volume", {}).get("h24", 0) or 0), reverse=True)
+                    price = float(target_pairs[0].get("priceUsd", 0))
+                    if price > 0:
+                        return price
     except Exception as e:
-        print(f"❌ DEXScreener Alpha Error for {query}: {e}")
+        print(f"❌ Alpha Price Error: {e}")
 
-    return 0.0
+    # Запасной вариант через общие биржи
+    ex_prices, _ = fetch_token_prices_on_demand(base_clean)
+    if 'Binance Alpha' in ex_prices:
+        return ex_prices['Binance Alpha']
+    if 'Binance' in ex_prices:
+        return ex_prices['Binance']
+    
+    valid = [p for p in ex_prices.values() if p > 0]
+    return valid[0] if valid else 0.0
 
 def fetch_token_prices_on_demand(sym):
     base_sym = normalize_symbol(sym)
@@ -1421,39 +1418,43 @@ def monitor_funding():
         time.sleep(1800)
 
 def run_alpha_session(session_key, token_identifier):
-    print(f"🚀 [ALPHA DEBUG] Поток запущен для токена/контракта: {token_identifier} (ключ: {session_key})")
+    print(f"🚀 [ALPHA DEBUG] Сессия запущена для: {token_identifier} (ключ: {session_key})")
     
     msg_id = None
+    display_symbol = normalize_symbol(token_identifier) or token_identifier.upper()
+    if not display_symbol.endswith("USDT") and not display_symbol.startswith("0X"):
+        display_symbol = f"#{display_symbol}USDT"
+    elif not display_symbol.startswith("0X"):
+        display_symbol = f"#{display_symbol}"
+
     try:
         res = bot.send_message(
             chat_id=CHAT_ID, 
             message_thread_id=TOPICS["ALPHA"], 
-            text=f"🚀 **Binance Alpha сессия запущена**\nКонтракт: `{token_identifier}`\nИнициализация ончейн-источника...", 
+            text=f"🚀 **Binance Alpha сессия запущена**\nМонета/Тикер: `{display_symbol}`\nЗагрузка данных...", 
             parse_mode="Markdown",
             disable_web_page_preview=True
         )
         if res:
             msg_id = res.message_id
     except Exception as e:
-        print(f"❌ [ALPHA ERROR] Не удалось отправить стартовое сообщение: {e}")
+        print(f"❌ [ALPHA ERROR] Стартовое сообщение: {e}")
     
     if session_key not in alpha_price_memory:
         alpha_price_memory[session_key] = []
 
     last_sent_text = ""
-    cached_valid_price = 0.0
 
     while True:
         try:
             session = active_alpha_sessions.get(session_key)
             if not session or session.get("stop"):
-                print(f"⏹ [ALPHA DEBUG] Сессия для {token_identifier} остановлена принудительно.")
                 if msg_id:
                     try:
                         bot.edit_message_text(
                             chat_id=CHAT_ID,
                             message_id=msg_id,
-                            text=f"⏹ **Alpha | `{token_identifier[:10]}...`**\nСессия остановлена.",
+                            text=f"⏹ **Alpha | `{display_symbol}`**\nСессия остановлена.",
                             parse_mode="Markdown"
                         )
                     except: pass
@@ -1461,27 +1462,8 @@ def run_alpha_session(session_key, token_identifier):
 
             current_price = fetch_binance_alpha_price(token_identifier)
             
-            if current_price > 0:
-                cached_valid_price = current_price
-            else:
-                if cached_valid_price > 0:
-                    current_price = cached_valid_price
-                else:
-                    ex_prices, _ = fetch_token_prices_on_demand(token_identifier)
-                    current_price = ex_prices.get('Binance Alpha', 0) or ex_prices.get('Binance', 0)
-
             if current_price <= 0:
-                if msg_id:
-                    try:
-                        bot.edit_message_text(
-                            chat_id=CHAT_ID,
-                            message_id=msg_id,
-                            text=f"🔍 **Alpha | `{token_identifier[:12]}...`**\n⚠️ Ожидание ончейн-ликвидности по контракту... Повтор...",
-                            parse_mode="Markdown",
-                            disable_web_page_preview=True
-                        )
-                    except: pass
-                time.sleep(12)
+                time.sleep(5)
                 continue
 
             now_ts = time.time()
@@ -1498,7 +1480,7 @@ def run_alpha_session(session_key, token_identifier):
             if len(history) >= 2:
                 old_price = history[0][1]
                 for t, p in history:
-                    if now_ts - t >= 30:
+                    if now_ts - t >= 20:
                         old_price = p
                         break
                 if old_price > 0:
@@ -1519,16 +1501,15 @@ def run_alpha_session(session_key, token_identifier):
                 action_advice = "⚠️ **ВНИМАНИЕ: ДАМП / СПОЛЗАНИЕ!** Монета просела на >= 0.3%. Обратный ордер на продажу может зависнуть — притормози открут!"
             elif price_change >= 0.3:
                 trend_icon = "🚀"
-                action_advice = "🔥 **ВНИМАНИЕ: ПАМП / РАЗГОН!** Заметный импульс вверх на >= 0.3%. Жди отката."
+                action_advice = "🔥 **ВНИМАНИЕ: ПАМП / РАЗГОН!** Заметный импульс вверх на >= 0.3%. Покупать по текущим рискованно, жди отката."
 
             current_time_label = get_kyiv_time()
 
             msg_txt = (
-                f"{trend_icon} **Alpha Contract** | `${current_price}` (`{price_change:+.2f}%`)\n"
-                f"📝 `...{token_identifier[-8:]}`\n\n"
+                f"{trend_icon} **Alpha** | `{display_symbol}` |\n"
+                f"${current_price} (`{price_change:+.2f}%`)\n\n"
                 f"📐 **Диапазон ордеров:** Buy `~${buy_str}` | Sell `~${sell_str}`\n"
-                f"🎯 **Совет по откруту:**\n_{action_advice}_\n\n"
-                f"🕒 _Обновлено: {current_time_label}_"
+                f"🎯 **Совет по откруту:**\n_{action_advice}_"
             )
             
             if msg_id and msg_txt != last_sent_text:
@@ -1557,27 +1538,27 @@ def run_alpha_session(session_key, token_identifier):
                         except: pass
 
         except Exception as err:
-            print(f"❌ [ALPHA CRITICAL ERROR]: {err}")
+            print(f"❌ [ALPHA ERROR]: {err}")
             
-        time.sleep(12)
+        time.sleep(7)
 
 @bot.message_handler(func=lambda msg: msg.text and msg.text.lower().startswith(('/start', '/run', '/alpha')))
 def cmd_alpha_start_alt(message):
     text = message.text.strip()
     match = re.search(r'(?:/start|/run|/alpha)\s+([a-zA-Z0-9_-]+)', text)
     if match:
-        contract_addr = match.group(1).strip()
-        session_key = f"alpha_{contract_addr}"
-        active_alpha_sessions[session_key] = {"symbol": contract_addr, "stop": False}
-        threading.Thread(target=run_alpha_session, args=(session_key, contract_addr), daemon=True).start()
+        token_query = match.group(1).strip()
+        session_key = f"alpha_{token_query}"
+        active_alpha_sessions[session_key] = {"symbol": token_query, "stop": False}
+        threading.Thread(target=run_alpha_session, args=(session_key, token_query), daemon=True).start()
         
         try:
-            bot.reply_to(message, f"✅ Предиктивный сканер (12 сек, live-редактирование) для контракта/монеты запущен в топике Alpha!", parse_mode="Markdown")
+            bot.reply_to(message, f"✅ Предиктивный сканер (7 сек, live-редактирование) запущен в топике Alpha!", parse_mode="Markdown")
         except: pass
         return
     
     try:
-        bot.reply_to(message, "ℹ️ Использование: `/start [адрес_контракта]` (например: `/start 0x...`)", parse_mode="Markdown")
+        bot.reply_to(message, "ℹ️ Использование: `/start [тикер_монеты]` (например: `/start ct`)", parse_mode="Markdown")
     except: pass
 
 @bot.message_handler(commands=['stop', 'end'])
@@ -1588,7 +1569,7 @@ def cmd_alpha_stop(message):
         session_key = f"alpha_{query}"
         if session_key in active_alpha_sessions:
             active_alpha_sessions[session_key]["stop"] = True
-            bot.reply_to(message, f"⏹ Сессия для контракта `...{query[-6:]}` остановлена.", parse_mode="Markdown")
+            bot.reply_to(message, f"⏹ Сессия для `{query}` остановлена.", parse_mode="Markdown")
             return
             
     for k in active_alpha_sessions:
@@ -1714,7 +1695,7 @@ def handle_chat_messages(message):
     bot.reply_to(message, "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
 
 if __name__ == "__main__":
-    print("🚀 Bot starting with Optimized DEXScreener Alpha Connector...")
+    print("🚀 Bot starting with Ticker-Based Alpha Connector...")
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     threading.Thread(target=fetch_newsmaker_channel, daemon=True).start()

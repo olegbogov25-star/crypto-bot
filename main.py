@@ -1690,4 +1690,3 @@ if __name__ == "__main__":
     threading.Thread(target=monitor_funding, daemon=True).start()
     print("🤖 Telegram bot polling started...")
     bot.infinity_polling(skip_pending=True)
-```[cite: 7]

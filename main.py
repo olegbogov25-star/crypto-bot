@@ -116,43 +116,38 @@ def normalize_symbol(raw_sym):
         sym = sym[:-4]
     return sym
 
-# ==================== BINANCE ALPHA DIRECT API CONNECTOR ====================
+# ==================== DEXSCREENER ON-CHAIN ALPHA CONNECTOR ====================
 def fetch_binance_alpha_price(base_sym):
     """
-    Прямой запрос к официальным шлюзам Binance Alpha / Web3 для получения реальной цены и стакана.
+    Получение реальной цены из ончейн пулов через DEXScreener API по тикеру токена.
     """
-    clean_sym = base_sym.upper().replace('USDT', '').replace('USDC', '')
-    
-    # Попытка через публичные шлюзы поиска / котировок Binance Alpha
-    endpoints = [
-        f"https://www.binance.com/bapi/asset/v1/public/asset-service/product/get-product-by-symbol?symbol={clean_sym}",
-        f"https://www.binance.com/bapi/composite/v1/public/alpha/market/symbol?symbol={clean_sym}",
-        f"https://api.binance.com/api/v3/ticker/price?symbol={clean_sym}USDC"
-    ]
-    
-    for url in endpoints:
-        try:
-            r = requests.get(url, headers=get_random_headers(), timeout=3).json()
-            # Проверяем различные форматы ответа Binance API
-            if isinstance(r, dict):
-                if 'data' in r and isinstance(r['data'], dict):
-                    p = float(r['data'].get('price', 0) or r['data'].get('lastPrice', 0) or r['data'].get('spotPrice', 0))
-                    if p > 0:
-                        return p
-                if 'price' in r:
-                    p = float(r['price'])
-                    if p > 0:
-                        return p
-        except Exception:
-            continue
+    clean_sym = normalize_symbol(base_sym)
+    if not clean_sym:
+        return 0.0
 
-    # Если через стандартные api не удалось, делаем резервный поиск по агрегаторам ликвидности Альфы
     try:
-        r = requests.get(f"https://dex.binance.org/api/v1/ticker/24hr?symbol={clean_sym}_USDC", timeout=3).json()
-        if isinstance(r, list) and len(r) > 0:
-            p = float(r[0].get('lastPrice', 0))
-            if p > 0: return p
-    except: pass
+        url = f"https://api.dexscreener.com/latest/dex/search?q={clean_sym}"
+        res = requests.get(url, headers=get_random_headers(), timeout=4)
+        if res.status_code == 200:
+            data = res.json()
+            pairs = data.get("pairs", [])
+            if pairs:
+                # Сортируем пары по объему или ликвидности, чтобы взять наиболее актуальную
+                valid_pairs = [p for p in pairs if p.get("priceUsd")]
+                if valid_pairs:
+                    # Берем первую самую ликвидную пару с совпадающим тикером
+                    for p in valid_pairs:
+                        base_token = p.get("baseToken", {}).get("symbol", "").upper()
+                        if base_token == clean_sym or clean_sym in base_token:
+                            price = float(p.get("priceUsd", 0))
+                            if price > 0:
+                                return price
+                    # Если точного совпадения по символу не нашлось, берем первую валидную цену
+                    price = float(valid_pairs[0].get("priceUsd", 0))
+                    if price > 0:
+                        return price
+    except Exception as e:
+        print(f"❌ DEXScreener Alpha Error for {clean_sym}: {e}")
 
     return 0.0
 
@@ -160,7 +155,7 @@ def fetch_token_prices_on_demand(sym):
     base_sym = normalize_symbol(sym)
     ex_prices, ex_vols = {}, {}
     
-    # 🟢 Берем точную цену из контура Binance Alpha
+    # 🟢 Берем точную цену из ончейн пулов (синхронизировано с терминалом Alpha)
     alpha_p = fetch_binance_alpha_price(base_sym)
     if alpha_p > 0:
         ex_prices['Binance Alpha'] = alpha_p
@@ -1426,7 +1421,7 @@ def run_alpha_session(session_key, symbol):
         res = bot.send_message(
             chat_id=CHAT_ID, 
             message_thread_id=TOPICS["ALPHA"], 
-            text=f"🚀 **Binance Alpha сессия запущена для #{symbol}**\nИнициализация стакана...", 
+            text=f"🚀 **Binance Alpha сессия запущена для #{symbol}**\nИнициализация ончейн-источника...", 
             parse_mode="Markdown",
             disable_web_page_preview=True
         )
@@ -1465,7 +1460,7 @@ def run_alpha_session(session_key, symbol):
                         bot.edit_message_text(
                             chat_id=CHAT_ID,
                             message_id=msg_id,
-                            text=f"🔍 **Alpha | #{symbol}**\n⚠️ Не удалось получить цену из Альфы. Повтор...",
+                            text=f"🔍 **Alpha | #{symbol}**\n⚠️ Ожидание ончейн-ликвидности... Повтор...",
                             parse_mode="Markdown",
                             disable_web_page_preview=True
                         )
@@ -1704,7 +1699,7 @@ def handle_chat_messages(message):
     bot.reply_to(message, "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
 
 if __name__ == "__main__":
-    print("🚀 Bot starting with Binance Alpha Direct Connector...")
+    print("🚀 Bot starting with DEXScreener On-Chain Alpha Connector...")
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     threading.Thread(target=fetch_newsmaker_channel, daemon=True).start()

@@ -1269,7 +1269,7 @@ def run_alpha_session(session_key, token_identifier):
 
             price_change = 0.0
             trend_icon = "🟢"
-            action_advice = "Цена стабильна. Можно безопасно крутить лимитками."
+            return_chance_text = "🟢 Шанс на возврат: ВЫСОКИЙ"
 
             if len(history) >= 2:
                 old_price = history[0][1]
@@ -1289,15 +1289,17 @@ def run_alpha_session(session_key, token_identifier):
 
             if price_change <= -0.30:
                 trend_icon = "🩸"
-                action_advice = "⚠️ **ДАМП / СПОЛЗАНИЕ!** Просадка >= 0.30%. Ордер на продажу может зависнуть — притормози открут!"
+                return_chance_text = "🔴 Шанс на возврат: НЕТ"
             elif price_change >= 0.30:
                 trend_icon = "🚀"
-                action_advice = "🔥 **ПАМП / РАЗГОН!** Импульс вверх >= 0.30%. Покупать по текущим рискованно, жди отката."
+                return_chance_text = "🟢 Шанс на возврат: ВЫСОКИЙ"
+            else:
+                return_chance_text = "🟢 Шанс на возврат: ВЫСОКИЙ"
 
             msg_txt = (
                 f"{trend_icon} **Alpha** | `{display_symbol}` | ${current_price} (`{price_change:+.2f}%`)\n\n"
                 f"📐 **Диапазон ордеров:** Buy `~${buy_str}` | Sell `~${sell_str}`\n"
-                f"🎯 **Совет по откруту:**\n{action_advice}"
+                f"🎯 **Вердикт:** {return_chance_text}"
             )
             
             try:

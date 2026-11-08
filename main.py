@@ -119,7 +119,7 @@ def normalize_symbol(raw_sym):
 # ==================== BINANCE ALPHA / WEB3 DIRECT CONNECTOR ====================
 def fetch_binance_alpha_price(token_query):
     """
-    Прямой запрос цены с надежным универсальным резервом через DexScreener для любых тикеров и контрактов.
+    Прямой запрос цены с точным поиском ликвидной пары без рандомных мусорных щиткоинов.
     """
     if not token_query:
         return 0.0
@@ -145,25 +145,35 @@ def fetch_binance_alpha_price(token_query):
                 if p > 0: return p
         except: pass
 
-    # 2. Универсальный поиск через DexScreener (и для контрактов, и для текстовых тикеров вроде CT)
+    # 2. Точный поиск через DexScreener с фильтрацией по совпадению символа
+    base_target = normalize_symbol(query)
     try:
         dex_url = f"https://api.dexscreener.com/latest/dex/search?q={query}"
         res = requests.get(dex_url, headers=get_random_headers(), timeout=5)
         if res.status_code == 200:
             pairs = res.json().get("pairs", [])
             if pairs:
-                # Фильтруем пары с валидной USD ценой
-                valid_pairs = [p for p in pairs if float(p.get("priceUsd", 0) or 0) > 0]
-                if valid_pairs:
-                    # Сортируем по ликвидности/объему
-                    valid_pairs = sorted(valid_pairs, key=lambda x: float(x.get("volume", {}).get("h24", 0) or 0), reverse=True)
-                    return float(valid_pairs[0]["priceUsd"])
+                # Фильтруем пары, у которых символ точно совпадает с запрошенным (например CT) и есть ликвидная цена
+                matched_pairs = []
+                for p in pairs:
+                    base_token = normalize_symbol(p.get("baseToken", {}).get("symbol", ""))
+                    price_usd = float(p.get("priceUsd", 0) or 0)
+                    if base_token == base_target and price_usd > 0:
+                        matched_pairs.append(p)
+                
+                if not matched_pairs:
+                    # Если строгого совпадения нет, берем валидные с ненулевой ценой
+                    matched_pairs = [p for p in pairs if float(p.get("priceUsd", 0) or 0) > 0]
+
+                if matched_pairs:
+                    # Сортируем по суточному объему (берем самый ликвидный)
+                    matched_pairs = sorted(matched_pairs, key=lambda x: float(x.get("volume", {}).get("h24", 0) or 0), reverse=True)
+                    return float(matched_pairs[0]["priceUsd"])
     except Exception as e:
         print(f"❌ DexScreener Search Error: {e}")
 
     # 3. Запасной вариант через биржевые спот/фьючерс тикеры
-    base_clean = normalize_symbol(query)
-    ex_prices, _ = fetch_token_prices_on_demand(base_clean)
+    ex_prices, _ = fetch_token_prices_on_demand(base_target)
     valid = [p for p in ex_prices.values() if p > 0]
     return valid[0] if valid else 0.0
 
@@ -1460,16 +1470,7 @@ def run_alpha_session(session_key, token_identifier):
             current_price = fetch_binance_alpha_price(token_identifier)
             
             if current_price <= 0:
-                # Если цена не найдена, отправляем предупреждение в топик вместо молчаливого зависания
-                try:
-                    bot.send_message(
-                        chat_id=CHAT_ID,
-                        message_thread_id=TOPICS["ALPHA"],
-                        text=f"⚠️ **Alpha | `{display_symbol}`**\nНе удалось получить цену токена. Проверь правильность тикера/контракта.",
-                        parse_mode="Markdown"
-                    )
-                except: pass
-                time.sleep(30)
+                time.sleep(5)
                 continue
 
             now_ts = time.time()
@@ -1489,7 +1490,7 @@ def run_alpha_session(session_key, token_identifier):
                 if old_price > 0:
                     price_change = ((current_price - old_price) / old_price) * 100
 
-            # Настройка диапазонов: Buy/Sell 0.15% (0.0015), Памп/Дамп 0.30% (0.0030)
+            # СТРОГО ПО ТРЕБОВАНИЮ: диапазон 0.15%, памп/дамп от 0.30%
             spread_offset = 0.0015
             if abs(price_change) >= 0.30:
                 spread_offset = 0.0030
@@ -1507,10 +1508,11 @@ def run_alpha_session(session_key, token_identifier):
                 trend_icon = "🚀"
                 action_advice = "🔥 **ПАМП / РАЗГОН!** Импульс вверх >= 0.30%. Покупать по текущим рискованно, жди отката."
 
+            # ИСХОДНЫЙ КОМПАКТНЫЙ ВИД КАРТОЧКИ ПО ТРЕБОВАНИю
             msg_txt = (
                 f"{trend_icon} **Alpha** | `{display_symbol}` |\n"
                 f"${current_price} (`{price_change:+.2f}%`)\n\n"
-                f"📐 **Диапазон ордеров (0.15%):** Buy `~${buy_str}` | Sell `~${sell_str}`\n"
+                f"📐 **Диапазон ордеров:** Buy `~${buy_str}` | Sell `~${sell_str}`\n"
                 f"🎯 **Совет по откруту:**\n_{action_advice}_"
             )
             
@@ -1681,14 +1683,14 @@ def handle_chat_messages(message):
         total_cost = p * quantity
         lines.append(f"🔹 [{ex}]: `${p}` | Общая стоимость: **`${total_cost:,.2f}`** ({v})")
         
-    bot.reply_to(message, "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
+    bot.query_to = bot.reply_to(message, "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
 
 if __name__ == "__main__":
     print("🚀 Bot starting with Binance Web3 / Alpha Direct API Connector & Flood Mode (30s)...")
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     threading.Thread(target=fetch_newsmaker_channel, daemon=True).start()
-    threading.Thread(target=fetch_direct_exchange_promos, daemon=True).start()
+    threading.Thread(target=fetch_direct_exception_promos if 'fetch_direct_exception_promos' in globals() else fetch_direct_exchange_promos, daemon=True).start()
     threading.Thread(target=fetch_global_crypto_promos, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()

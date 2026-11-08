@@ -1269,7 +1269,7 @@ def run_alpha_session(session_key, token_identifier):
 
             price_change = 0.0
             trend_icon = "🟢"
-            action_advice = "✅ Цена стабильна. Можно безопасно крутить лимитками."
+            action_advice = "Цена стабильна. Можно безопасно крутить лимитками."
 
             if len(history) >= 2:
                 old_price = history[0][1]
@@ -1295,10 +1295,9 @@ def run_alpha_session(session_key, token_identifier):
                 action_advice = "🔥 **ПАМП / РАЗГОН!** Импульс вверх >= 0.30%. Покупать по текущим рискованно, жди отката."
 
             msg_txt = (
-                f"{trend_icon} **Alpha** | `{display_symbol}` |\n"
-                f"${current_price} (`{price_change:+.2f}%`)\n\n"
+                f"{trend_icon} **Alpha** | `{display_symbol}` | ${current_price} (`{price_change:+.2f}%`)\n\n"
                 f"📐 **Диапазон ордеров:** Buy `~${buy_str}` | Sell `~${sell_str}`\n"
-                f"🎯 **Совет по откруту:**\n_{action_advice}_"
+                f"🎯 **Совет по откруту:**\n{action_advice}"
             )
             
             try:

@@ -116,36 +116,41 @@ def normalize_symbol(raw_sym):
         sym = sym[:-4]
     return sym
 
-# ==================== BINANCE ALPHA / WEB3 DIRECT CONNECTOR ====================
+# ==================== BINANCE ALPHA / WEB3 DIRECT CONNECTOR (FIXED) ====================
 def fetch_binance_alpha_price(token_query):
     """
-    Прямой запрос цены с точным поиском ликвидной пары без рандомных мусорных щиткоинов.
+    Прямой стабильный запрос цены для Binance Alpha с поддержкой контрактов и фильтрацией пулов.
     """
     if not token_query:
         return 0.0
 
     query = token_query.strip()
     
-    # 1. Если передан контракт (0x...)
+    # 1. Если передан контракт (0x...) для EVM сетей
     if query.lower().startswith("0x") and len(query) == 42:
-        try:
-            payload = {
-                "binanceChainId": "56",
-                "tokenContractAddress": query
-            }
-            res = requests.post(
-                "https://web3.binance.com/build/api/v1/dex/market/price",
-                json=payload,
-                headers=get_random_headers(),
-                timeout=4
-            )
-            if res.status_code == 200:
-                price_str = res.json().get("data", {}).get("price", "0")
-                p = float(price_str or 0)
-                if p > 0: return p
-        except: pass
+        chains = ["56", "1", "42161", "8453"] # BSC, ETH, Arbitrum, Base
+        for chain_id in chains:
+            try:
+                payload = {
+                    "binanceChainId": chain_id,
+                    "tokenContractAddress": query
+                }
+                res = requests.post(
+                    "https://web3.binance.com/build/api/v1/dex/market/price",
+                    json=payload,
+                    headers=get_random_headers(),
+                    timeout=4
+                )
+                if res.status_code == 200:
+                    data_json = res.json()
+                    price_str = data_json.get("data", {}).get("price", "0")
+                    p = float(price_str or 0)
+                    if p > 0: 
+                        return p
+            except: 
+                pass
 
-    # 2. Точный поиск через DexScreener с фильтрацией по совпадению символа
+    # 2. Поиск через DexScreener с фильтрацией по совпадению и ликвидности
     base_target = normalize_symbol(query)
     try:
         dex_url = f"https://api.dexscreener.com/latest/dex/search?q={query}"
@@ -153,19 +158,21 @@ def fetch_binance_alpha_price(token_query):
         if res.status_code == 200:
             pairs = res.json().get("pairs", [])
             if pairs:
-                matched_pairs = []
+                valid_pairs = []
                 for p in pairs:
                     base_token = normalize_symbol(p.get("baseToken", {}).get("symbol", ""))
                     price_usd = float(p.get("priceUsd", 0) or 0)
-                    if base_token == base_target and price_usd > 0:
-                        matched_pairs.append(p)
+                    liquidity_usd = float(p.get("liquidity", {}).get("usd", 0) or 0)
+                    
+                    if base_token == base_target and price_usd > 0 and liquidity_usd > 500:
+                        valid_pairs.append(p)
                 
-                if not matched_pairs:
-                    matched_pairs = [p for p in pairs if float(p.get("priceUsd", 0) or 0) > 0]
+                if not valid_pairs:
+                    valid_pairs = [p for p in pairs if float(p.get("priceUsd", 0) or 0) > 0]
 
-                if matched_pairs:
-                    matched_pairs = sorted(matched_pairs, key=lambda x: float(x.get("volume", {}).get("h24", 0) or 0), reverse=True)
-                    return float(matched_pairs[0]["priceUsd"])
+                if valid_pairs:
+                    valid_pairs = sorted(valid_pairs, key=lambda x: float(x.get("volume", {}).get("h24", 0) or 0), reverse=True)
+                    return float(valid_pairs[0]["priceUsd"])
     except Exception as e:
         print(f"❌ DexScreener Search Error: {e}")
 
@@ -1426,7 +1433,7 @@ def monitor_funding():
             print(f"❌ Funding Monitor Error: {e}")
         time.sleep(1800)
 
-# ==================== BINANCE ALPHA СЕАССИЯ (СТАБИЛЬНАЯ КОНЦЕПЦИЯ С 0.3% / 0.15-0.20) ====================
+# ==================== BINANCE ALPHA СЕАССИЯ (ФЛУД-РЕЖИМ КАЖДЫЕ 30 СЕК) ====================
 def run_alpha_session(session_key, token_identifier):
     print(f"🚀 [ALPHA DEBUG] Сессия запущена для: {token_identifier} (ключ: {session_key})")
     
@@ -1474,22 +1481,21 @@ def run_alpha_session(session_key, token_identifier):
             history = alpha_price_memory[session_key]
             history.append((now_ts, current_price))
             
-            alpha_price_memory[session_key] = [item for item in history if now_ts - item[0] <= 30]
+            alpha_price_memory[session_key] = [item for item in history if now_ts - item[0] <= 120]
             history = alpha_price_memory[session_key]
 
             price_change = 0.0
             trend_icon = "🟢"
-            action_advice = "✅ Цена стабильна. Работаем в штатном диапазоне."
+            action_advice = "✅ Цена стабильна. Можно безопасно крутить лимитками."
 
             if len(history) >= 2:
                 old_price = history[0][1]
                 if old_price > 0:
                     price_change = ((current_price - old_price) / old_price) * 100
 
-            # Старая проверенная концепция дельты (0.15% - 0.20% или 0.3% при пампе/дампе)
-            spread_offset = 0.0015 # 0.15% базовый диапазон buy/sell
+            spread_offset = 0.0015
             if abs(price_change) >= 0.30:
-                spread_offset = 0.0030 # 0.3% при сильном импульсе
+                spread_offset = 0.0030
 
             suggested_buy = current_price * (1 - spread_offset)
             suggested_sell = current_price * (1 + spread_offset)
@@ -1499,15 +1505,15 @@ def run_alpha_session(session_key, token_identifier):
 
             if price_change <= -0.30:
                 trend_icon = "🩸"
-                action_advice = "⚠️ **ДАМП / ПРОСАДКА!** Изменение >= -0.30%. Будь осторожен с лимитками на продажу."
+                action_advice = "⚠️ **ДАМП / СПОЛЗАНИЕ!** Просадка >= 0.30%. Ордер на продажу может зависнуть — притормози открут!"
             elif price_change >= 0.30:
                 trend_icon = "🚀"
-                action_advice = "🔥 **ПАМП / ИМПУЛЬС!** Изменение >= +0.30%. Отличный момент для открута объема."
+                action_advice = "🔥 **ПАМП / РАЗГОН!** Импульс вверх >= 0.30%. Покупать по текущим рискованно, жди отката."
 
             msg_txt = (
                 f"{trend_icon} **Alpha** | `{display_symbol}` |\n"
                 f"${current_price} (`{price_change:+.2f}%`)\n\n"
-                f"📐 **Диапазон лимиток:** Buy `~${buy_str}` | Sell `~${sell_str}`\n"
+                f"📐 **Диапазон ордеров:** Buy `~${buy_str}` | Sell `~${sell_str}`\n"
                 f"🎯 **Совет по откруту:**\n_{action_advice}_"
             )
             

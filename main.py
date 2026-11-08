@@ -116,40 +116,53 @@ def normalize_symbol(raw_sym):
         sym = sym[:-4]
     return sym
 
-# ==================== ALPHA CONNECTOR (DIRECT CONTRACT / TOKEN ADDRESS) ====================
+# ==================== BINANCE ALPHA / WEB3 DIRECT CONNECTOR ====================
 def fetch_binance_alpha_price(token_query):
     """
-    Прямой запрос к DEXScreener по точным адресам контрактов или тикеру без мусорного поиска.
+    Прямой запрос к публичным API Binance Alpha / Web3 Market Data для получения живой цены.
     """
     if not token_query:
         return 0.0
 
     query = token_query.strip()
     
+    # Если передан контракт (например, 0x0a092e544da31150b439a1aaa1a3a2214a867f46)
     if query.lower().startswith("0x") and len(query) == 42:
-        url = f"https://api.dexscreener.com/latest/dex/tokens/{query}"
-    else:
-        base_clean = normalize_symbol(query)
-        url = f"https://api.dexscreener.com/latest/dex/search?q={base_clean}"
+        try:
+            # Запрос к официальному публичному эндпоинту Binance Web3 Market API
+            payload = {
+                "binanceChainId": "56", # BSC Chain ID
+                "tokenContractAddress": query
+            }
+            res = requests.post(
+                "https://web3.binance.com/build/api/v1/dex/market/price",
+                json=payload,
+                headers=get_random_headers(),
+                timeout=5
+            )
+            if res.status_code == 200:
+                data = res.json()
+                price_str = data.get("data", {}).get("price", "0")
+                price = float(price_str or 0)
+                if price > 0:
+                    return price
+        except Exception as e:
+            print(f"❌ Binance Web3 API Error: {e}")
 
-    try:
-        res = requests.get(url, headers=get_random_headers(), timeout=4)
-        if res.status_code == 200:
-            data = res.json()
-            pairs = data.get("pairs", [])
-            if pairs:
-                bsc_pairs = [p for p in pairs if p.get("chainId", "").lower() in ["bsc", "binancecoin"] and float(p.get("priceUsd", 0) or 0) > 0]
-                target_pairs = bsc_pairs if bsc_pairs else [p for p in pairs if float(p.get("priceUsd", 0) or 0) > 0]
-                
-                if target_pairs:
-                    target_pairs.sort(key=lambda x: float(x.get("volume", {}).get("h24", 0) or 0), reverse=True)
-                    price = float(target_pairs[0].get("priceUsd", 0))
-                    if price > 0:
-                        return price
-    except Exception as e:
-        print(f"❌ Alpha Price Error: {e}")
+        # Запасной вариант через веб-интерфейс Binance Alpha (страница, которую ты открывал в Safari)
+        try:
+            web_url = f"https://www.binance.com/bapi/defi/v1/public/alpha/market/token/detail?chainId=56&tokenAddress={query}"
+            res = requests.get(web_url, headers=get_random_headers(), timeout=5)
+            if res.status_code == 200:
+                j = res.json()
+                p = float(j.get("data", {}).get("priceUsd", 0) or 0)
+                if p > 0:
+                    return p
+        except Exception as e:
+            print(f"❌ Binance Alpha Web Detail Error: {e}")
 
-    base_clean = normalize_symbol(token_query)
+    # Если передан тикер — ищем через агрегатор биржевых цен
+    base_clean = normalize_symbol(query)
     ex_prices, _ = fetch_token_prices_on_demand(base_clean)
     valid = [p for p in ex_prices.values() if p > 0]
     return valid[0] if valid else 0.0
@@ -1688,7 +1701,7 @@ def handle_chat_messages(message):
     bot.reply_to(message, "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
 
 if __name__ == "__main__":
-    print("🚀 Bot starting with Direct Contract Alpha Connector (30s interval)...")
+    print("🚀 Bot starting with Binance Web3 / Alpha Direct API Connector (30s interval)...")
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     threading.Thread(target=fetch_newsmaker_channel, daemon=True).start()

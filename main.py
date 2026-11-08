@@ -1533,18 +1533,24 @@ def run_alpha_session(session_key, token_identifier):
             
         time.sleep(30)
 
-@bot.message_handler(func=lambda msg: msg.text and msg.text.lower().startswith(('/start', '/run', '/alpha')))
+@bot.message_handler(commands=['start', 'run', 'alpha'])
 def cmd_alpha_start_alt(message):
     text = message.text.strip()
-    match = re.search(r'(?:/start|/run|/alpha)\s+([a-zA-Z0-9_-]+)', text)
-    if match:
-        token_query = match.group(1).strip()
+    parts = text.split()
+    
+    if len(parts) >= 2:
+        token_query = parts[1].strip()
         session_key = f"alpha_{token_query}"
+        
+        if session_key in active_alpha_sessions:
+            active_alpha_sessions[session_key]["stop"] = True
+            time.sleep(1)
+            
         active_alpha_sessions[session_key] = {"symbol": token_query, "stop": False}
         threading.Thread(target=run_alpha_session, args=(session_key, token_query), daemon=True).start()
         
         try:
-            bot.reply_to(message, f"✅ Предиктивный сканер (30 сек, флуд-режим) запущен в топике Alpha!", parse_mode="Markdown")
+            bot.reply_to(message, f"✅ Предиктивный сканер (30 сек, флуд-режим) запущен для `{token_query}` в топике Alpha!", parse_mode="Markdown")
         except: pass
         return
     

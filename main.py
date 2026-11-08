@@ -118,17 +118,13 @@ def normalize_symbol(raw_sym):
 
 # ==================== BINANCE ALPHA / WEB3 DIRECT CONNECTOR (FIXED) ====================
 def fetch_binance_alpha_price(token_query):
-    """
-    Прямой стабильный запрос цены для Binance Alpha с поддержкой контрактов и фильтрацией пулов.
-    """
     if not token_query:
         return 0.0
 
     query = token_query.strip()
     
-    # 1. Если передан контракт (0x...) для EVM сетей
     if query.lower().startswith("0x") and len(query) == 42:
-        chains = ["56", "1", "42161", "8453"] # BSC, ETH, Arbitrum, Base
+        chains = ["56", "1", "42161", "8453"]
         for chain_id in chains:
             try:
                 payload = {
@@ -150,7 +146,6 @@ def fetch_binance_alpha_price(token_query):
             except: 
                 pass
 
-    # 2. Поиск через DexScreener с фильтрацией по совпадению и ликвидности
     base_target = normalize_symbol(query)
     try:
         dex_url = f"https://api.dexscreener.com/latest/dex/search?q={query}"
@@ -176,7 +171,6 @@ def fetch_binance_alpha_price(token_query):
     except Exception as e:
         print(f"❌ DexScreener Search Error: {e}")
 
-    # 3. Запасной вариант через биржевые спот/фьючерс тикеры
     ex_prices, _ = fetch_token_prices_on_demand(base_target)
     valid = [p for p in ex_prices.values() if p > 0]
     return valid[0] if valid else 0.0
@@ -1433,7 +1427,7 @@ def monitor_funding():
             print(f"❌ Funding Monitor Error: {e}")
         time.sleep(1800)
 
-# ==================== BINANCE ALPHA СЕАССИЯ (ФЛУД-РЕЖИМ КАЖДЫЕ 30 СЕК) ====================
+# ==================== BINANCE ALPHA СЕАССИЯ (ФЛУД-РЕЖИМ КАЖДЫЕ 30 СЕК, ПАМП/ДАМП 0.3%, ДИАПАЗОН 0.2%) ====================
 def run_alpha_session(session_key, token_identifier):
     print(f"🚀 [ALPHA DEBUG] Сессия запущена для: {token_identifier} (ключ: {session_key})")
     
@@ -1493,7 +1487,7 @@ def run_alpha_session(session_key, token_identifier):
                 if old_price > 0:
                     price_change = ((current_price - old_price) / old_price) * 100
 
-            # Установлены параметры: диапазон стакана buy/sell 0.2% (0.002), дамп/памп 0.3%
+            # Точные целевые параметры: базовый диапазон 0.2% (0.0020), порог пампа/дампа 0.3%
             spread_offset = 0.0020
             if abs(price_change) >= 0.30:
                 spread_offset = 0.0040

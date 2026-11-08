@@ -1,8 +1,6 @@
 pyTelegramBotAPI
-openai
-beautifulsoup4
-feedparser
-flask
+Flask
 requests
+feedparser
+beautifulsoup4
 pytz
-web3==6.15.1

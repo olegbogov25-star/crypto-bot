@@ -10,7 +10,6 @@ import pytz
 import requests
 import feedparser
 import telebot
-import scanner
 from bs4 import BeautifulSoup
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from flask import Flask, render_template_string, request, jsonify
@@ -43,26 +42,6 @@ TOPICS = {
     "CHAT": 1       
 }
 
-# ==================== MAPPING TELEGRAM ID -> MULTICHAIN WALLETS ====================
-USER_WALLETS = {
-    1043209905: {
-        "name": "Аккаунт #1 (Основной)",
-        "evm": "0xce99d5ef9f01b5c1f68c848448bc35b885f2a5f0",
-        "solana": ""
-    },
-    7556503425: {
-        "name": "Аккаунт #2 (Второй телефон)",
-        "evm": "0x6c72b72f5c4b8fedda40dc20277b5f4a6f639326",
-        "solana": ""
-    },
-    387143257: {
-        "name": "Дима (Доверенное лицо)",
-        "evm": "0xaa4d1ee7c6026e3d132eda595dcbd9c210e37e28",
-        "solana": ""
-    }
-}
-
-active_okx_sessions = {}
 processed_ids = set()
 active_fundings = {}  
 spread_history = {}      
@@ -100,10 +79,6 @@ def get_kyiv_time():
 def get_kyiv_date_time():
     return datetime.datetime.now(KYIV_TZ).strftime("%H:%M")
 
-def mask_wallet(addr):
-    if not addr or len(addr) < 10: return "Не привязан"
-    return f"{addr[:6]}...{addr[-4:]}"
-
 def normalize_symbol(raw_sym):
     if not raw_sym:
         return ""
@@ -116,7 +91,7 @@ def normalize_symbol(raw_sym):
         sym = sym[:-4]
     return sym
 
-# ==================== BINANCE ALPHA / WEB3 DIRECT CONNECTOR (FIXED) ====================
+# ==================== BINANCE ALPHA / WEB3 DIRECT CONNECTOR ====================
 def fetch_binance_alpha_price(token_query):
     if not token_query:
         return 0.0
@@ -229,144 +204,6 @@ def fetch_token_prices_on_demand(sym):
     except: pass
 
     return ex_prices, ex_vols
-
-# ==================== OKX WEB3 TOURNAMENT ENGINE ====================
-def format_okx_tournament_card(user_name, wallet_addr, tour_conf, api_data):
-    conf_name = tour_conf["name"]
-    max_rank = tour_conf["max_rank"]
-    est_reward = tour_conf["est_reward"]
-    masked = mask_wallet(wallet_addr)
-    
-    user_info = api_data.get("userInfo", {})
-    rank = user_info.get("rank", "--")
-    volume = float(user_info.get("volume", 0) or 0)
-    
-    if not user_info or rank == "--" or rank == 0 or volume == 0.0:
-        rank = 25
-        volume = 305.01
-
-    raw_neighbors = api_data.get("list", [])
-    neighbors_text = []
-    
-    valid_list = []
-    for item in raw_neighbors:
-        r = int(item.get("rank", 0))
-        v = float(item.get("volume", 0))
-        w = item.get("walletAddress", "")
-        valid_list.append({"rank": r, "volume": v, "wallet": w})
-    
-    if not valid_list:
-        dummy_wallets = ["0xc026...ac2f", "0x2f65...bbca", "0xb8e8...0c8b", "0x2f7b...3294", wallet_addr]
-        for r_idx in range(20, 31):
-            v_val = round(350.0 - (r_idx - 20) * 8.5, 2)
-            valid_list.append({"rank": r_idx, "volume": v_val, "wallet": dummy_wallets[r_idx % len(dummy_wallets)]})
-
-    valid_list = sorted(valid_list, key=lambda x: x["rank"])
-    filtered = [n for n in valid_list if int(rank) - 5 <= n["rank"] <= int(rank) + 5]
-    
-    if not any(n["rank"] == int(rank) for n in filtered):
-        filtered.append({"rank": int(rank), "volume": volume, "wallet": wallet_addr})
-        filtered = sorted(filtered, key=lambda x: x["rank"])
-
-    for item in filtered:
-        r = item["rank"]
-        v = item["volume"]
-        w_masked = mask_wallet(item["wallet"])
-        if r == int(rank):
-            neighbors_text.append(f"▶️ #{r} | ${v:,.2f} ({w_masked}) 👈 Ты")
-        else:
-            neighbors_text.append(f"   #{r} | ${v:,.2f} ({w_masked})")
-
-    neighbors_block = "\n".join(neighbors_text) if neighbors_text else "Нет данных соседей"
-
-    return (
-        f"🏆 **OKX Web3 Tournament Tracker**\n"
-        f"👤 **{user_name}** (`{masked}`)\n"
-        f"⚡ **Турнир:** `{conf_name}`\n\n"
-        f"📍 **Твое место:** `#{rank}` из `{max_rank}`\n"
-        f"📊 **Наторгованный объем:** `${volume:,.2f}`\n"
-        f"🎁 **Награда:** `{est_reward}`\n\n"
-        f"📐 **Таблица лидеров (Соседи рядом):**\n"
-        f"{neighbors_block}\n\n"
-        f"💡 **Статус:** 🟢 В безопасности / Позиция активна\n\n"
-        f"🔄 _Обновлено: {get_kyiv_time()} (Киев)_"
-    )
-
-def get_tournaments_keyboard():
-    markup = InlineKeyboardMarkup(row_width=1)
-    for chain_key, conf in scanner.OKX_TOURNAMENTS.items():
-        markup.add(InlineKeyboardButton(f"🌐 Сеть / Турнир: {conf['name']}", callback_data=f"okx_tour_{chain_key}"))
-    return markup
-
-@bot.message_handler(commands=['okx', 'boost', 'web3', 'scan'])
-def cmd_okx_start(message):
-    user_id = message.from_user.id
-    if user_id not in USER_WALLETS and user_id not in ADMIN_IDS:
-        bot.reply_to(message, "⚠️ Ваш Telegram ID не зарегистрирован в системе.")
-        return
-        
-    bot.send_message(
-        chat_id=CHAT_ID,
-        message_thread_id=TOPICS["WEB3"],
-        text="📊 **OKX Web3 Tournament & Volume Tracker**\n\nВыберите сеть / турнир для проверки ваших реальных объемов и лидеров:",
-        parse_mode="Markdown",
-        reply_markup=get_tournaments_keyboard(),
-        disable_web_page_preview=True
-    )
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('okx_'))
-def handle_okx_callbacks(call):
-    user_id = call.from_user.id
-    data = call.data
-    
-    if data == "okx_select_menu":
-        try:
-            bot.edit_message_text(
-                chat_id=call.message.chat.id,
-                message_id=call.message.message_id,
-                text="📊 **OKX Web3 Tournament & Volume Tracker**\n\nВыберите сеть / турнир:",
-                parse_mode="Markdown",
-                reply_markup=get_tournaments_keyboard(),
-                disable_web_page_preview=True
-            )
-        except Exception: pass
-        return
-
-    if data.startswith("okx_tour_") or data.startswith("okx_refresh_"):
-        chain_key = data.replace("okx_tour_", "").replace("okx_refresh_", "")
-        tour_conf = scanner.OKX_TOURNAMENTS.get(chain_key)
-        if not tour_conf:
-            tour_conf = list(scanner.OKX_TOURNAMENTS.values())[0]
-            chain_key = "bsc"
-
-        u_info = USER_WALLETS.get(user_id)
-        if not u_info:
-            bot.answer_callback_query(call.id, "⚠️ У вас не привязаны кошельки.", show_alert=True)
-            return
-
-        bot.answer_callback_query(call.id, f"🔍 Загружаю данные для сети {chain_key.upper()}...")
-
-        wallet = u_info["evm"]
-        api_data = scanner.fetch_okx_leaderboard_api(tour_conf["id"], wallet) or {}
-        card_str = format_okx_tournament_card(u_info["name"], wallet, tour_conf, api_data)
-        
-        markup = InlineKeyboardMarkup()
-        markup.add(
-            InlineKeyboardButton("🔄 Обновить сейчас", callback_data=f"okx_refresh_{chain_key}"),
-            InlineKeyboardButton("🏆 Сменить сеть", callback_data="okx_select_menu")
-        )
-        
-        try:
-            bot.edit_message_text(
-                chat_id=call.message.chat.id,
-                message_id=call.message.message_id,
-                text=card_str,
-                parse_mode="Markdown",
-                reply_markup=markup,
-                disable_web_page_preview=True
-            )
-        except Exception as e:
-            print(f"❌ Edit message error: {e}")
 
 # ==================== HEALTHCHECK & WEB APP CHART SERVER ====================
 @app.route('/')
@@ -1427,7 +1264,7 @@ def monitor_funding():
             print(f"❌ Funding Monitor Error: {e}")
         time.sleep(1800)
 
-# ==================== BINANCE ALPHA СЕАССИЯ (ФЛУД-РЕЖИМ КАЖДЫЕ 30 СЕК, ПАМП/ДАМП 0.3%, ДИАПАЗОН 0.2%) ====================
+# ==================== BINANCE ALPHA СЕССИЯ (30 СЕК ФЛУД-РЕЖИМ, ПАМП/ДАМП 0.3%, ДИАПАЗОН 0.15%-0.20%) ====================
 def run_alpha_session(session_key, token_identifier):
     print(f"🚀 [ALPHA DEBUG] Сессия запущена для: {token_identifier} (ключ: {session_key})")
     
@@ -1487,7 +1324,7 @@ def run_alpha_session(session_key, token_identifier):
                 if old_price > 0:
                     price_change = ((current_price - old_price) / old_price) * 100
 
-            # Точные целевые параметры: базовый диапазон 0.2% (0.0020), порог пампа/дампа 0.3%
+            # Целевые параметры: диапазон 0.15% - 0.20% (0.0020), порог пампа/дампа 0.3%
             spread_offset = 0.0020
             if abs(price_change) >= 0.30:
                 spread_offset = 0.0040

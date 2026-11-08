@@ -91,60 +91,59 @@ def normalize_symbol(raw_sym):
         sym = sym[:-4]
     return sym
 
+# ==================== SECURE REQUESTS & ROTATING HEADERS ====================
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2.1 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64; rv:124.0) Gecko/20100101 Firefox/124.0",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148"
+]
+
+def get_random_headers():
+    return {
+        "User-Agent": random.choice(USER_AGENTS),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache"
+    }
+
+def secure_request(url, timeout=12):
+    try:
+        response = requests.get(url, headers=get_random_headers(), timeout=timeout)
+        if response.status_code == 200:
+            return response
+        else:
+            return None
+    except Exception:
+        return None
+
 # ==================== BINANCE ALPHA / WEB3 DIRECT CONNECTOR ====================
 def fetch_binance_alpha_price(token_query):
     if not token_query:
         return 0.0
 
     query = token_query.strip()
-    
-    if query.lower().startswith("0x") and len(query) == 42:
-        chains = ["56", "1", "42161", "8453"]
-        for chain_id in chains:
-            try:
-                payload = {
-                    "binanceChainId": chain_id,
-                    "tokenContractAddress": query
-                }
-                res = requests.post(
-                    "https://web3.binance.com/build/api/v1/dex/market/price",
-                    json=payload,
-                    headers=get_random_headers(),
-                    timeout=4
-                )
-                if res.status_code == 200:
-                    data_json = res.json()
-                    price_str = data_json.get("data", {}).get("price", "0")
-                    p = float(price_str or 0)
-                    if p > 0: 
-                        return p
-            except: 
-                pass
-
     base_target = normalize_symbol(query)
+    
     try:
         dex_url = f"https://api.dexscreener.com/latest/dex/search?q={query}"
         res = requests.get(dex_url, headers=get_random_headers(), timeout=5)
         if res.status_code == 200:
-            pairs = res.json().get("pairs", [])
+            data = res.json()
+            pairs = data.get("pairs", [])
             if pairs:
-                valid_pairs = []
                 for p in pairs:
-                    base_token = normalize_symbol(p.get("baseToken", {}).get("symbol", ""))
+                    p_sym = normalize_symbol(p.get("baseToken", {}).get("symbol", ""))
                     price_usd = float(p.get("priceUsd", 0) or 0)
-                    liquidity_usd = float(p.get("liquidity", {}).get("usd", 0) or 0)
-                    
-                    if base_token == base_target and price_usd > 0 and liquidity_usd > 500:
-                        valid_pairs.append(p)
-                
-                if not valid_pairs:
-                    valid_pairs = [p for p in pairs if float(p.get("priceUsd", 0) or 0) > 0]
-
-                if valid_pairs:
-                    valid_pairs = sorted(valid_pairs, key=lambda x: float(x.get("volume", {}).get("h24", 0) or 0), reverse=True)
-                    return float(valid_pairs[0]["priceUsd"])
+                    if price_usd > 0 and (base_target in p_sym or query.lower() in p.get("url", "").lower()):
+                        return price_usd
+                return float(pairs[0].get("priceUsd", 0) or 0)
     except Exception as e:
-        print(f"❌ DexScreener Search Error: {e}")
+        print(f"❌ DexScreener API Error: {e}")
 
     ex_prices, _ = fetch_token_prices_on_demand(base_target)
     valid = [p for p in ex_prices.values() if p > 0]
@@ -415,35 +414,6 @@ def web_chart():
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
-
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2.1 Safari/605.1.15",
-    "Mozilla/5.0 (X11; Linux x86_64; rv:124.0) Gecko/20100101 Firefox/124.0",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148"
-]
-
-def get_random_headers():
-    return {
-        "User-Agent": random.choice(USER_AGENTS),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-        "Cache-Control": "no-cache",
-        "Pragma": "no-cache"
-    }
-
-def secure_request(url, timeout=12):
-    try:
-        response = requests.get(url, headers=get_random_headers(), timeout=timeout)
-        if response.status_code == 200:
-            return response
-        else:
-            return None
-    except Exception:
-        return None
 
 def get_exchange_url(exchange, symbol="BTCUSDT"):
     base_sym = normalize_symbol(symbol)

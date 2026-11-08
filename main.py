@@ -1324,7 +1324,7 @@ def run_alpha_session(session_key, token_identifier):
                 if old_price > 0:
                     price_change = ((current_price - old_price) / old_price) * 100
 
-            # Целевые параметры: диапазон 0.15% - 0.20% (0.0020), порог пампа/дампа 0.3%
+            # Точные целевые параметры: базовый диапазон 0.2% (0.0020), порог пампа/дампа 0.3%
             spread_offset = 0.0020
             if abs(price_change) >= 0.30:
                 spread_offset = 0.0040

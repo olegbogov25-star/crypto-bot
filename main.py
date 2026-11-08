@@ -116,19 +116,23 @@ def normalize_symbol(raw_sym):
         sym = sym[:-4]
     return sym
 
-# ==================== ALPHA CONNECTOR (BY TICKER / SYMBOL - LIVE DEX SCREENER) ====================
+# ==================== ALPHA CONNECTOR (DIRECT CONTRACT / TOKEN ADDRESS) ====================
 def fetch_binance_alpha_price(token_query):
     """
-    Быстрый и чистый поиск цены по тикеру/символу с приоритетом пулов BSC по объему.
+    Прямой запрос к DEXScreener по точным адресам контрактов или тикеру без мусорного поиска.
     """
     if not token_query:
         return 0.0
 
-    query = token_query.strip().upper()
-    base_clean = normalize_symbol(query)
+    query = token_query.strip()
+    
+    if query.lower().startswith("0x") and len(query) == 42:
+        url = f"https://api.dexscreener.com/latest/dex/tokens/{query}"
+    else:
+        base_clean = normalize_symbol(query)
+        url = f"https://api.dexscreener.com/latest/dex/search?q={base_clean}"
 
     try:
-        url = f"https://api.dexscreener.com/latest/dex/search?q={base_clean}"
         res = requests.get(url, headers=get_random_headers(), timeout=4)
         if res.status_code == 200:
             data = res.json()
@@ -145,12 +149,8 @@ def fetch_binance_alpha_price(token_query):
     except Exception as e:
         print(f"❌ Alpha Price Error: {e}")
 
+    base_clean = normalize_symbol(token_query)
     ex_prices, _ = fetch_token_prices_on_demand(base_clean)
-    if 'Binance Alpha' in ex_prices:
-        return ex_prices['Binance Alpha']
-    if 'Binance' in ex_prices:
-        return ex_prices['Binance']
-    
     valid = [p for p in ex_prices.values() if p > 0]
     return valid[0] if valid else 0.0
 
@@ -1533,7 +1533,7 @@ def run_alpha_session(session_key, token_identifier):
         except Exception as err:
             print(f"❌ [ALPHA ERROR]: {err}")
             
-        time.sleep(25)  # Интервал опроса и обновления сессии — 25 секунд
+        time.sleep(30)  # Интервал опроса и обновления сессии — строго 30 секунд
 
 @bot.message_handler(func=lambda msg: msg.text and msg.text.lower().startswith(('/start', '/run', '/alpha')))
 def cmd_alpha_start_alt(message):
@@ -1546,12 +1546,12 @@ def cmd_alpha_start_alt(message):
         threading.Thread(target=run_alpha_session, args=(session_key, token_query), daemon=True).start()
         
         try:
-            bot.reply_to(message, f"✅ Предиктивный сканер (25 сек, live-редактирование) запущен в топике Alpha!", parse_mode="Markdown")
+            bot.reply_to(message, f"✅ Предиктивный сканер (30 сек, live-редактирование) запущен в топике Alpha!", parse_mode="Markdown")
         except: pass
         return
     
     try:
-        bot.reply_to(message, "ℹ️ Использование: `/start [тикер_монеты]` (например: `/start ct`)", parse_mode="Markdown")
+        bot.reply_to(message, "ℹ️ Использование: `/start [адрес_контракта_или_тикер]` (например: `/start 0x0a092e544da31150b439a1aaa1a3a2214a867f46`)", parse_mode="Markdown")
     except: pass
 
 @bot.message_handler(commands=['stop', 'end'])
@@ -1688,7 +1688,7 @@ def handle_chat_messages(message):
     bot.reply_to(message, "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
 
 if __name__ == "__main__":
-    print("🚀 Bot starting with Restored Ticker-Based Alpha Connector...")
+    print("🚀 Bot starting with Direct Contract Alpha Connector (30s interval)...")
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     threading.Thread(target=fetch_newsmaker_channel, daemon=True).start()

@@ -1426,7 +1426,7 @@ def monitor_funding():
             print(f"❌ Funding Monitor Error: {e}")
         time.sleep(1800)
 
-# ==================== BINANCE ALPHA СЕАССИЯ (ФЛУД-РЕЖИМ КАЖДЫЕ 30 СЕК) ====================
+# ==================== BINANCE ALPHA СЕАССИЯ (СТАБИЛЬНАЯ КОНЦЕПЦИЯ С 0.3% / 0.15-0.20) ====================
 def run_alpha_session(session_key, token_identifier):
     print(f"🚀 [ALPHA DEBUG] Сессия запущена для: {token_identifier} (ключ: {session_key})")
     
@@ -1474,21 +1474,22 @@ def run_alpha_session(session_key, token_identifier):
             history = alpha_price_memory[session_key]
             history.append((now_ts, current_price))
             
-            alpha_price_memory[session_key] = [item for item in history if now_ts - item[0] <= 120]
+            alpha_price_memory[session_key] = [item for item in history if now_ts - item[0] <= 30]
             history = alpha_price_memory[session_key]
 
             price_change = 0.0
             trend_icon = "🟢"
-            action_advice = "✅ Цена стабильна. Можно безопасно крутить лимитками."
+            action_advice = "✅ Цена стабильна. Работаем в штатном диапазоне."
 
             if len(history) >= 2:
                 old_price = history[0][1]
                 if old_price > 0:
                     price_change = ((current_price - old_price) / old_price) * 100
 
-            spread_offset = 0.0015
+            # Старая проверенная концепция дельты (0.15% - 0.20% или 0.3% при пампе/дампе)
+            spread_offset = 0.0015 # 0.15% базовый диапазон buy/sell
             if abs(price_change) >= 0.30:
-                spread_offset = 0.0030
+                spread_offset = 0.0030 # 0.3% при сильном импульсе
 
             suggested_buy = current_price * (1 - spread_offset)
             suggested_sell = current_price * (1 + spread_offset)
@@ -1498,15 +1499,15 @@ def run_alpha_session(session_key, token_identifier):
 
             if price_change <= -0.30:
                 trend_icon = "🩸"
-                action_advice = "⚠️ **ДАМП / СПОЛЗАНИЕ!** Просадка >= 0.30%. Ордер на продажу может зависнуть — притормози открут!"
+                action_advice = "⚠️ **ДАМП / ПРОСАДКА!** Изменение >= -0.30%. Будь осторожен с лимитками на продажу."
             elif price_change >= 0.30:
                 trend_icon = "🚀"
-                action_advice = "🔥 **ПАМП / РАЗГОН!** Импульс вверх >= 0.30%. Покупать по текущим рискованно, жди отката."
+                action_advice = "🔥 **ПАМП / ИМПУЛЬС!** Изменение >= +0.30%. Отличный момент для открута объема."
 
             msg_txt = (
                 f"{trend_icon} **Alpha** | `{display_symbol}` |\n"
                 f"${current_price} (`{price_change:+.2f}%`)\n\n"
-                f"📐 **Диапазон ордеров:** Buy `~${buy_str}` | Sell `~${sell_str}`\n"
+                f"📐 **Диапазон лимиток:** Buy `~${buy_str}` | Sell `~${sell_str}`\n"
                 f"🎯 **Совет по откруту:**\n_{action_advice}_"
             )
             

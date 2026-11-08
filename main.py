@@ -121,42 +121,16 @@ def secure_request(url, timeout=12):
     except Exception:
         return None
 
-# ==================== BINANCE ALPHA / WEB3 DIRECT CONNECTOR ====================
-def fetch_binance_alpha_price(token_query):
-    if not token_query:
-        return 0.0
-
-    query = token_query.strip()
-    base_target = normalize_symbol(query)
-    
-    try:
-        dex_url = f"https://api.dexscreener.com/latest/dex/search?q={query}"
-        res = requests.get(dex_url, headers=get_random_headers(), timeout=5)
-        if res.status_code == 200:
-            data = res.json()
-            pairs = data.get("pairs", [])
-            if pairs:
-                for p in pairs:
-                    p_sym = normalize_symbol(p.get("baseToken", {}).get("symbol", ""))
-                    price_usd = float(p.get("priceUsd", 0) or 0)
-                    if price_usd > 0 and (base_target in p_sym or query.lower() in p.get("url", "").lower()):
-                        return price_usd
-                return float(pairs[0].get("priceUsd", 0) or 0)
-    except Exception as e:
-        print(f"❌ DexScreener API Error: {e}")
-
-    ex_prices, _ = fetch_token_prices_on_demand(base_target)
-    valid = [p for p in ex_prices.values() if p > 0]
-    return valid[0] if valid else 0.0
-
+# ==================== DIRECT EXCHANGE PRICE ENGINE (NO DEXSCREENER) ====================
 def fetch_token_prices_on_demand(sym):
     base_sym = normalize_symbol(sym)
     ex_prices, ex_vols = {}, {}
-    
-    alpha_p = fetch_binance_alpha_price(sym)
-    if alpha_p > 0:
-        ex_prices['Binance Alpha'] = alpha_p
-        ex_prices['Binance'] = alpha_p
+
+    try:
+        r = requests.get(f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={base_sym}USDT", timeout=2).json()
+        if 'price' in r:
+            ex_prices['Binance'] = float(r['price'])
+    except: pass
 
     try:
         r = requests.get(f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={base_sym}USDT", timeout=2).json().get('result', {}).get('list', [])
@@ -203,6 +177,14 @@ def fetch_token_prices_on_demand(sym):
     except: pass
 
     return ex_prices, ex_vols
+
+def fetch_binance_alpha_price(token_query):
+    if not token_query:
+        return 0.0
+    base_target = normalize_symbol(token_query)
+    ex_prices, _ = fetch_token_prices_on_demand(base_target)
+    valid = [p for p in ex_prices.values() if p > 0]
+    return valid[0] if valid else 0.0
 
 # ==================== HEALTHCHECK & WEB APP CHART SERVER ====================
 @app.route('/')
@@ -1476,7 +1458,7 @@ def handle_chat_messages(message):
     sym_prices, sym_vols = fetch_token_prices_on_demand(clean_query)
     
     if not sym_prices:
-        bot.reply_to(message, f"⚠️ Токен по запросу `{clean_query}` не найден в ончейне и на биржах.", parse_mode="Markdown")
+        bot.reply_to(message, f"⚠️ Токен по запросу `{clean_query}` не найден на биржах.", parse_mode="Markdown")
         return
     
     lines = [f"🪙 **Запрос:** `{clean_query}` (Кол-во: `{quantity:,.4f}`)\n"]
@@ -1488,7 +1470,7 @@ def handle_chat_messages(message):
     bot.reply_to(message, "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
 
 if __name__ == "__main__":
-    print("🚀 Bot starting with Binance Web3 / Alpha Direct API Connector & Flood Mode (30s)...")
+    print("🚀 Bot starting with Direct Exchange API Connector & Flood Mode (30s)...")
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     threading.Thread(target=fetch_newsmaker_channel, daemon=True).start()

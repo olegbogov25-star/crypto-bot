@@ -119,61 +119,49 @@ def normalize_symbol(raw_sym):
 # ==================== BINANCE ALPHA / WEB3 DIRECT CONNECTOR ====================
 def fetch_binance_alpha_price(token_query):
     """
-    Прямой запрос к публичным API Binance Alpha / Web3 Market Data с резервным DexScreener для контрактов.
+    Прямой запрос цены с надежным универсальным резервом через DexScreener для любых тикеров и контрактов.
     """
     if not token_query:
         return 0.0
 
     query = token_query.strip()
     
-    # Если передан контракт (например, 0x0a092e544da31150b439a1aaa1a3a2214a867f46)
+    # 1. Если передан контракт (0x...)
     if query.lower().startswith("0x") and len(query) == 42:
         try:
             payload = {
-                "binanceChainId": "56", # BSC Chain ID
+                "binanceChainId": "56",
                 "tokenContractAddress": query
             }
             res = requests.post(
                 "https://web3.binance.com/build/api/v1/dex/market/price",
                 json=payload,
                 headers=get_random_headers(),
-                timeout=5
+                timeout=4
             )
             if res.status_code == 200:
-                data = res.json()
-                price_str = data.get("data", {}).get("price", "0")
-                price = float(price_str or 0)
-                if price > 0:
-                    return price
-        except Exception as e:
-            print(f"❌ Binance Web3 API Error: {e}")
+                price_str = res.json().get("data", {}).get("price", "0")
+                p = float(price_str or 0)
+                if p > 0: return p
+        except: pass
 
-        try:
-            web_url = f"https://www.binance.com/bapi/defi/v1/public/alpha/market/token/detail?chainId=56&tokenAddress={query}"
-            res = requests.get(web_url, headers=get_random_headers(), timeout=5)
-            if res.status_code == 200:
-                j = res.json()
-                p = float(j.get("data", {}).get("priceUsd", 0) or 0)
-                if p > 0:
-                    return p
-        except Exception as e:
-            print(f"❌ Binance Alpha Web Detail Error: {e}")
+    # 2. Универсальный поиск через DexScreener (и для контрактов, и для текстовых тикеров вроде CT)
+    try:
+        dex_url = f"https://api.dexscreener.com/latest/dex/search?q={query}"
+        res = requests.get(dex_url, headers=get_random_headers(), timeout=5)
+        if res.status_code == 200:
+            pairs = res.json().get("pairs", [])
+            if pairs:
+                # Фильтруем пары с валидной USD ценой
+                valid_pairs = [p for p in pairs if float(p.get("priceUsd", 0) or 0) > 0]
+                if valid_pairs:
+                    # Сортируем по ликвидности/объему
+                    valid_pairs = sorted(valid_pairs, key=lambda x: float(x.get("volume", {}).get("h24", 0) or 0), reverse=True)
+                    return float(valid_pairs[0]["priceUsd"])
+    except Exception as e:
+        print(f"❌ DexScreener Search Error: {e}")
 
-        # РЕЗЕРВНЫЙ ИСТОЧНИК: DexScreener для точных контрактов (чтобы не было нулей)
-        try:
-            dex_url = f"https://api.dexscreener.com/latest/dex/tokens/{query}"
-            res = requests.get(dex_url, headers=get_random_headers(), timeout=5)
-            if res.status_code == 200:
-                pairs = res.json().get("pairs", [])
-                if pairs:
-                    # Берем самую ликвидную пару на BSC или любую доступную
-                    valid_pairs = [p for p in pairs if float(p.get("priceUsd", 0) or 0) > 0]
-                    if valid_pairs:
-                        return float(valid_pairs[0]["priceUsd"])
-        except Exception as e:
-            print(f"❌ DexScreener Fallback Error: {e}")
-
-    # Если передан тикер — ищем через агрегатор биржевых цен
+    # 3. Запасной вариант через биржевые спот/фьючерс тикеры
     base_clean = normalize_symbol(query)
     ex_prices, _ = fetch_token_prices_on_demand(base_clean)
     valid = [p for p in ex_prices.values() if p > 0]
@@ -1472,7 +1460,16 @@ def run_alpha_session(session_key, token_identifier):
             current_price = fetch_binance_alpha_price(token_identifier)
             
             if current_price <= 0:
-                time.sleep(5)
+                # Если цена не найдена, отправляем предупреждение в топик вместо молчаливого зависания
+                try:
+                    bot.send_message(
+                        chat_id=CHAT_ID,
+                        message_thread_id=TOPICS["ALPHA"],
+                        text=f"⚠️ **Alpha | `{display_symbol}`**\nНе удалось получить цену токена. Проверь правильность тикера/контракта.",
+                        parse_mode="Markdown"
+                    )
+                except: pass
+                time.sleep(30)
                 continue
 
             now_ts = time.time()

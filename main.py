@@ -1433,7 +1433,7 @@ def monitor_funding():
             print(f"❌ Funding Monitor Error: {e}")
         time.sleep(1800)
 
-# ==================== BINANCE ALPHA СЕССИЯ (ФЛУД-РЕЖИМ КАЖДЫЕ 30 СЕК + ДИАПАЗОН 0.15%-0.20%) ====================
+# ==================== BINANCE ALPHA СЕАССИЯ (ФЛУД-РЕЖИМ КАЖДЫЕ 30 СЕК) ====================
 def run_alpha_session(session_key, token_identifier):
     print(f"🚀 [ALPHA DEBUG] Сессия запущена для: {token_identifier} (ключ: {session_key})")
     
@@ -1481,7 +1481,7 @@ def run_alpha_session(session_key, token_identifier):
             history = alpha_price_memory[session_key]
             history.append((now_ts, current_price))
             
-            alpha_price_memory[session_key] = [item for item in history if now_ts - item[0] <= 600]
+            alpha_price_memory[session_key] = [item for item in history if now_ts - item[0] <= 120]
             history = alpha_price_memory[session_key]
 
             price_change = 0.0
@@ -1490,38 +1490,31 @@ def run_alpha_session(session_key, token_identifier):
 
             if len(history) >= 2:
                 old_price = history[0][1]
-                for t, p in history:
-                    if now_ts - t >= 25:
-                        old_price = p
-                        break
                 if old_price > 0:
                     price_change = ((current_price - old_price) / old_price) * 100
 
-            # Диапазон buy/sell: по умолчанию 0.15%-0.20%, при пампе/дампе шире
-            buy_offset = 0.0015  # 0.15%
-            sell_offset = 0.0020 # 0.20%
-            
-            if abs(price_change) >= 1.0:
-                buy_offset = 0.0030
-                sell_offset = 0.0040
+            # Установлены параметры: диапазон стакана buy/sell 0.2% (0.002), дамп/памп 0.3%
+            spread_offset = 0.0020
+            if abs(price_change) >= 0.30:
+                spread_offset = 0.0040
 
-            suggested_buy = current_price * (1 - buy_offset)
-            suggested_sell = current_price * (1 + sell_offset)
+            suggested_buy = current_price * (1 - spread_offset)
+            suggested_sell = current_price * (1 + spread_offset)
 
             buy_str = f"{suggested_buy:.8f}".rstrip('0').rstrip('.')
             sell_str = f"{suggested_sell:.8f}".rstrip('0').rstrip('.')
 
-            if price_change <= -1.0:
+            if price_change <= -0.30:
                 trend_icon = "🩸"
-                action_advice = "⚠️ **ДАМП / СПОЛЗАНИЕ!** Просадка >= 1.0%. Ордер на продажу может зависнуть — притормози открут!"
-            elif price_change >= 1.0:
+                action_advice = "⚠️ **ДАМП / СПОЛЗАНИЕ!** Просадка >= 0.30%. Ордер на продажу может зависнуть — притормози открут!"
+            elif price_change >= 0.30:
                 trend_icon = "🚀"
-                action_advice = "🔥 **ПАМП / РАЗГОН!** Импульс вверх >= 1.0%. Покупать по текущим рискованно, жди отката."
+                action_advice = "🔥 **ПАМП / РАЗГОН!** Импульс вверх >= 0.30%. Покупать по текущим рискованно, жди отката."
 
             msg_txt = (
                 f"{trend_icon} **Alpha** | `{display_symbol}` |\n"
                 f"${current_price} (`{price_change:+.2f}%`)\n\n"
-                f"📐 **Диапазон ордеров:** Buy `~${buy_str}` (0.15%) | Sell `~${sell_str}` (0.20%)\n"
+                f"📐 **Диапазон ордеров:** Buy `~${buy_str}` | Sell `~${sell_str}`\n"
                 f"🎯 **Совет по откруту:**\n_{action_advice}_"
             )
             

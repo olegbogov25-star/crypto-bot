@@ -153,7 +153,6 @@ def fetch_binance_alpha_price(token_query):
         if res.status_code == 200:
             pairs = res.json().get("pairs", [])
             if pairs:
-                # Фильтруем пары, у которых символ точно совпадает с запрошенным (например CT) и есть ликвидная цена
                 matched_pairs = []
                 for p in pairs:
                     base_token = normalize_symbol(p.get("baseToken", {}).get("symbol", ""))
@@ -162,11 +161,9 @@ def fetch_binance_alpha_price(token_query):
                         matched_pairs.append(p)
                 
                 if not matched_pairs:
-                    # Если строгого совпадения нет, берем валидные с ненулевой ценой
                     matched_pairs = [p for p in pairs if float(p.get("priceUsd", 0) or 0) > 0]
 
                 if matched_pairs:
-                    # Сортируем по суточному объему (берем самый ликвидный)
                     matched_pairs = sorted(matched_pairs, key=lambda x: float(x.get("volume", {}).get("h24", 0) or 0), reverse=True)
                     return float(matched_pairs[0]["priceUsd"])
     except Exception as e:
@@ -1477,7 +1474,6 @@ def run_alpha_session(session_key, token_identifier):
             history = alpha_price_memory[session_key]
             history.append((now_ts, current_price))
             
-            # Храним историю скользящего окна (последние 120 секунд)
             alpha_price_memory[session_key] = [item for item in history if now_ts - item[0] <= 120]
             history = alpha_price_memory[session_key]
 
@@ -1490,7 +1486,6 @@ def run_alpha_session(session_key, token_identifier):
                 if old_price > 0:
                     price_change = ((current_price - old_price) / old_price) * 100
 
-            # СТРОГО ПО ТРЕБОВАНИЮ: диапазон 0.15%, памп/дамп от 0.30%
             spread_offset = 0.0015
             if abs(price_change) >= 0.30:
                 spread_offset = 0.0030
@@ -1508,7 +1503,6 @@ def run_alpha_session(session_key, token_identifier):
                 trend_icon = "🚀"
                 action_advice = "🔥 **ПАМП / РАЗГОН!** Импульс вверх >= 0.30%. Покупать по текущим рискованно, жди отката."
 
-            # ИСХОДНЫЙ КОМПАКТНЫЙ ВИД КАРТОЧКИ ПО ТРЕБОВАНИю
             msg_txt = (
                 f"{trend_icon} **Alpha** | `{display_symbol}` |\n"
                 f"${current_price} (`{price_change:+.2f}%`)\n\n"
@@ -1516,7 +1510,6 @@ def run_alpha_session(session_key, token_identifier):
                 f"🎯 **Совет по откруту:**\n_{action_advice}_"
             )
             
-            # Флудим новым сообщением в топик Alpha каждые 30 секунд
             try:
                 bot.send_message(
                     chat_id=CHAT_ID,
@@ -1683,14 +1676,14 @@ def handle_chat_messages(message):
         total_cost = p * quantity
         lines.append(f"🔹 [{ex}]: `${p}` | Общая стоимость: **`${total_cost:,.2f}`** ({v})")
         
-    bot.query_to = bot.reply_to(message, "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
+    bot.reply_to(message, "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
 
 if __name__ == "__main__":
     print("🚀 Bot starting with Binance Web3 / Alpha Direct API Connector & Flood Mode (30s)...")
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     threading.Thread(target=fetch_newsmaker_channel, daemon=True).start()
-    threading.Thread(target=fetch_direct_exception_promos if 'fetch_direct_exception_promos' in globals() else fetch_direct_exchange_promos, daemon=True).start()
+    threading.Thread(target=fetch_direct_exchange_promos, daemon=True).start()
     threading.Thread(target=fetch_global_crypto_promos, daemon=True).start()
     threading.Thread(target=monitor_spread, daemon=True).start()
     threading.Thread(target=monitor_funding, daemon=True).start()

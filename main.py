@@ -119,7 +119,7 @@ def normalize_symbol(raw_sym):
 # ==================== BINANCE ALPHA / WEB3 DIRECT CONNECTOR ====================
 def fetch_binance_alpha_price(token_query):
     """
-    Прямой запрос к публичным API Binance Alpha / Web3 Market Data для получения живой цены.
+    Прямой запрос к публичным API Binance Alpha / Web3 Market Data с резервным DexScreener для контрактов.
     """
     if not token_query:
         return 0.0
@@ -158,6 +158,20 @@ def fetch_binance_alpha_price(token_query):
                     return p
         except Exception as e:
             print(f"❌ Binance Alpha Web Detail Error: {e}")
+
+        # РЕЗЕРВНЫЙ ИСТОЧНИК: DexScreener для точных контрактов (чтобы не было нулей)
+        try:
+            dex_url = f"https://api.dexscreener.com/latest/dex/tokens/{query}"
+            res = requests.get(dex_url, headers=get_random_headers(), timeout=5)
+            if res.status_code == 200:
+                pairs = res.json().get("pairs", [])
+                if pairs:
+                    # Берем самую ликвидную пару на BSC или любую доступную
+                    valid_pairs = [p for p in pairs if float(p.get("priceUsd", 0) or 0) > 0]
+                    if valid_pairs:
+                        return float(valid_pairs[0]["priceUsd"])
+        except Exception as e:
+            print(f"❌ DexScreener Fallback Error: {e}")
 
     # Если передан тикер — ищем через агрегатор биржевых цен
     base_clean = normalize_symbol(query)

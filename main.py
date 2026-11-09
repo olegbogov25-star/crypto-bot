@@ -1269,7 +1269,7 @@ def run_alpha_session(session_key, token_identifier):
 
             price_change = 0.0
             trend_icon = "🟢"
-            return_chance_text = "🟢 Шанс на возврат: ВЫСОКИЙ"
+            action_advice = "Цена стабильна. Можно безопасно крутить лимитками."
 
             if len(history) >= 2:
                 old_price = history[0][1]
@@ -1287,19 +1287,20 @@ def run_alpha_session(session_key, token_identifier):
             buy_str = f"{suggested_buy:.8f}".rstrip('0').rstrip('.')
             sell_str = f"{suggested_sell:.8f}".rstrip('0').rstrip('.')
 
+            # БАЗОВАЯ ЛОГИКА СОВЕТА ПО ОТКРУТУ
             if price_change <= -0.30:
                 trend_icon = "🩸"
-                return_chance_text = "🔴 Шанс на возврат: НЕТ"
+                action_advice = "⚠️ **ДАМП / СПОЛЗАНИЕ!** Просадка >= 0.30%. Ордер на продажу может зависнуть — притормози открут!\n🎯 🔴 Шанс на возврат: НЕТ"
             elif price_change >= 0.30:
                 trend_icon = "🚀"
-                return_chance_text = "🟢 Шанс на возврат: ВЫСОКИЙ"
+                action_advice = "🔥 **ПАМП / РАЗГОН!** Импульс вверх >= 0.30%. Покупать по текущим рискованно, жди отката."
             else:
-                return_chance_text = "🟢 Шанс на возврат: ВЫСОКИЙ"
+                action_advice = "Цена стабильна. Можно безопасно крутить лимитками."
 
             msg_txt = (
                 f"{trend_icon} **Alpha** | `{display_symbol}` | ${current_price} (`{price_change:+.2f}%`)\n\n"
                 f"📐 **Диапазон ордеров:** Buy `~${buy_str}` | Sell `~${sell_str}`\n"
-                f"🎯 **Вердикт:** {return_chance_text}"
+                f"🎯 **Совет по откруту:**\n{action_advice}"
             )
             
             try:

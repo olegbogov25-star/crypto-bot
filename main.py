@@ -6,6 +6,7 @@ import json
 import re
 import random
 import io
+import statistics
 import pytz
 import requests
 import feedparser
@@ -51,6 +52,9 @@ sent_alerts_cache = {}
 
 active_alpha_sessions = {}
 alpha_price_memory = {}
+
+# Флаг управления мониторингом спредов (по умолчанию выключен, включается командой /spread_on)
+spread_monitor_enabled = False
 
 SPREADS_FILE = "active_spreads.json"
 
@@ -973,32 +977,57 @@ def format_countdown(target_timestamp):
 symbol_price_tracker = {}
 
 def monitor_spread():
-    global active_spreads, price_history_long, price_history_short, sent_alerts_cache, symbol_price_tracker
-    print("🟢 Advanced Spread Monitor started (with Stability Buffer & Depth Filter)...")
+    global active_spreads, price_history_long, price_history_short, sent_alerts_cache, symbol_price_tracker, spread_monitor_enabled
+    print("🟢 Smart Spread Monitor initialized (Waiting for /spread_on command)...")
     
     live_spread_posts = {}
-    pending_spreads = {} # Буфер для проверки стабильности спреда (15-20 сек)
+    pending_spreads = {}      # Буфер на 25 сек + проверка вектора
+    symbol_cooldowns = {}     # Заморозка монеты на 20 мин после сигнала/закрытия
 
     while True:
+        # Если мониторинг выключен пользователем — спим и очищаем буферы
+        if not spread_monitor_enabled:
+            if live_spread_posts or pending_spreads:
+                live_spread_posts.clear()
+                pending_spreads.clear()
+            time.sleep(5)
+            continue
+
         try:
             bids, asks, volumes, fundings, _ = fetch_futures_data()
             curr_time_str = get_kyiv_time()
             now_ts = int(time.time())
 
+            # Очищаем истекшие cooldowns (20 минут = 1200 сек)
+            symbol_cooldowns = {sym: ts for sym, ts in symbol_cooldowns.items() if now_ts - ts < 1200}
+
             all_symbols = set(bids.keys()).union(set(asks.keys()))
             current_detected_spreads = {}
 
             for sym in all_symbols:
+                # Если монета на паузе (cooldown 20 минут) и по ней нет активного поста — пропускаем
+                if sym in symbol_cooldowns and not any(k.startswith(f"{sym}_") for k in live_spread_posts):
+                    continue
+
                 sym_bids = bids.get(sym, {})
                 sym_asks = asks.get(sym, {})
                 sym_vols = volumes.get(sym, {})
 
-                # Базовый объем монеты 24h
-                valid_bids = {ex: p for ex, p in sym_bids.items() if sym_vols.get(ex, 0) >= 12_000 and p > 0}
-                valid_asks = {ex: p for ex, p in sym_asks.items() if sym_vols.get(ex, 0) >= 12_000 and p > 0}
+                # Базовый объем монеты 24h >= $15,000
+                valid_bids = {ex: p for ex, p in sym_bids.items() if sym_vols.get(ex, 0) >= 15_000 and p > 0}
+                valid_asks = {ex: p for ex, p in sym_asks.items() if sym_vols.get(ex, 0) >= 15_000 and p > 0}
 
-                if len(valid_bids) < 1 or len(valid_asks) < 1:
+                if len(valid_bids) < 2 or len(valid_asks) < 2:
                     continue
+
+                # 1. MEDIAN CHECK (Защита от фейковых/залипших цен как на #OPENAI)
+                all_mid_prices = [valid_bids[ex] for ex in valid_bids]
+                if len(all_mid_prices) >= 3:
+                    median_price = statistics.median(all_mid_prices)
+                    valid_bids = {ex: p for ex, p in valid_bids.items() if abs(p - median_price) / median_price <= 0.18}
+                    valid_asks = {ex: p for ex, p in valid_asks.items() if abs(p - median_price) / median_price <= 0.18}
+                    if len(valid_bids) < 2 or len(valid_asks) < 2:
+                        continue
 
                 min_ex = min(valid_bids, key=valid_bids.get)
                 max_ex = max(valid_asks, key=valid_asks.get)
@@ -1024,15 +1053,14 @@ def monitor_spread():
 
                 chart_key = f"{sym}_{min_ex}_{max_ex}"
 
-                # 💡 ФИЛЬТР ЛИКВИДНОСТИ СТАКАНА (Минимум $1,000 - $1,500 глубины для защиты от проскальзывания)
+                # Расчет глубины стакана (защита от проскальзывания для $100-$200 позиции)
                 vol_min = sym_vols.get(min_ex, 0) * 0.01
                 vol_max = sym_vols.get(max_ex, 0) * 0.01
                 max_pos_usdt = int(min(vol_min, vol_max))
                 if max_pos_usdt < 100: max_pos_usdt = 100
 
-                # Если спред в пределах целевого диапазона (5.0% - 30.0%)
-                if 5.0 <= spread <= 30.0:
-                    # Проверяем, активен ли уже пост по этому спреду (если да, то буфер не нужен — обновляем в реальном времени)
+                # Целевой диапазон спреда: 5.0% - 25.0%
+                if 5.0 <= spread <= 25.0:
                     if chart_key in live_spread_posts:
                         current_detected_spreads[chart_key] = {
                             "sym": sym, "min_ex": min_ex, "max_ex": max_ex,
@@ -1041,42 +1069,40 @@ def monitor_spread():
                             "valid_asks": valid_asks, "sym_vols": sym_vols, "fundings": fundings
                         }
                     else:
-                        # 💡 БУФЕР ЗАДЕРЖКИ (15–20 сек): если спред новый, проверяем его на стабильность
+                        # 2. БУФЕР 25 СЕКУНД + ПРОВЕРКА ВЕКТОРА (спред не сдувается)
                         if chart_key not in pending_spreads:
                             pending_spreads[chart_key] = {
                                 "first_seen": now_ts,
-                                "initial_spread": spread,
-                                "sym": sym, "min_ex": min_ex, "max_ex": max_ex,
-                                "min_p": min_p, "max_p": max_p,
-                                "max_pos_usdt": max_pos_usdt, "valid_bids": valid_bids,
-                                "valid_asks": valid_asks, "sym_vols": sym_vols, "fundings": fundings
+                                "initial_spread": spread
                             }
                         else:
-                            # Прошло ли уже 15 секунд с момента первого обнаружения? И достаточно ли объема стакана (>= $1,000)?
                             elapsed = now_ts - pending_spreads[chart_key]["first_seen"]
-                            if elapsed >= 15 and max_pos_usdt >= 1000:
-                                # Спред выдержал проверку временем и ликвидностью! Переносим в активные
-                                current_detected_spreads[chart_key] = {
-                                    "sym": sym, "min_ex": min_ex, "max_ex": max_ex,
-                                    "min_p": min_p, "max_p": max_p, "spread": spread,
-                                    "max_pos_usdt": max_pos_usdt, "valid_bids": valid_bids,
-                                    "valid_asks": valid_asks, "sym_vols": sym_vols, "fundings": fundings
-                                }
+                            init_sp = pending_spreads[chart_key]["initial_spread"]
+                            
+                            # Ждем 25 секунд. Если спред живой, стакан >= $1,000 и спред НЕ упал ниже стартового больше чем на 0.2%
+                            if elapsed >= 25:
+                                if max_pos_usdt >= 1000 and spread >= (init_sp - 0.2):
+                                    current_detected_spreads[chart_key] = {
+                                        "sym": sym, "min_ex": min_ex, "max_ex": max_ex,
+                                        "min_p": min_p, "max_p": max_p, "spread": spread,
+                                        "max_pos_usdt": max_pos_usdt, "valid_bids": valid_bids,
+                                        "valid_asks": valid_asks, "sym_vols": sym_vols, "fundings": fundings
+                                    }
+                                    # Ставим монету на cooldown 20 минут сразу после выдачи сигнала
+                                    symbol_cooldowns[sym] = now_ts
                                 del pending_spreads[chart_key]
                 else:
-                    # Если спред ушел из диапазона, удаляем из буфера ожидающих
                     if chart_key in pending_spreads:
                         del pending_spreads[chart_key]
 
-            # Очищаем устаревшие буферные спреды, которые схлопнулись раньше 15 секунд
-            expired_pending = [k for k, v in pending_spreads.items() if now_ts - v["first_seen"] > 30]
+            # Чистим зависшие записи в буфере (> 45 сек)
+            expired_pending = [k for k, v in pending_spreads.items() if now_ts - v["first_seen"] > 45]
             for k in expired_pending:
                 del pending_spreads[k]
 
-            # Обработка и публикация проверенных устойчивых спредов
             active_keys_set = set(current_detected_spreads.keys())
             
-            # Закрываем те, которые сошлись
+            # Закрытие сошедшихся спредов
             existing_live_keys = list(live_spread_posts.keys())
             for chart_key in existing_live_keys:
                 if chart_key not in active_keys_set:
@@ -1084,10 +1110,14 @@ def monitor_spread():
                     msg_id = post_info["msg_id"]
                     sym_name = post_info["sym"]
 
+                    # Обновляем cooldown при закрытии, чтобы сразу не открылся дубль
+                    symbol_cooldowns[sym_name] = now_ts
+
                     convergence_text = (
                         f"🟢 **СПРЕД СОШЕЛСЯ / ЗАКРЫТИЕ СДЕЛКИ**\n"
                         f"🪙 **#{sym_name}** (Long: `{post_info['min_ex']}` | Short: `{post_info['max_ex']}`)\n\n"
-                        f"🎯 Спред схлопнулся в стаканах до нормальных значений (`< 1.0%`). Позицию можно закрывать и фиксировать результат!\n\n"
+                        f"🎯 Спред схлопнулся до нормальных значений. Позицию можно закрывать и фиксировать результат!\n"
+                        f"⏸ _Монета поставлена на паузу (20 мин) от дублей._\n\n"
                         f"🕒 _Время: {curr_time_str} (Киев)_"
                     )
                     try:
@@ -1103,7 +1133,7 @@ def monitor_spread():
 
                     del live_spread_posts[chart_key]
 
-            # Создаем или обновляем алерты в Telegram
+            # Публикация и обновление активных подтвержденных спредов
             for chart_key, data in current_detected_spreads.items():
                 sym = data["sym"]
                 min_ex = data["min_ex"]
@@ -1175,10 +1205,10 @@ def monitor_spread():
                 elif spread >= 10.0:
                     badge = "🔥 **HIGH SPREAD (>= 10%)**"
                 else:
-                    badge = "⚡ **STRONG SPREAD (>= 5%)** (Stable 15s+)"
+                    badge = "✅ **CONFIRMED SPREAD (>= 5%)** (Вектор подтвержден)"
 
                 if chart_key not in live_spread_posts:
-                    history_lines = [f"• `{curr_time_str}` — Подтвержденный спред: **`{spread:.2f}%`**"]
+                    history_lines = [f"• `{curr_time_str}` — Вход разрешен: **`{spread:.2f}%`**"]
 
                     msg_text = (
                         f"{badge}\n"
@@ -1236,7 +1266,7 @@ def monitor_spread():
         except Exception as e:
             print(f"❌ Advanced Monitor Spread Error: {e}")
         
-        time.sleep(30)
+        time.sleep(10)
 
 def monitor_funding():
     print("🟢 Funding Monitor started...")
@@ -1281,7 +1311,7 @@ def monitor_funding():
             print(f"❌ Funding Monitor Error: {e}")
         time.sleep(1800)
 
-# ==================== BINANCE ALPHA СЕССИЯ (30 СЕК ФЛУД-РЕЖИМ, ПАМП/ДАМП 0.3%, ДИАПАЗОН 0.15%-0.20%) ====================
+# ==================== BINANCE ALPHA СЕССИЯ ====================
 def run_alpha_session(session_key, token_identifier):
     print(f"🚀 [ALPHA DEBUG] Сессия запущена для: {token_identifier} (ключ: {session_key})")
     
@@ -1341,7 +1371,6 @@ def run_alpha_session(session_key, token_identifier):
                 if old_price > 0:
                     price_change = ((current_price - old_price) / old_price) * 100
 
-            # Точные целевые параметры: базовый диапазон 0.2% (0.0020), порог пампа/дампа 0.3%
             spread_offset = 0.0020
             if abs(price_change) >= 0.30:
                 spread_offset = 0.0040
@@ -1383,6 +1412,22 @@ def run_alpha_session(session_key, token_identifier):
             
         time.sleep(30)
 
+# ==================== КОМАНДЫ УПРАВЛЕНИЯ СПРЕДАМИ ====================
+@bot.message_handler(commands=['spread_on', 's_on'])
+def cmd_spread_on(message):
+    global spread_monitor_enabled
+    spread_monitor_enabled = True
+    bot.reply_to(message, "🟢 **Мониторинг спредов ЗАПУЩЕН!**\nИщу подтвержденные спреды (вектор 25с + ликвидность от $1,000).", parse_mode="Markdown")
+    send_to_topic("SPREAD", "🟢 **Охота за спредами ЗАПУЩЕНА** (по команде пользователя).")
+
+@bot.message_handler(commands=['spread_off', 's_off'])
+def cmd_spread_off(message):
+    global spread_monitor_enabled
+    spread_monitor_enabled = False
+    bot.reply_to(message, "🔴 **Мониторинг спредов ОСТАНОВЛЕН!**\nФлуд в топике Spread отключен до следующего `/spread_on`.", parse_mode="Markdown")
+    send_to_topic("SPREAD", "🔴 **Охота за спредами ОСТАНОВЛЕНА** (режим сна).")
+
+# ==================== КОМАНДЫ УПРАВЛЕНИЯ ALPHA ====================
 @bot.message_handler(func=lambda msg: msg.text and msg.text.lower().startswith(('/start', '/run', '/alpha')))
 def cmd_alpha_start_alt(message):
     text = message.text.strip()
@@ -1399,7 +1444,14 @@ def cmd_alpha_start_alt(message):
         return
     
     try:
-        bot.reply_to(message, "ℹ️ Использование: `/start [адрес_контракта_или_тикер]` (например: `/start CT`)", parse_mode="Markdown")
+        bot.reply_to(
+            message, 
+            "ℹ️ **Доступные команды:**\n"
+            "• `/spread_on` — запустить поиск спредов\n"
+            "• `/spread_off` — остановить поиск спредов\n"
+            "• `/start [тикер]` — запустить сканер Binance Alpha", 
+            parse_mode="Markdown"
+        )
     except: pass
 
 @bot.message_handler(commands=['stop', 'end'])
@@ -1536,7 +1588,7 @@ def handle_chat_messages(message):
     bot.reply_to(message, "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
 
 if __name__ == "__main__":
-    print("🚀 Bot starting with Direct Exchange API Connector & Flood Mode (30s)...")
+    print("🚀 Bot starting with Direct Exchange API Connector & Smart Spread Switch...")
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     threading.Thread(target=fetch_newsmaker_channel, daemon=True).start()

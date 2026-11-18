@@ -1109,13 +1109,25 @@ def monitor_spread():
                     post_info = live_spread_posts[chart_key]
                     msg_id = post_info["msg_id"]
                     sym_name = post_info["sym"]
+                    long_ex = post_info["min_ex"]
+                    short_ex = post_info["max_ex"]
 
                     # Обновляем cooldown при закрытии, чтобы сразу не открылся дубль
                     symbol_cooldowns[sym_name] = now_ts
 
+                    # Получаем свежие цены на момент схождения по этим биржам
+                    current_prices_on_close, _ = fetch_token_prices_on_demand(sym_name)
+                    p_long_close = current_prices_on_close.get(long_ex, 0)
+                    p_short_close = current_prices_on_close.get(short_ex, 0)
+
+                    prices_close_str = ""
+                    if p_long_close > 0 or p_short_close > 0:
+                        prices_close_str = f"\n💵 **Цены при закрытии:**\n🟢 {long_ex}: `${p_long_close}` | 🔴 {short_ex}: `${p_short_close}`\n"
+
                     convergence_text = (
                         f"🟢 **СПРЕД СОШЕЛСЯ / ЗАКРЫТИЕ СДЕЛКИ**\n"
-                        f"🪙 **#{sym_name}** (Long: `{post_info['min_ex']}` | Short: `{post_info['max_ex']}`)\n\n"
+                        f"🪙 **#{sym_name}** (Long: `{long_ex}` | Short: `{short_ex}`)\n"
+                        f"{prices_close_str}\n"
                         f"🎯 Спред схлопнулся до нормальных значений. Позицию можно закрывать и фиксировать результат!\n"
                         f"⏸ _Монета поставлена на паузу (20 мин) от дублей._\n\n"
                         f"🕒 _Время: {curr_time_str} (Киев)_"
@@ -1588,7 +1600,7 @@ def handle_chat_messages(message):
     bot.reply_to(message, "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
 
 if __name__ == "__main__":
-    print("🚀 Bot starting with Direct Exchange API Connector & Smart Spread Switch...")
+    print("🚀 Bot starting with Direct Exchange API Connector & Prices on Spread Convergence...")
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=fetch_telegram_channels_promos, daemon=True).start()
     threading.Thread(target=fetch_newsmaker_channel, daemon=True).start()

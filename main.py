@@ -974,9 +974,10 @@ symbol_price_tracker = {}
 
 def monitor_spread():
     global active_spreads, price_history_long, price_history_short, sent_alerts_cache, symbol_price_tracker
-    print("🟢 Advanced Spread Monitor started...")
+    print("🟢 Advanced Spread Monitor started (with Stability Buffer & Depth Filter)...")
     
     live_spread_posts = {}
+    pending_spreads = {} # Буфер для проверки стабильности спреда (15-20 сек)
 
     while True:
         try:
@@ -985,12 +986,14 @@ def monitor_spread():
             now_ts = int(time.time())
 
             all_symbols = set(bids.keys()).union(set(asks.keys()))
+            current_detected_spreads = {}
 
             for sym in all_symbols:
                 sym_bids = bids.get(sym, {})
                 sym_asks = asks.get(sym, {})
                 sym_vols = volumes.get(sym, {})
 
+                # Базовый объем монеты 24h
                 valid_bids = {ex: p for ex, p in sym_bids.items() if sym_vols.get(ex, 0) >= 12_000 and p > 0}
                 valid_asks = {ex: p for ex, p in sym_asks.items() if sym_vols.get(ex, 0) >= 12_000 and p > 0}
 
@@ -1021,6 +1024,99 @@ def monitor_spread():
 
                 chart_key = f"{sym}_{min_ex}_{max_ex}"
 
+                # 💡 ФИЛЬТР ЛИКВИДНОСТИ СТАКАНА (Минимум $1,000 - $1,500 глубины для защиты от проскальзывания)
+                vol_min = sym_vols.get(min_ex, 0) * 0.01
+                vol_max = sym_vols.get(max_ex, 0) * 0.01
+                max_pos_usdt = int(min(vol_min, vol_max))
+                if max_pos_usdt < 100: max_pos_usdt = 100
+
+                # Если спред в пределах целевого диапазона (5.0% - 30.0%)
+                if 5.0 <= spread <= 30.0:
+                    # Проверяем, активен ли уже пост по этому спреду (если да, то буфер не нужен — обновляем в реальном времени)
+                    if chart_key in live_spread_posts:
+                        current_detected_spreads[chart_key] = {
+                            "sym": sym, "min_ex": min_ex, "max_ex": max_ex,
+                            "min_p": min_p, "max_p": max_p, "spread": spread,
+                            "max_pos_usdt": max_pos_usdt, "valid_bids": valid_bids,
+                            "valid_asks": valid_asks, "sym_vols": sym_vols, "fundings": fundings
+                        }
+                    else:
+                        # 💡 БУФЕР ЗАДЕРЖКИ (15–20 сек): если спред новый, проверяем его на стабильность
+                        if chart_key not in pending_spreads:
+                            pending_spreads[chart_key] = {
+                                "first_seen": now_ts,
+                                "initial_spread": spread,
+                                "sym": sym, "min_ex": min_ex, "max_ex": max_ex,
+                                "min_p": min_p, "max_p": max_p,
+                                "max_pos_usdt": max_pos_usdt, "valid_bids": valid_bids,
+                                "valid_asks": valid_asks, "sym_vols": sym_vols, "fundings": fundings
+                            }
+                        else:
+                            # Прошло ли уже 15 секунд с момента первого обнаружения? И достаточно ли объема стакана (>= $1,000)?
+                            elapsed = now_ts - pending_spreads[chart_key]["first_seen"]
+                            if elapsed >= 15 and max_pos_usdt >= 1000:
+                                # Спред выдержал проверку временем и ликвидностью! Переносим в активные
+                                current_detected_spreads[chart_key] = {
+                                    "sym": sym, "min_ex": min_ex, "max_ex": max_ex,
+                                    "min_p": min_p, "max_p": max_p, "spread": spread,
+                                    "max_pos_usdt": max_pos_usdt, "valid_bids": valid_bids,
+                                    "valid_asks": valid_asks, "sym_vols": sym_vols, "fundings": fundings
+                                }
+                                del pending_spreads[chart_key]
+                else:
+                    # Если спред ушел из диапазона, удаляем из буфера ожидающих
+                    if chart_key in pending_spreads:
+                        del pending_spreads[chart_key]
+
+            # Очищаем устаревшие буферные спреды, которые схлопнулись раньше 15 секунд
+            expired_pending = [k for k, v in pending_spreads.items() if now_ts - v["first_seen"] > 30]
+            for k in expired_pending:
+                del pending_spreads[k]
+
+            # Обработка и публикация проверенных устойчивых спредов
+            active_keys_set = set(current_detected_spreads.keys())
+            
+            # Закрываем те, которые сошлись
+            existing_live_keys = list(live_spread_posts.keys())
+            for chart_key in existing_live_keys:
+                if chart_key not in active_keys_set:
+                    post_info = live_spread_posts[chart_key]
+                    msg_id = post_info["msg_id"]
+                    sym_name = post_info["sym"]
+
+                    convergence_text = (
+                        f"🟢 **СПРЕД СОШЕЛСЯ / ЗАКРЫТИЕ СДЕЛКИ**\n"
+                        f"🪙 **#{sym_name}** (Long: `{post_info['min_ex']}` | Short: `{post_info['max_ex']}`)\n\n"
+                        f"🎯 Спред схлопнулся в стаканах до нормальных значений (`< 1.0%`). Позицию можно закрывать и фиксировать результат!\n\n"
+                        f"🕒 _Время: {curr_time_str} (Киев)_"
+                    )
+                    try:
+                        bot.send_message(
+                            chat_id=CHAT_ID,
+                            message_thread_id=TOPICS["SPREAD"],
+                            text=convergence_text,
+                            parse_mode="Markdown",
+                            disable_web_page_preview=True,
+                            reply_to_message_id=msg_id
+                        )
+                    except Exception: pass
+
+                    del live_spread_posts[chart_key]
+
+            # Создаем или обновляем алерты в Telegram
+            for chart_key, data in current_detected_spreads.items():
+                sym = data["sym"]
+                min_ex = data["min_ex"]
+                max_ex = data["max_ex"]
+                min_p = data["min_p"]
+                max_p = data["max_p"]
+                spread = data["spread"]
+                max_pos_usdt = data["max_pos_usdt"]
+                valid_bids = data["valid_bids"]
+                valid_asks = data["valid_asks"]
+                sym_vols = data["sym_vols"]
+                fundings = data["fundings"]
+
                 if sym not in symbol_price_tracker:
                     symbol_price_tracker[sym] = []
                 symbol_price_tracker[sym].append((now_ts, min_p))
@@ -1034,139 +1130,108 @@ def monitor_spread():
                         if change_pct >= 2.0:
                             is_momentum = True
 
-                if 5.0 <= spread <= 30.0:
-                    if chart_key not in price_history_long:
-                        price_history_long[chart_key] = []
-                        price_history_short[chart_key] = []
+                if chart_key not in price_history_long:
+                    price_history_long[chart_key] = []
+                    price_history_short[chart_key] = []
 
-                    price_history_long[chart_key].append({"time": now_ts, "value": round(min_p, 4)})
-                    price_history_short[chart_key].append({"time": now_ts, "value": round(max_p, 4)})
+                price_history_long[chart_key].append({"time": now_ts, "value": round(min_p, 4)})
+                price_history_short[chart_key].append({"time": now_ts, "value": round(max_p, 4)})
 
-                    if len(price_history_long[chart_key]) > 200:
-                        price_history_long[chart_key].pop(0)
-                        price_history_short[chart_key].pop(0)
+                if len(price_history_long[chart_key]) > 200:
+                    price_history_long[chart_key].pop(0)
+                    price_history_short[chart_key].pop(0)
 
-                    vol_min = sym_vols.get(min_ex, 0) * 0.01
-                    vol_max = sym_vols.get(max_ex, 0) * 0.01
-                    max_pos_usdt = int(min(vol_min, vol_max))
-                    if max_pos_usdt < 100: max_pos_usdt = 100
+                sym_funds = fundings.get(sym, {})
+                min_fund = sym_funds.get(min_ex, 0.0)
+                max_fund = sym_funds.get(max_ex, 0.0)
 
-                    sym_funds = fundings.get(sym, {})
-                    min_fund = sym_funds.get(min_ex, 0.0)
-                    max_fund = sym_funds.get(max_ex, 0.0)
+                all_valid_exs = set(valid_bids.keys()).union(set(valid_asks.keys()))
+                sorted_exs = sorted(all_valid_exs, key=lambda ex: sym_vols.get(ex, 0), reverse=True)
+                overview_list = []
+                for ex in sorted_exs:
+                    bp = valid_bids.get(ex, 0)
+                    ap = valid_asks.get(ex, 0)
+                    v = sym_vols.get(ex, 0)
+                    v_str = format_volume(v)
+                    url = get_exchange_url(ex, sym)
+                    overview_list.append(f"🔹 [{ex}]({url}): Bid: `{bp}` | Ask: `{ap}` ({v_str})")
+                
+                overview = "\n".join(overview_list)
 
-                    all_valid_exs = set(valid_bids.keys()).union(set(valid_asks.keys()))
-                    sorted_exs = sorted(all_valid_exs, key=lambda ex: sym_vols.get(ex, 0), reverse=True)
-                    overview_list = []
-                    for ex in sorted_exs:
-                        bp = valid_bids.get(ex, 0)
-                        ap = valid_asks.get(ex, 0)
-                        v = sym_vols.get(ex, 0)
-                        v_str = format_volume(v)
-                        url = get_exchange_url(ex, sym)
-                        overview_list.append(f"🔹 [{ex}]({url}): Bid: `{bp}` | Ask: `{ap}` ({v_str})")
-                    
-                    overview = "\n".join(overview_list)
-
-                    render_url = os.environ.get('RENDER_EXTERNAL_URL', '').strip()
-                    markup = InlineKeyboardMarkup()
-                    if render_url:
-                        if not render_url.startswith('http'):
-                            render_url = f"https://{render_url}"
-                        chart_url = f"{render_url}/chart?symbol={sym}&min_ex={min_ex}&max_ex={max_ex}"
-                        markup.add(InlineKeyboardButton("📈 График схождения (Live)", url=chart_url))
-                    else:
-                        markup.add(InlineKeyboardButton("🌐 Биржа Long", url=get_exchange_url(min_ex, sym)))
-
-                    if is_momentum:
-                        badge = "⚡⚡ **MOMENTUM / PUMP SPREAD**"
-                    elif spread >= 15.0:
-                        badge = "🔥🔥🔥 **MEGA SPREAD (>= 15%)**"
-                    elif spread >= 10.0:
-                        badge = "🔥 **HIGH SPREAD (>= 10%)**"
-                    else:
-                        badge = "⚡ **STRONG SPREAD (>= 5%)**"
-
-                    if chart_key not in live_spread_posts:
-                        history_lines = [f"• `{curr_time_str}` — Стартовый спред: **`{spread:.2f}%`**"]
-
-                        msg_text = (
-                            f"{badge}\n"
-                            f"🪙 **#{sym} | Spread: `{spread:.2f}%`** (OrderBook LIVE)\n\n"
-                            f"🟢 **Long Bid ({min_ex}):** `${min_p}` (Funding: `{min_fund:.2f}%`)\n"
-                            f"🔴 **Short Ask ({max_ex}):** `${max_p}` (Funding: `{max_fund:.2f}%`)\n\n"
-                            f"📊 **Динамика спреда:**\n" + "\n".join(history_lines) + "\n\n"
-                            f"💰 **Объем стакана:** `~${max_pos_usdt:,} USDT`\n\n"
-                            f"📝 **Стаканы бирж:**\n{overview}\n\n"
-                            f"🔄 _Обновлено: {curr_time_str} (Киев)_"
-                        )
-
-                        msg_id = send_to_topic("SPREAD", msg_text, reply_markup=markup)
-                        if msg_id:
-                            live_spread_posts[chart_key] = {
-                                "msg_id": msg_id,
-                                "history": history_lines,
-                                "min_ex": min_ex,
-                                "max_ex": max_ex,
-                                "sym": sym,
-                                "last_spread": spread
-                            }
-                    else:
-                        post_info = live_spread_posts[chart_key]
-                        msg_id = post_info["msg_id"]
-                        history = post_info["history"]
-
-                        if abs(spread - post_info["last_spread"]) >= 0.5:
-                            history.append(f"• `{curr_time_str}` — Обновление: **`{spread:.2f}%`**")
-                            if len(history) > 6: history.pop(0)
-                            post_info["last_spread"] = spread
-
-                        updated_text = (
-                            f"{badge}\n"
-                            f"🪙 **#{sym} | Spread: `{spread:.2f}%`** (OrderBook LIVE)\n\n"
-                            f"🟢 **Long Bid ({min_ex}):** `${min_p}` (Funding: `{min_fund:.2f}%`)\n"
-                            f"🔴 **Short Ask ({max_ex}):** `${max_p}` (Funding: `{max_fund:.2f}%`)\n\n"
-                            f"📊 **Динамика спреда:**\n" + "\n".join(history) + "\n\n"
-                            f"💰 **Объем стакана:** `~${max_pos_usdt:,} USDT`\n\n"
-                            f"📝 **Стаканы бирж:**\n{overview}\n\n"
-                            f"🔄 _Обновлено: {curr_time_str} (Киев)_"
-                        )
-
-                        try:
-                            bot.edit_message_text(
-                                chat_id=CHAT_ID,
-                                message_id=msg_id,
-                                text=updated_text,
-                                parse_mode="Markdown",
-                                reply_markup=markup,
-                                disable_web_page_preview=True
-                            )
-                        except Exception: pass
-
+                render_url = os.environ.get('RENDER_EXTERNAL_URL', '').strip()
+                markup = InlineKeyboardMarkup()
+                if render_url:
+                    if not render_url.startswith('http'):
+                        render_url = f"https://{render_url}"
+                    chart_url = f"{render_url}/chart?symbol={sym}&min_ex={min_ex}&max_ex={max_ex}"
+                    markup.add(InlineKeyboardButton("📈 График схождения (Live)", url=chart_url))
                 else:
-                    if chart_key in live_spread_posts:
-                        post_info = live_spread_posts[chart_key]
-                        msg_id = post_info["msg_id"]
-                        sym_name = post_info["sym"]
+                    markup.add(InlineKeyboardButton("🌐 Биржа Long", url=get_exchange_url(min_ex, sym)))
 
-                        convergence_text = (
-                            f"🟢 **СПРЕД СОШЕЛСЯ / ЗАКРЫТИЕ СДЕЛКИ**\n"
-                            f"🪙 **#{sym_name}** (Long: `{post_info['min_ex']}` | Short: `{post_info['max_ex']}`)\n\n"
-                            f"🎯 Спред схлопнулся в стаканах до нормальных значений (`< 1.0%`). Позицию можно закрывать и фиксировать результат!\n\n"
-                            f"🕒 _Время: {curr_time_str} (Киев)_"
+                if is_momentum:
+                    badge = "⚡⚡ **MOMENTUM / PUMP SPREAD**"
+                elif spread >= 15.0:
+                    badge = "🔥🔥🔥 **MEGA SPREAD (>= 15%)**"
+                elif spread >= 10.0:
+                    badge = "🔥 **HIGH SPREAD (>= 10%)**"
+                else:
+                    badge = "⚡ **STRONG SPREAD (>= 5%)** (Stable 15s+)"
+
+                if chart_key not in live_spread_posts:
+                    history_lines = [f"• `{curr_time_str}` — Подтвержденный спред: **`{spread:.2f}%`**"]
+
+                    msg_text = (
+                        f"{badge}\n"
+                        f"🪙 **#{sym} | Spread: `{spread:.2f}%`** (OrderBook LIVE)\n\n"
+                        f"🟢 **Long Bid ({min_ex}):** `${min_p}` (Funding: `{min_fund:.2f}%`)\n"
+                        f"🔴 **Short Ask ({max_ex}):** `${max_p}` (Funding: `{max_fund:.2f}%`)\n\n"
+                        f"📊 **Динамика спреда:**\n" + "\n".join(history_lines) + "\n\n"
+                        f"💰 **Объем стакана:** `~${max_pos_usdt:,} USDT`\n\n"
+                        f"📝 **Стаканы бирж:**\n{overview}\n\n"
+                        f"🔄 _Обновлено: {curr_time_str} (Киев)_"
+                    )
+
+                    msg_id = send_to_topic("SPREAD", msg_text, reply_markup=markup)
+                    if msg_id:
+                        live_spread_posts[chart_key] = {
+                            "msg_id": msg_id,
+                            "history": history_lines,
+                            "min_ex": min_ex,
+                            "max_ex": max_ex,
+                            "sym": sym,
+                            "last_spread": spread
+                        }
+                else:
+                    post_info = live_spread_posts[chart_key]
+                    msg_id = post_info["msg_id"]
+                    history = post_info["history"]
+
+                    if abs(spread - post_info["last_spread"]) >= 0.5:
+                        history.append(f"• `{curr_time_str}` — Обновление: **`{spread:.2f}%`**")
+                        if len(history) > 6: history.pop(0)
+                        post_info["last_spread"] = spread
+
+                    updated_text = (
+                        f"{badge}\n"
+                        f"🪙 **#{sym} | Spread: `{spread:.2f}%`** (OrderBook LIVE)\n\n"
+                        f"🟢 **Long Bid ({min_ex}):** `${min_p}` (Funding: `{min_fund:.2f}%`)\n"
+                        f"🔴 **Short Ask ({max_ex}):** `${max_p}` (Funding: `{max_fund:.2f}%`)\n\n"
+                        f"📊 **Динамика спреда:**\n" + "\n".join(history) + "\n\n"
+                        f"💰 **Объем стакана:** `~${max_pos_usdt:,} USDT`\n\n"
+                        f"📝 **Стаканы бирж:**\n{overview}\n\n"
+                        f"🔄 _Обновлено: {curr_time_str} (Киев)_"
+                    )
+
+                    try:
+                        bot.edit_message_text(
+                            chat_id=CHAT_ID,
+                            message_id=msg_id,
+                            text=updated_text,
+                            parse_mode="Markdown",
+                            reply_markup=markup,
+                            disable_web_page_preview=True
                         )
-                        try:
-                            bot.send_message(
-                                chat_id=CHAT_ID,
-                                message_thread_id=TOPICS["SPREAD"],
-                                text=convergence_text,
-                                parse_mode="Markdown",
-                                disable_web_page_preview=True,
-                                reply_to_message_id=msg_id
-                            )
-                        except Exception: pass
-
-                        del live_spread_posts[chart_key]
+                    except Exception: pass
 
         except Exception as e:
             print(f"❌ Advanced Monitor Spread Error: {e}")
@@ -1287,7 +1352,6 @@ def run_alpha_session(session_key, token_identifier):
             buy_str = f"{suggested_buy:.8f}".rstrip('0').rstrip('.')
             sell_str = f"{suggested_sell:.8f}".rstrip('0').rstrip('.')
 
-            # БАЗОВАЯ ЛОГИКА СОВЕТА ПО ОТКРУТУ
             if price_change <= -0.30:
                 trend_icon = "🩸"
                 action_advice = "⚠️ **ДАМП / СПОЛЗАНИЕ!** Просадка >= 0.30%. Ордер на продажу может зависнуть — притормози открут!\n🎯 🔴 Шанс на возврат: НЕТ"

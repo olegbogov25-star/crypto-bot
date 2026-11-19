@@ -25,36 +25,44 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 app = Flask(__name__)
 
 TOPICS = {
-    "NEWS": 2, 
-    "MEXC": 68,      
-    "BYBIT": 4,      
-    "BINANCE": 3,    
-    "BITGET": 69,    
-    "BINGX": 70,    
-    "KUCOIN": 71,   
-    "KRAKEN": 73,   
-    "GATE": 67,      
-    "OKX": 6,        
-    "FUNDING": 76,  
+    "NEWS": 2,
+    "MEXC": 68,
+    "BYBIT": 4,
+    "BINANCE": 3,
+    "BITGET": 69,
+    "BINGX": 70,
+    "KUCOIN": 71,
+    "KRAKEN": 73,
+    "GATE": 67,
+    "OKX": 6,
+    "FUNDING": 76,
     "SPREAD": 77,
-    "WEB3": 5190,    
-    "NEWSMAKER": 4203, 
-    "ALPHA": 4273,  
-    "CHAT": 1       
+    "WEB3": 5190,
+    "NEWSMAKER": 4203,
+    "ALPHA": 4273,
+    "CHAT": 1
 }
 
 processed_ids = set()
-active_fundings = {}  
-spread_history = {}      
-price_history_long = {}  
-price_history_short = {} 
-sent_alerts_cache = {}   
+active_fundings = {}
+spread_history = {}
+price_history_long = {}
+price_history_short = {}
+sent_alerts_cache = {}
 
 active_alpha_sessions = {}
 alpha_price_memory = {}
 
 # Флаг управления мониторингом спредов (по умолчанию выключен, включается командой /spread_on)
 spread_monitor_enabled = False
+
+# Пороги логики спредов (п. 1 и п. 2)
+SPREAD_ENTRY_MIN = 5.0
+SPREAD_ENTRY_MAX = 25.0
+SPREAD_HYSTERESIS_THRESHOLD = 2.5   # Гистерезис для удержания открытого поста
+SPREAD_CLOSE_THRESHOLD = 1.75       # Реальное схождение (между 1.5% и 2.0%)
+SYMBOL_COOLDOWN_SECONDS = 1200      # 20 минут кулдауна на новые входы после закрытия
+STALE_POLL_LIMIT = 4                # Сколько циклов подряд цена может стоять без движения при живой монете
 
 SPREADS_FILE = "active_spreads.json"
 
@@ -200,17 +208,17 @@ def chart_data_api():
     symbol = request.args.get('symbol', 'BTCUSDT')
     min_ex = request.args.get('min_ex', 'Long')
     max_ex = request.args.get('max_ex', 'Short')
-    
+
     key = f"{symbol}_{min_ex}_{max_ex}"
     long_points = price_history_long.get(key, [])
     short_points = price_history_short.get(key, [])
-    
+
     now_ts = int(time.time())
-    
+
     current_prices, _ = fetch_token_prices_on_demand(symbol)
     p_long = current_prices.get(min_ex, 0)
     p_short = current_prices.get(max_ex, 0)
-    
+
     if p_long == 0 or p_short == 0:
         valid_p = list(current_prices.values())
         if len(valid_p) >= 2:
@@ -239,7 +247,7 @@ def chart_data_api():
 
     price_history_long[key] = long_points
     price_history_short[key] = short_points
-            
+
     return jsonify({
         "long_data": long_points,
         "short_data": short_points
@@ -250,14 +258,14 @@ def web_chart():
     symbol = request.args.get('symbol', 'BTCUSDT')
     min_ex = request.args.get('min_ex', 'Long')
     max_ex = request.args.get('max_ex', 'Short')
-    
+
     key = f"{symbol}_{min_ex}_{max_ex}"
     now_ts = int(time.time())
-    
+
     current_prices, _ = fetch_token_prices_on_demand(symbol)
     p_long = current_prices.get(min_ex, 0)
     p_short = current_prices.get(max_ex, 0)
-    
+
     if p_long == 0 or p_short == 0:
         valid_p = list(current_prices.values())
         if len(valid_p) >= 2:
@@ -273,7 +281,7 @@ def web_chart():
         long_points = [{"time": now_ts - 60, "value": p_long}, {"time": now_ts, "value": p_long}]
     if not short_points:
         short_points = [{"time": now_ts - 60, "value": p_short}, {"time": now_ts, "value": p_short}]
-    
+
     long_json = json.dumps(long_points)
     short_json = json.dumps(short_points)
 
@@ -328,7 +336,7 @@ def web_chart():
     <body>
         <h2>📈 Схождение: {{ symbol }}</h2>
         <div class="subtitle">
-            🟢 Long ({{ min_ex }}): <span class="badge badge-long">Линия входа</span> | 
+            🟢 Long ({{ min_ex }}): <span class="badge badge-long">Линия входа</span> |
             🔴 Short ({{ max_ex }}): <span class="badge badge-short">Линия выхода</span>
         </div>
         <div id="chart-container"></div>
@@ -424,7 +432,7 @@ def analyze_text(text):
     if not OPENROUTER_API_KEY:
         return text
     prompt = f"""
-Ты — профессиональный финансовый аналитик крипто-анонсов, промо-акций, кешбеков, квизов, торговых турниров и Web3 аирдропов. 
+Ты — профессиональный финансовый аналитик крипто-анонсов, промо-акций, кешбеков, квизов, торговых турниров и Web3 аирдропов.
 Найди и структурируй любые активности, лаунчпулы, баунти, раздачи, аирдропы, квизы (Quiz), розыгрыши мерча, XP-программы, турниры и Web3-квесты.
 Ответь строго одним словом "SKIP", только если это чисто техническое обслуживание сервера/биржи без бонусов или юридические судебные иски. Любые квизы, мерч, раздачи, поинты, Web3 и промо НЕ пропускай!
 Сформируй отчет по форме:
@@ -476,10 +484,10 @@ def send_to_topic(topic_name, text, reply_to_message_id=None, reply_markup=None)
     if thread_id and CHAT_ID:
         try:
             res = bot.send_message(
-                chat_id=CHAT_ID, 
-                message_thread_id=thread_id, 
-                text=text, 
-                parse_mode="Markdown", 
+                chat_id=CHAT_ID,
+                message_thread_id=thread_id,
+                text=text,
+                parse_mode="Markdown",
                 disable_web_page_preview=True,
                 reply_to_message_id=reply_to_message_id,
                 reply_markup=reply_markup
@@ -497,7 +505,7 @@ def extract_official_web_link(msg_element, fallback_link):
             href = btn.get('href', '')
             if href and any(domain in href.lower() for domain in ['binance.com', 'bybit.com', 'okx.com', 'gate.io', 'gate.com', 'bitget.com', 'mexc.com', 'bingx.com', 'kucoin.com', 'kraken.com']):
                 return href
-        
+
         text_elem = msg_element.find('div', class_='tgme_widget_message_text')
         if text_elem:
             links = text_elem.find_all('a', href=True)
@@ -512,11 +520,11 @@ def process_item(item_id, raw_text, link, default_topic, msg_element=None):
     if item_id in processed_ids:
         return
     processed_ids.add(item_id)
-    
+
     ai_result = analyze_text(raw_text)
     if "SKIP" in ai_result.upper():
         return
-    
+
     target_topic = default_topic.upper()
     if target_topic not in TOPICS:
         target_topic = "NEWS"
@@ -534,7 +542,7 @@ def process_item(item_id, raw_text, link, default_topic, msg_element=None):
         markup.add(InlineKeyboardButton("🌐 Официальный сайт / Анонс", url=official_web_link))
     elif exchange_url and exchange_url.startswith("http"):
         markup.add(InlineKeyboardButton(f"🌐 Биржа ({target_topic})", url=exchange_url))
-        
+
     if link and link.startswith("http") and link != official_web_link:
         markup.add(InlineKeyboardButton("📱 Источник (Telegram)", url=link))
 
@@ -589,7 +597,7 @@ def fetch_telegram_channels_promos():
             "topic": "KRAKEN"
         }
     }
-    
+
     while True:
         try:
             for ex_key, data in channels.items():
@@ -631,7 +639,7 @@ def fetch_telegram_channels_promos():
                         if btn and btn.get('href'): post_link = btn.get('href')
                         full_payload = f"Web3 Quest & Airdrop [{ex_key} Web3 / @{chan}]:\n{raw_text}\nLink: {post_link}"
                         process_item(item_id, full_payload, post_link, target_topic, msg_element=msg)
-                        
+
             time.sleep(600)
         except Exception as e:
             print(f"Telegram Channels & Web3 Monitor Error: {e}")
@@ -641,20 +649,20 @@ def poll_news_source(channel_username, label_prefix):
     url = f"https://t.me/s/{channel_username}"
     res = secure_request(url, timeout=10)
     if not res: return
-    
+
     soup = BeautifulSoup(res.text, 'html.parser')
     messages = soup.find_all('div', class_='tgme_widget_message')
     for msg in messages[-1:]:
         msg_id_attr = msg.get('data-post', '')
         if not msg_id_attr: continue
-        
+
         item_id = f"{label_prefix}_{msg_id_attr.replace('/', '_')}"
         if item_id in processed_ids: continue
         processed_ids.add(item_id)
-        
+
         text_div = msg.find('div', class_='tgme_widget_message_text')
         raw_text = text_div.get_text(separator='\n', strip=True) if text_div else ""
-        
+
         photo_url = None
         photo_wrap = msg.find('a', class_='tgme_widget_message_photo_wrap')
         if photo_wrap and photo_wrap.has_attr('style'):
@@ -662,30 +670,30 @@ def poll_news_source(channel_username, label_prefix):
             match = re.search(r"background-image:\s*url\(['\"]?(.*?)['\"]?\)", style_str)
             if match:
                 photo_url = match.group(1)
-        
+
         if not photo_url:
             img_tag = msg.find('img', class_='tgme_widget_message_photo_image')
             if img_tag and img_tag.has_attr('src'):
                 photo_url = img_tag['src']
-        
+
         post_link = f"https://t.me/{msg_id_attr}"
         btn = msg.find('a', class_='tgme_widget_message_url')
         if btn and btn.get('href'): post_link = btn.get('href')
-        
+
         translated_text = translate_newsmaker_text(raw_text) if raw_text else "📰 Крипто-новость"
-        
+
         msg_text = (
             f"📰 **Crypto News ({label_prefix})**\n\n"
             f"{translated_text}\n\n"
             f"🔄 _Источник рынка_"
         )
-        
+
         markup = InlineKeyboardMarkup()
         if post_link and post_link.startswith("http"):
             markup.add(InlineKeyboardButton("📱 Оригинал новости", url=post_link))
-            
+
         thread_id = TOPICS.get("NEWSMAKER", 4203)
-        
+
         photo_sent = False
         if photo_url:
             try:
@@ -793,7 +801,7 @@ def fetch_global_crypto_promos():
 def fetch_futures_data():
     global latest_prices_cache
     bids, asks, volumes, fundings, funding_times = {}, {}, {}, {}, {}
-    
+
     try:
         r = requests.get("https://fapi.binance.com/fapi/v1/ticker/bookTicker", timeout=3).json()
         for item in r:
@@ -833,7 +841,7 @@ def fetch_futures_data():
                     p = float(item['lastPrice'])
                     bids.setdefault(sym, {})['Bybit'] = p
                     asks.setdefault(sym, {})['Bybit'] = p
-                
+
                 volumes.setdefault(sym, {})['Bybit'] = float(item.get('turnover24h', 0))
                 if item.get('fundingRate'):
                     fundings.setdefault(sym, {})['Bybit'] = float(item['fundingRate']) * 100
@@ -976,13 +984,62 @@ def format_countdown(target_timestamp):
 
 symbol_price_tracker = {}
 
+def filter_stale_quotes(sym, sym_bids, sym_asks, stale_state):
+    """
+    Пункт 3: Отсекает залипшие котировки:
+    - где Ask < Bid (кросс/битый стакан);
+    - где Bid == Ask и при этом цена по бирже стоит без изменений STALE_POLL_LIMIT циклов подряд,
+      пока по остальным биржам монеты есть движение.
+    """
+    sym_stale = stale_state.setdefault(sym, {})
+    cleaned_bids = {}
+    cleaned_asks = {}
+    moved_exchanges = 0
+    candidate_exchanges = set(sym_bids.keys()).union(set(sym_asks.keys()))
+
+    for ex in candidate_exchanges:
+        b = sym_bids.get(ex, 0.0)
+        a = sym_asks.get(ex, 0.0)
+        if b <= 0 or a <= 0 or a < b:
+            continue
+
+        sig = (b, a)
+        prev = sym_stale.get(ex)
+        if prev is None or prev["sig"] != sig:
+            sym_stale[ex] = {"sig": sig, "unchanged": 0}
+            moved_exchanges += 1
+        else:
+            sym_stale[ex]["unchanged"] += 1
+
+    # Считаем, что по монете есть реальное движение рынка, если хотя бы одна биржа сдвинулась
+    market_is_moving = moved_exchanges >= 1
+
+    for ex in candidate_exchanges:
+        b = sym_bids.get(ex, 0.0)
+        a = sym_asks.get(ex, 0.0)
+        if b <= 0 or a <= 0 or a < b:
+            continue
+
+        st = sym_stale.get(ex, {"unchanged": 0})
+        is_flat_book = (b == a)
+        is_stuck_price = is_flat_book and market_is_moving and st["unchanged"] >= STALE_POLL_LIMIT
+
+        if not is_stuck_price:
+            if ex in sym_bids:
+                cleaned_bids[ex] = b
+            if ex in sym_asks:
+                cleaned_asks[ex] = a
+
+    return cleaned_bids, cleaned_asks
+
 def monitor_spread():
     global active_spreads, price_history_long, price_history_short, sent_alerts_cache, symbol_price_tracker, spread_monitor_enabled
     print("🟢 Smart Spread Monitor initialized (Waiting for /spread_on command)...")
-    
+
     live_spread_posts = {}
     pending_spreads = {}      # Буфер на 25 сек + проверка вектора
-    symbol_cooldowns = {}     # Заморозка монеты на 20 мин после сигнала/закрытия
+    symbol_cooldowns = {}     # Кулдаун монеты (20 мин) на новые входы после закрытия
+    quote_stale_tracker = {}  # Трекер залипших котировок по (sym -> ex)
 
     while True:
         # Если мониторинг выключен пользователем — спим и очищаем буферы
@@ -998,24 +1055,111 @@ def monitor_spread():
             curr_time_str = get_kyiv_time()
             now_ts = int(time.time())
 
-            # Очищаем истекшие cooldowns (20 минут = 1200 сек)
-            symbol_cooldowns = {sym: ts for sym, ts in symbol_cooldowns.items() if now_ts - ts < 1200}
+            # Пункт 5: Очищаем истекшие cooldowns (20 минут = 1200 сек)
+            symbol_cooldowns = {
+                sym: ts for sym, ts in symbol_cooldowns.items()
+                if (now_ts - ts) < SYMBOL_COOLDOWN_SECONDS
+            }
 
             all_symbols = set(bids.keys()).union(set(asks.keys()))
             current_detected_spreads = {}
+            closed_keys = []
 
-            for sym in all_symbols:
-                # Если монета на паузе (cooldown 20 минут) и по ней нет активного поста — пропускаем
-                if sym in symbol_cooldowns and not any(k.startswith(f"{sym}_") for k in live_spread_posts):
+            # Сначала проверяем уже открытые посты (п. 1, п. 2, п. 4):
+            # - закрываем только при реальном схождении (spread < SPREAD_CLOSE_THRESHOLD, т.е. < 1.75%)
+            #   или если пара пропала из стаканов
+            # - удерживаем пост в диапазоне гистерезиса (не закрываем выше SPREAD_HYSTERESIS_THRESHOLD = 2.5%)
+            for chart_key, post_info in list(live_spread_posts.items()):
+                sym_name = post_info["sym"]
+                long_ex = post_info["min_ex"]
+                short_ex = post_info["max_ex"]
+                msg_id = post_info["msg_id"]
+
+                raw_b = bids.get(sym_name, {})
+                raw_a = asks.get(sym_name, {})
+                clean_b, clean_a = filter_stale_quotes(sym_name, raw_b, raw_a, quote_stale_tracker)
+
+                p_long_live = clean_b.get(long_ex, raw_b.get(long_ex, 0.0))
+                p_short_live = clean_a.get(short_ex, raw_a.get(short_ex, 0.0))
+
+                if p_long_live > 0 and p_short_live > 0:
+                    live_spread = ((p_short_live - p_long_live) / p_long_live) * 100
+                else:
+                    live_spread = None
+
+                # Условие закрытия: спред реально схлопнулся (< 1.75%) или котировки по биржам недоступны
+                should_close = (live_spread is None) or (live_spread < SPREAD_CLOSE_THRESHOLD)
+
+                if should_close:
+                    # Пункт 5: Фиксируем момент закрытия для 20-минутного кулдауна на новые входы
+                    symbol_cooldowns[sym_name] = now_ts
+
+                    # Пункт 4: Цены при закрытии берём напрямую из данных текущего прохода цикла
+                    prices_close_str = ""
+                    if p_long_live > 0 or p_short_live > 0:
+                        close_sp_line = f" | Итоговый спред: `{live_spread:.2f}%`" if live_spread is not None else ""
+                        prices_close_str = (
+                            f"\n💵 **Цены при закрытии:**\n"
+                            f"🟢 {long_ex}: `${p_long_live}` | 🔴 {short_ex}: `${p_short_live}`{close_sp_line}\n"
+                        )
+
+                    convergence_text = (
+                        f"🟢 **СПРЕД СОШЕЛСЯ / ЗАКРЫТИЕ СДЕЛКИ**\n"
+                        f"🪙 **#{sym_name}** (Long: `{long_ex}` | Short: `{short_ex}`)\n"
+                        f"{prices_close_str}\n"
+                        f"🎯 Спред схлопнулся ниже `{SPREAD_CLOSE_THRESHOLD:.2f}%`. Позицию можно закрывать и фиксировать результат!\n"
+                        f"⏸ _Монета поставлена на паузу (20 мин) от повторных сигналов._\n\n"
+                        f"🕒 _Время: {curr_time_str} (Киев)_"
+                    )
+                    try:
+                        bot.send_message(
+                            chat_id=CHAT_ID,
+                            message_thread_id=TOPICS["SPREAD"],
+                            text=convergence_text,
+                            parse_mode="Markdown",
+                            disable_web_page_preview=True,
+                            reply_to_message_id=msg_id
+                        )
+                    except Exception: pass
+
+                    closed_keys.append(chart_key)
+                    del live_spread_posts[chart_key]
                     continue
 
+                # Пункт 2: Гистерезис — если спред откатил ниже входа (5.0%), но ещё >= 2.5%, держим пост активным
+                if live_spread < SPREAD_ENTRY_MIN and live_spread >= SPREAD_HYSTERESIS_THRESHOLD:
+                    sym_vols = volumes.get(sym_name, {})
+                    vol_min = sym_vols.get(long_ex, 0) * 0.01
+                    vol_max = sym_vols.get(short_ex, 0) * 0.01
+                    max_pos_usdt = max(100, int(min(vol_min, vol_max)))
+
+                    current_detected_spreads[chart_key] = {
+                        "sym": sym_name,
+                        "min_ex": long_ex,
+                        "max_ex": short_ex,
+                        "min_p": p_long_live,
+                        "max_p": p_short_live,
+                        "spread": live_spread,
+                        "max_pos_usdt": max_pos_usdt,
+                        "valid_bids": {k: v for k, v in clean_b.items() if sym_vols.get(k, 0) >= 15_000},
+                        "valid_asks": {k: v for k, v in clean_a.items() if sym_vols.get(k, 0) >= 15_000},
+                        "sym_vols": sym_vols,
+                        "fundings": fundings,
+                        "in_hysteresis": True
+                    }
+
+            # Поиск новых входов (5.0% - 25.0%) и обновление активных постов в целевом диапазоне
+            for sym in all_symbols:
                 sym_bids = bids.get(sym, {})
                 sym_asks = asks.get(sym, {})
                 sym_vols = volumes.get(sym, {})
 
+                # Пункт 3: Фильтруем залипшие котировки до проверки объёма и медианы
+                clean_bids, clean_asks = filter_stale_quotes(sym, sym_bids, sym_asks, quote_stale_tracker)
+
                 # Базовый объем монеты 24h >= $15,000
-                valid_bids = {ex: p for ex, p in sym_bids.items() if sym_vols.get(ex, 0) >= 15_000 and p > 0}
-                valid_asks = {ex: p for ex, p in sym_asks.items() if sym_vols.get(ex, 0) >= 15_000 and p > 0}
+                valid_bids = {ex: p for ex, p in clean_bids.items() if sym_vols.get(ex, 0) >= 15_000 and p > 0}
+                valid_asks = {ex: p for ex, p in clean_asks.items() if sym_vols.get(ex, 0) >= 15_000 and p > 0}
 
                 if len(valid_bids) < 2 or len(valid_asks) < 2:
                     continue
@@ -1053,22 +1197,33 @@ def monitor_spread():
 
                 chart_key = f"{sym}_{min_ex}_{max_ex}"
 
+                # Если этот ключ уже закрылся в текущем цикле — не переоткрываем его в том же проходе
+                if chart_key in closed_keys:
+                    continue
+
                 # Расчет глубины стакана (защита от проскальзывания для $100-$200 позиции)
                 vol_min = sym_vols.get(min_ex, 0) * 0.01
                 vol_max = sym_vols.get(max_ex, 0) * 0.01
                 max_pos_usdt = int(min(vol_min, vol_max))
                 if max_pos_usdt < 100: max_pos_usdt = 100
 
-                # Целевой диапазон спреда: 5.0% - 25.0%
-                if 5.0 <= spread <= 25.0:
+                # Целевой диапазон входа: 5.0% - 25.0%
+                if SPREAD_ENTRY_MIN <= spread <= SPREAD_ENTRY_MAX:
                     if chart_key in live_spread_posts:
                         current_detected_spreads[chart_key] = {
                             "sym": sym, "min_ex": min_ex, "max_ex": max_ex,
                             "min_p": min_p, "max_p": max_p, "spread": spread,
                             "max_pos_usdt": max_pos_usdt, "valid_bids": valid_bids,
-                            "valid_asks": valid_asks, "sym_vols": sym_vols, "fundings": fundings
+                            "valid_asks": valid_asks, "sym_vols": sym_vols, "fundings": fundings,
+                            "in_hysteresis": False
                         }
                     else:
+                        # Пункт 5: Для нового входа проверяем 20-минутный кулдаун монеты
+                        if sym in symbol_cooldowns:
+                            if chart_key in pending_spreads:
+                                del pending_spreads[chart_key]
+                            continue
+
                         # 2. БУФЕР 25 СЕКУНД + ПРОВЕРКА ВЕКТОРА (спред не сдувается)
                         if chart_key not in pending_spreads:
                             pending_spreads[chart_key] = {
@@ -1078,7 +1233,7 @@ def monitor_spread():
                         else:
                             elapsed = now_ts - pending_spreads[chart_key]["first_seen"]
                             init_sp = pending_spreads[chart_key]["initial_spread"]
-                            
+
                             # Ждем 25 секунд. Если спред живой, стакан >= $1,000 и спред НЕ упал ниже стартового больше чем на 0.2%
                             if elapsed >= 25:
                                 if max_pos_usdt >= 1000 and spread >= (init_sp - 0.2):
@@ -1086,7 +1241,8 @@ def monitor_spread():
                                         "sym": sym, "min_ex": min_ex, "max_ex": max_ex,
                                         "min_p": min_p, "max_p": max_p, "spread": spread,
                                         "max_pos_usdt": max_pos_usdt, "valid_bids": valid_bids,
-                                        "valid_asks": valid_asks, "sym_vols": sym_vols, "fundings": fundings
+                                        "valid_asks": valid_asks, "sym_vols": sym_vols, "fundings": fundings,
+                                        "in_hysteresis": False
                                     }
                                     # Ставим монету на cooldown 20 минут сразу после выдачи сигнала
                                     symbol_cooldowns[sym] = now_ts
@@ -1099,51 +1255,6 @@ def monitor_spread():
             expired_pending = [k for k, v in pending_spreads.items() if now_ts - v["first_seen"] > 45]
             for k in expired_pending:
                 del pending_spreads[k]
-
-            active_keys_set = set(current_detected_spreads.keys())
-            
-            # Закрытие сошедшихся спредов
-            existing_live_keys = list(live_spread_posts.keys())
-            for chart_key in existing_live_keys:
-                if chart_key not in active_keys_set:
-                    post_info = live_spread_posts[chart_key]
-                    msg_id = post_info["msg_id"]
-                    sym_name = post_info["sym"]
-                    long_ex = post_info["min_ex"]
-                    short_ex = post_info["max_ex"]
-
-                    # Обновляем cooldown при закрытии, чтобы сразу не открылся дубль
-                    symbol_cooldowns[sym_name] = now_ts
-
-                    # Получаем свежие цены на момент схождения по этим биржам
-                    current_prices_on_close, _ = fetch_token_prices_on_demand(sym_name)
-                    p_long_close = current_prices_on_close.get(long_ex, 0)
-                    p_short_close = current_prices_on_close.get(short_ex, 0)
-
-                    prices_close_str = ""
-                    if p_long_close > 0 or p_short_close > 0:
-                        prices_close_str = f"\n💵 **Цены при закрытии:**\n🟢 {long_ex}: `${p_long_close}` | 🔴 {short_ex}: `${p_short_close}`\n"
-
-                    convergence_text = (
-                        f"🟢 **СПРЕД СОШЕЛСЯ / ЗАКРЫТИЕ СДЕЛКИ**\n"
-                        f"🪙 **#{sym_name}** (Long: `{long_ex}` | Short: `{short_ex}`)\n"
-                        f"{prices_close_str}\n"
-                        f"🎯 Спред схлопнулся до нормальных значений. Позицию можно закрывать и фиксировать результат!\n"
-                        f"⏸ _Монета поставлена на паузу (20 мин) от дублей._\n\n"
-                        f"🕒 _Время: {curr_time_str} (Киев)_"
-                    )
-                    try:
-                        bot.send_message(
-                            chat_id=CHAT_ID,
-                            message_thread_id=TOPICS["SPREAD"],
-                            text=convergence_text,
-                            parse_mode="Markdown",
-                            disable_web_page_preview=True,
-                            reply_to_message_id=msg_id
-                        )
-                    except Exception: pass
-
-                    del live_spread_posts[chart_key]
 
             # Публикация и обновление активных подтвержденных спредов
             for chart_key, data in current_detected_spreads.items():
@@ -1158,12 +1269,13 @@ def monitor_spread():
                 valid_asks = data["valid_asks"]
                 sym_vols = data["sym_vols"]
                 fundings = data["fundings"]
+                in_hysteresis = data.get("in_hysteresis", False)
 
                 if sym not in symbol_price_tracker:
                     symbol_price_tracker[sym] = []
                 symbol_price_tracker[sym].append((now_ts, min_p))
                 symbol_price_tracker[sym] = [item for item in symbol_price_tracker[sym] if now_ts - item[0] <= 60]
-                
+
                 is_momentum = False
                 if len(symbol_price_tracker[sym]) >= 2:
                     old_p = symbol_price_tracker[sym][0][1]
@@ -1197,7 +1309,7 @@ def monitor_spread():
                     v_str = format_volume(v)
                     url = get_exchange_url(ex, sym)
                     overview_list.append(f"🔹 [{ex}]({url}): Bid: `{bp}` | Ask: `{ap}` ({v_str})")
-                
+
                 overview = "\n".join(overview_list)
 
                 render_url = os.environ.get('RENDER_EXTERNAL_URL', '').strip()
@@ -1210,7 +1322,9 @@ def monitor_spread():
                 else:
                     markup.add(InlineKeyboardButton("🌐 Биржа Long", url=get_exchange_url(min_ex, sym)))
 
-                if is_momentum:
+                if in_hysteresis:
+                    badge = f"⏳ **HOLD / СХОЖДЕНИЕ (ниже 5%, закрытие < {SPREAD_CLOSE_THRESHOLD:.2f}%)**"
+                elif is_momentum:
                     badge = "⚡⚡ **MOMENTUM / PUMP SPREAD**"
                 elif spread >= 15.0:
                     badge = "🔥🔥🔥 **MEGA SPREAD (>= 15%)**"
@@ -1277,7 +1391,7 @@ def monitor_spread():
 
         except Exception as e:
             print(f"❌ Advanced Monitor Spread Error: {e}")
-        
+
         time.sleep(10)
 
 def monitor_funding():
@@ -1295,7 +1409,7 @@ def monitor_funding():
                 max_ex = max(valid_ex_funds, key=valid_ex_funds.get)
                 min_ex = min(valid_ex_funds, key=valid_ex_funds.get)
                 funding_spread = abs(valid_ex_funds[max_ex] - valid_ex_funds[min_ex])
-                
+
                 if funding_spread >= 0.5:
                     vol_min = sym_vols.get(min_ex, 0) * 0.01
                     vol_max = sym_vols.get(max_ex, 0) * 0.01
@@ -1326,7 +1440,7 @@ def monitor_funding():
 # ==================== BINANCE ALPHA СЕССИЯ ====================
 def run_alpha_session(session_key, token_identifier):
     print(f"🚀 [ALPHA DEBUG] Сессия запущена для: {token_identifier} (ключ: {session_key})")
-    
+
     display_symbol = normalize_symbol(token_identifier) or token_identifier.upper()
     if not display_symbol.endswith("USDT") and not display_symbol.startswith("0X"):
         display_symbol = f"#{display_symbol}USDT"
@@ -1335,15 +1449,15 @@ def run_alpha_session(session_key, token_identifier):
 
     try:
         bot.send_message(
-            chat_id=CHAT_ID, 
-            message_thread_id=TOPICS["ALPHA"], 
-            text=f"🚀 **Binance Alpha сессия запущена**\nМонета/Тикер: `{display_symbol}`", 
+            chat_id=CHAT_ID,
+            message_thread_id=TOPICS["ALPHA"],
+            text=f"🚀 **Binance Alpha сессия запущена**\nМонета/Тикер: `{display_symbol}`",
             parse_mode="Markdown",
             disable_web_page_preview=True
         )
     except Exception as e:
         print(f"❌ [ALPHA ERROR] Стартовое сообщение: {e}")
-    
+
     if session_key not in alpha_price_memory:
         alpha_price_memory[session_key] = []
 
@@ -1362,7 +1476,7 @@ def run_alpha_session(session_key, token_identifier):
                 break
 
             current_price = fetch_binance_alpha_price(token_identifier)
-            
+
             if current_price <= 0:
                 time.sleep(5)
                 continue
@@ -1370,7 +1484,7 @@ def run_alpha_session(session_key, token_identifier):
             now_ts = time.time()
             history = alpha_price_memory[session_key]
             history.append((now_ts, current_price))
-            
+
             alpha_price_memory[session_key] = [item for item in history if now_ts - item[0] <= 120]
             history = alpha_price_memory[session_key]
 
@@ -1407,7 +1521,7 @@ def run_alpha_session(session_key, token_identifier):
                 f"📐 **Диапазон ордеров:** Buy `~${buy_str}` | Sell `~${sell_str}`\n"
                 f"🎯 **Совет по откруту:**\n{action_advice}"
             )
-            
+
             try:
                 bot.send_message(
                     chat_id=CHAT_ID,
@@ -1421,7 +1535,7 @@ def run_alpha_session(session_key, token_identifier):
 
         except Exception as err:
             print(f"❌ [ALPHA ERROR]: {err}")
-            
+
         time.sleep(30)
 
 # ==================== КОМАНДЫ УПРАВЛЕНИЯ СПРЕДАМИ ====================
@@ -1449,19 +1563,19 @@ def cmd_alpha_start_alt(message):
         session_key = f"alpha_{token_query}"
         active_alpha_sessions[session_key] = {"symbol": token_query, "stop": False}
         threading.Thread(target=run_alpha_session, args=(session_key, token_query), daemon=True).start()
-        
+
         try:
             bot.reply_to(message, f"✅ Предиктивный сканер (30 сек, флуд-режим) запущен в топике Alpha!", parse_mode="Markdown")
         except: pass
         return
-    
+
     try:
         bot.reply_to(
-            message, 
+            message,
             "ℹ️ **Доступные команды:**\n"
             "• `/spread_on` — запустить поиск спредов\n"
             "• `/spread_off` — остановить поиск спредов\n"
-            "• `/start [тикер]` — запустить сканер Binance Alpha", 
+            "• `/start [тикер]` — запустить сканер Binance Alpha",
             parse_mode="Markdown"
         )
     except: pass
@@ -1476,7 +1590,7 @@ def cmd_alpha_stop(message):
             active_alpha_sessions[session_key]["stop"] = True
             bot.reply_to(message, f"⏹ Сессия для `{query}` остановлена.", parse_mode="Markdown")
             return
-            
+
     for k in active_alpha_sessions:
         active_alpha_sessions[k]["stop"] = True
     bot.reply_to(message, "⏹ Все активные Alpha-сессии остановлены.", parse_mode="Markdown")
@@ -1492,13 +1606,13 @@ def handle_chart_screenshots(message):
 
     try:
         bot.reply_to(message, "🧐 Оцениваю график и лимитки...")
-        
+
         file_info = bot.get_file(message.photo[-1].file_id)
         downloaded_file = bot.download_file(file_info.file_path)
-        
+
         import base64
         base64_image = base64.b64encode(downloaded_file).decode('utf-8')
-        
+
         prompt = """
 Проанализируй этот скриншот графика и стакана для торговой сессии Binance Alpha.
 Дай ультра-краткий ответ строго по пунктам (без лишней воды):
@@ -1532,7 +1646,7 @@ def handle_chart_screenshots(message):
             json=payload,
             timeout=25
         )
-        
+
         result_text = res.json()['choices'][0]['message']['content'].strip()
         bot.reply_to(message, f"🎯 **Вердикт по ордеру:**\n\n{result_text}", parse_mode="Markdown")
 
@@ -1559,7 +1673,7 @@ def cmd_vol(message):
 def handle_chat_messages(message):
     if not message.text or message.text.startswith('/'): return
     text = message.text.strip()
-    
+
     calc_match = re.search(r'^([\d.]+)\s*-\s*([\d.]+)$', text)
     if calc_match:
         try:
@@ -1586,17 +1700,17 @@ def handle_chat_messages(message):
         return
 
     sym_prices, sym_vols = fetch_token_prices_on_demand(clean_query)
-    
+
     if not sym_prices:
         bot.reply_to(message, f"⚠️ Токен по запросу `{clean_query}` не найден на биржах.", parse_mode="Markdown")
         return
-    
+
     lines = [f"🪙 **Запрос:** `{clean_query}` (Кол-во: `{quantity:,.4f}`)\n"]
     for ex, p in sorted(sym_prices.items(), key=lambda x: x[1]):
         v = format_volume(sym_vols.get(ex, 0))
         total_cost = p * quantity
         lines.append(f"🔹 [{ex}]: `${p}` | Общая стоимость: **`${total_cost:,.2f}`** ({v})")
-        
+
     bot.reply_to(message, "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
 
 if __name__ == "__main__":

@@ -61,10 +61,13 @@ SPREAD_ENTRY_MIN = 5.0
 SPREAD_ENTRY_MAX = 25.0
 SPREAD_HYSTERESIS_THRESHOLD = 2.5   # Гистерезис для удержания открытого поста
 SPREAD_CLOSE_THRESHOLD = 1.0        # Реальное схождение (< 1.0%)
+PENDING_BUFFER_SECONDS = 15         # Выдержка до подтверждения вектора входа
+MIN_ENTRY_POS_USDT = 500            # Минимальная оценка объема для входа
 CLOSE_CONFIRM_POLLS = 2             # Подтверждение схождения на 2 циклах подряд
 CLOSE_MISSING_LIMIT = 3             # Допуск битых/пропавших цен перед закрытием
-SYMBOL_COOLDOWN_SECONDS = 1200      # 20 минут кулдауна на новые входы после закрытия
+SYMBOL_COOLDOWN_SECONDS = 600       # 10 минут кулдауна на новые входы после закрытия
 STALE_POLL_LIMIT = 4                # Сколько циклов подряд цена может стоять без движения при живой монете
+SMOOTH_WINDOW = 3                   # Окно сглаживания спреда для защиты от качелей
 
 SPREADS_FILE = "active_spreads.json"
 
@@ -1036,13 +1039,23 @@ def filter_stale_quotes(sym, sym_bids, sym_asks, stale_state):
 
     return cleaned_bids, cleaned_asks
 
+def smooth_spread_value(state_obj, raw_spread):
+    """Сглаживает краткосрочные качели спреда по скользящему окну."""
+    if raw_spread is None:
+        return None
+    samples = state_obj.setdefault("spread_samples", [])
+    samples.append(raw_spread)
+    if len(samples) > SMOOTH_WINDOW:
+        samples.pop(0)
+    return statistics.median(samples)
+
 def monitor_spread():
     global active_spreads, price_history_long, price_history_short, sent_alerts_cache, symbol_price_tracker, spread_monitor_enabled
     print("🟢 Smart Spread Monitor initialized (Waiting for /spread_on command)...")
 
     live_spread_posts = {}
-    pending_spreads = {}      # Буфер на 25 сек + проверка вектора
-    symbol_cooldowns = {}     # Кулдаун монеты (20 мин) на новые входы после закрытия
+    pending_spreads = {}      # Буфер подтверждения вектора входа
+    symbol_cooldowns = {}     # Кулдаун монеты на новые входы после закрытия
     quote_stale_tracker = {}  # Трекер залипших котировок по (sym -> ex)
 
     while True:
@@ -1084,14 +1097,15 @@ def monitor_spread():
                     post_info["missing_count"] = 0
                     post_info["last_long_p"] = b_val
                     post_info["last_short_p"] = a_val
-                    live_spread = ((a_val - b_val) / b_val) * 100
+                    raw_live_spread = ((a_val - b_val) / b_val) * 100
+                    live_spread = smooth_spread_value(post_info, raw_live_spread)
                     post_info["last_live_spread"] = live_spread
+                    close_reason = "converged"
                 else:
                     # Защита от мгновенного закрытия из-за битого/нулевого/пропавшего тика
                     post_info["missing_count"] = post_info.get("missing_count", 0) + 1
                     post_info["close_confirm_count"] = 0
                     if post_info["missing_count"] < CLOSE_MISSING_LIMIT:
-                        # Удерживаем пост на последних валидных ценах, пока не накопится лимит пропусков
                         p_long_hold = post_info.get("last_long_p", 0.0)
                         p_short_hold = post_info.get("last_short_p", 0.0)
                         sp_hold = post_info.get("last_live_spread", post_info.get("last_spread", SPREAD_HYSTERESIS_THRESHOLD))
@@ -1116,11 +1130,14 @@ def monitor_spread():
                             }
                         continue
                     live_spread = None
+                    close_reason = "missing_quotes"
 
                 if live_spread is not None and live_spread < SPREAD_CLOSE_THRESHOLD:
                     post_info["close_confirm_count"] = post_info.get("close_confirm_count", 0) + 1
+                    close_reason = "converged"
                 elif live_spread is None:
                     post_info["close_confirm_count"] = CLOSE_CONFIRM_POLLS
+                    close_reason = "missing_quotes"
                 else:
                     post_info["close_confirm_count"] = 0
 
@@ -1138,18 +1155,26 @@ def monitor_spread():
 
                     prices_close_str = ""
                     if p_long_close > 0 and p_short_close > 0:
-                        close_sp_line = f" | Итоговый спред: `{final_spread_val:.2f}%`" if final_spread_val is not None else ""
+                        close_sp_line = f" | Текущий спред: `{final_spread_val:.2f}%`" if final_spread_val is not None else ""
                         prices_close_str = (
                             f"\n💵 **Цены при закрытии:**\n"
                             f"🟢 {long_ex}: `${p_long_close}` | 🔴 {short_ex}: `${p_short_close}`{close_sp_line}\n"
                         )
 
+                    cooldown_mins = SYMBOL_COOLDOWN_SECONDS // 60
+                    if close_reason == "converged":
+                        header_text = "🟢 **СПРЕД СОШЕЛСЯ / ЗАКРЫТИЕ СДЕЛКИ**"
+                        reason_text = f"🎯 Спред схлопнулся ниже `{SPREAD_CLOSE_THRESHOLD:.2f}%`. Позицию можно закрывать и фиксировать результат!"
+                    else:
+                        header_text = "⚪ **ЗАКРЫТИЕ ПОСТА (ПОТЕРЯ КОТИРОВОК)**"
+                        reason_text = f"⚠️ Актуальные котировки по `{long_ex}` или `{short_ex}` пропали/залипли (`{CLOSE_MISSING_LIMIT}` цикла подряд). Спред ниже `1.00%` не фиксировался — проверь стакан вручную."
+
                     convergence_text = (
-                        f"🟢 **СПРЕД СОШЕЛСЯ / ЗАКРЫТИЕ СДЕЛКИ**\n"
+                        f"{header_text}\n"
                         f"🪙 **#{sym_name}** (Long: `{long_ex}` | Short: `{short_ex}`)\n"
                         f"{prices_close_str}\n"
-                        f"🎯 Спред схлопнулся ниже `{SPREAD_CLOSE_THRESHOLD:.2f}%`. Позицию можно закрывать и фиксировать результат!\n"
-                        f"⏸ _Монета поставлена на паузу (20 мин) от повторных сигналов._\n\n"
+                        f"{reason_text}\n"
+                        f"⏸ _Монета поставлена на паузу ({cooldown_mins} мин) от повторных сигналов._\n\n"
                         f"🕒 _Время: {curr_time_str} (Киев)_"
                     )
                     try:
@@ -1228,8 +1253,8 @@ def monitor_spread():
 
                 if min_p <= 0 or max_p <= 0: continue
 
-                spread = ((max_p - min_p) / min_p) * 100
-                if spread < 0: continue
+                raw_spread = ((max_p - min_p) / min_p) * 100
+                if raw_spread < 0: continue
 
                 chart_key = f"{sym}_{min_ex}_{max_ex}"
 
@@ -1240,6 +1265,11 @@ def monitor_spread():
                 vol_max = sym_vols.get(max_ex, 0) * 0.01
                 max_pos_usdt = int(min(vol_min, vol_max))
                 if max_pos_usdt < 100: max_pos_usdt = 100
+
+                if chart_key in live_spread_posts:
+                    spread = smooth_spread_value(live_spread_posts[chart_key], raw_spread)
+                else:
+                    spread = raw_spread
 
                 if SPREAD_ENTRY_MIN <= spread <= SPREAD_ENTRY_MAX:
                     if chart_key in live_spread_posts:
@@ -1265,8 +1295,8 @@ def monitor_spread():
                             elapsed = now_ts - pending_spreads[chart_key]["first_seen"]
                             init_sp = pending_spreads[chart_key]["initial_spread"]
 
-                            if elapsed >= 25:
-                                if max_pos_usdt >= 1000 and spread >= (init_sp - 0.2):
+                            if elapsed >= PENDING_BUFFER_SECONDS:
+                                if max_pos_usdt >= MIN_ENTRY_POS_USDT and spread >= (init_sp - 0.5):
                                     current_detected_spreads[chart_key] = {
                                         "sym": sym, "min_ex": min_ex, "max_ex": max_ex,
                                         "min_p": min_p, "max_p": max_p, "spread": spread,
@@ -1386,6 +1416,7 @@ def monitor_spread():
                             "last_long_p": min_p,
                             "last_short_p": max_p,
                             "last_live_spread": spread,
+                            "spread_samples": [spread],
                             "missing_count": 0,
                             "close_confirm_count": 0
                         }
@@ -1394,7 +1425,7 @@ def monitor_spread():
                     msg_id = post_info["msg_id"]
                     history = post_info["history"]
 
-                    if abs(spread - post_info["last_spread"]) >= 0.5:
+                    if abs(spread - post_info["last_spread"]) >= 0.75:
                         history.append(f"• `{curr_time_str}` — Обновление: **`{spread:.2f}%`**")
                         if len(history) > 6: history.pop(0)
                         post_info["last_spread"] = spread
@@ -1575,7 +1606,7 @@ def run_alpha_session(session_key, token_identifier):
 def cmd_spread_on(message):
     global spread_monitor_enabled
     spread_monitor_enabled = True
-    bot.reply_to(message, "🟢 **Мониторинг спредов ЗАПУЩЕН!**\nИщу подтвержденные спреды (вектор 25с + ликвидность от $1,000).", parse_mode="Markdown")
+    bot.reply_to(message, f"🟢 **Мониторинг спредов ЗАПУЩЕН!**\nИщу подтвержденные спреды (вектор {PENDING_BUFFER_SECONDS}с + ликвидность от ${MIN_ENTRY_POS_USDT:,}).", parse_mode="Markdown")
     send_to_topic("SPREAD", "🟢 **Охота за спредами ЗАПУЩЕНА** (по команде пользователя).")
 
 @bot.message_handler(commands=['spread_off', 's_off'])

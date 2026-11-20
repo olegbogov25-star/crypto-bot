@@ -56,11 +56,13 @@ alpha_price_memory = {}
 # Флаг управления мониторингом спредов (по умолчанию выключен, включается командой /spread_on)
 spread_monitor_enabled = False
 
-# Пороги логики спредов (п. 1 и п. 2)
+# Пороги логики спредов
 SPREAD_ENTRY_MIN = 5.0
 SPREAD_ENTRY_MAX = 25.0
 SPREAD_HYSTERESIS_THRESHOLD = 2.5   # Гистерезис для удержания открытого поста
-SPREAD_CLOSE_THRESHOLD = 1.75       # Реальное схождение (между 1.5% и 2.0%)
+SPREAD_CLOSE_THRESHOLD = 1.0        # Реальное схождение (< 1.0%)
+CLOSE_CONFIRM_POLLS = 2             # Подтверждение схождения на 2 циклах подряд
+CLOSE_MISSING_LIMIT = 3             # Допуск битых/пропавших цен перед закрытием
 SYMBOL_COOLDOWN_SECONDS = 1200      # 20 минут кулдауна на новые входы после закрытия
 STALE_POLL_LIMIT = 4                # Сколько циклов подряд цена может стоять без движения при живой монете
 
@@ -414,14 +416,14 @@ def get_exchange_url(exchange, symbol="BTCUSDT"):
     ex_upper = exchange.upper()
     links = {
         "BINANCE": f"https://www.binance.com/en/futures/{base_sym}USDT",
-        "BYBIT": f"https://www.bybit.com/trade/usdt/{base_sym}USDT",
+        "BYBIT": "https://www.bybit.com",
         "OKX": f"https://www.okx.com/trade-swap/{base_sym.lower()}-usdt-swap",
         "GATE": f"https://www.gate.io/futures/USDT/{base_sym}_USDT",
         "BITGET": f"https://www.bitget.com/futures/usdt/{base_sym}USDT",
         "MEXC": f"https://futures.mexc.com/exchange/{base_sym}_USDT",
         "BINGX": f"https://bingx.com/en/futures/forward/{base_sym}USDT",
         "KUCOIN": f"https://www.kucoin.com/futures/trade/{base_sym}USDTM",
-        "KRAKEN": f"https://futures.kraken.com",
+        "KRAKEN": "https://futures.kraken.com",
         "OURBIT": f"https://www.ourbit.com/futures/trade/{base_sym}_USDT"
     }
     return links.get(ex_upper, None)
@@ -535,6 +537,9 @@ def process_item(item_id, raw_text, link, default_topic, msg_element=None):
     else:
         official_web_link = link
 
+    if target_topic == "BYBIT" and not official_web_link:
+        official_web_link = "https://www.bybit.com"
+
     exchange_url = get_exchange_url(target_topic) if target_topic in TOPICS and target_topic not in ["NEWS", "SPREAD", "FUNDING", "WEB3", "NEWSMAKER", "ALPHA", "CHAT"] else None
 
     markup = InlineKeyboardMarkup()
@@ -562,8 +567,8 @@ def fetch_telegram_channels_promos():
             "topic": "OKX"
         },
         "BYBIT": {
-            "channels": ["bybitukrainian", "Bybit_CIS", "BybitAnnouncements"],
-            "web3_channels": ["bybit_web3"],
+            "channels": ["bybitukrainiannews"],
+            "web3_channels": [],
             "topic": "BYBIT"
         },
         "BITGET": {
@@ -986,7 +991,7 @@ symbol_price_tracker = {}
 
 def filter_stale_quotes(sym, sym_bids, sym_asks, stale_state):
     """
-    Пункт 3: Отсекает залипшие котировки:
+    Отсекает залипшие котировки:
     - где Ask < Bid (кросс/битый стакан);
     - где Bid == Ask и при этом цена по бирже стоит без изменений STALE_POLL_LIMIT циклов подряд,
       пока по остальным биржам монеты есть движение.
@@ -1011,7 +1016,6 @@ def filter_stale_quotes(sym, sym_bids, sym_asks, stale_state):
         else:
             sym_stale[ex]["unchanged"] += 1
 
-    # Считаем, что по монете есть реальное движение рынка, если хотя бы одна биржа сдвинулась
     market_is_moving = moved_exchanges >= 1
 
     for ex in candidate_exchanges:
@@ -1042,7 +1046,6 @@ def monitor_spread():
     quote_stale_tracker = {}  # Трекер залипших котировок по (sym -> ex)
 
     while True:
-        # Если мониторинг выключен пользователем — спим и очищаем буферы
         if not spread_monitor_enabled:
             if live_spread_posts or pending_spreads:
                 live_spread_posts.clear()
@@ -1055,7 +1058,6 @@ def monitor_spread():
             curr_time_str = get_kyiv_time()
             now_ts = int(time.time())
 
-            # Пункт 5: Очищаем истекшие cooldowns (20 минут = 1200 сек)
             symbol_cooldowns = {
                 sym: ts for sym, ts in symbol_cooldowns.items()
                 if (now_ts - ts) < SYMBOL_COOLDOWN_SECONDS
@@ -1065,10 +1067,6 @@ def monitor_spread():
             current_detected_spreads = {}
             closed_keys = []
 
-            # Сначала проверяем уже открытые посты (п. 1, п. 2, п. 4):
-            # - закрываем только при реальном схождении (spread < SPREAD_CLOSE_THRESHOLD, т.е. < 1.75%)
-            #   или если пара пропала из стаканов
-            # - удерживаем пост в диапазоне гистерезиса (не закрываем выше SPREAD_HYSTERESIS_THRESHOLD = 2.5%)
             for chart_key, post_info in list(live_spread_posts.items()):
                 sym_name = post_info["sym"]
                 long_ex = post_info["min_ex"]
@@ -1079,28 +1077,71 @@ def monitor_spread():
                 raw_a = asks.get(sym_name, {})
                 clean_b, clean_a = filter_stale_quotes(sym_name, raw_b, raw_a, quote_stale_tracker)
 
-                p_long_live = clean_b.get(long_ex, raw_b.get(long_ex, 0.0))
-                p_short_live = clean_a.get(short_ex, raw_a.get(short_ex, 0.0))
+                b_val = clean_b.get(long_ex, 0.0)
+                a_val = clean_a.get(short_ex, 0.0)
 
-                if p_long_live > 0 and p_short_live > 0:
-                    live_spread = ((p_short_live - p_long_live) / p_long_live) * 100
+                if b_val > 0 and a_val > 0:
+                    post_info["missing_count"] = 0
+                    post_info["last_long_p"] = b_val
+                    post_info["last_short_p"] = a_val
+                    live_spread = ((a_val - b_val) / b_val) * 100
+                    post_info["last_live_spread"] = live_spread
                 else:
+                    # Защита от мгновенного закрытия из-за битого/нулевого/пропавшего тика
+                    post_info["missing_count"] = post_info.get("missing_count", 0) + 1
+                    post_info["close_confirm_count"] = 0
+                    if post_info["missing_count"] < CLOSE_MISSING_LIMIT:
+                        # Удерживаем пост на последних валидных ценах, пока не накопится лимит пропусков
+                        p_long_hold = post_info.get("last_long_p", 0.0)
+                        p_short_hold = post_info.get("last_short_p", 0.0)
+                        sp_hold = post_info.get("last_live_spread", post_info.get("last_spread", SPREAD_HYSTERESIS_THRESHOLD))
+                        if p_long_hold > 0 and p_short_hold > 0:
+                            sym_vols = volumes.get(sym_name, {})
+                            vol_min = sym_vols.get(long_ex, 0) * 0.01
+                            vol_max = sym_vols.get(short_ex, 0) * 0.01
+                            max_pos_usdt = max(100, int(min(vol_min, vol_max)))
+                            current_detected_spreads[chart_key] = {
+                                "sym": sym_name,
+                                "min_ex": long_ex,
+                                "max_ex": short_ex,
+                                "min_p": p_long_hold,
+                                "max_p": p_short_hold,
+                                "spread": sp_hold,
+                                "max_pos_usdt": max_pos_usdt,
+                                "valid_bids": {k: v for k, v in clean_b.items() if sym_vols.get(k, 0) >= 15_000},
+                                "valid_asks": {k: v for k, v in clean_a.items() if sym_vols.get(k, 0) >= 15_000},
+                                "sym_vols": sym_vols,
+                                "fundings": fundings,
+                                "in_hysteresis": True
+                            }
+                        continue
                     live_spread = None
 
-                # Условие закрытия: спред реально схлопнулся (< 1.75%) или котировки по биржам недоступны
-                should_close = (live_spread is None) or (live_spread < SPREAD_CLOSE_THRESHOLD)
+                if live_spread is not None and live_spread < SPREAD_CLOSE_THRESHOLD:
+                    post_info["close_confirm_count"] = post_info.get("close_confirm_count", 0) + 1
+                elif live_spread is None:
+                    post_info["close_confirm_count"] = CLOSE_CONFIRM_POLLS
+                else:
+                    post_info["close_confirm_count"] = 0
+
+                should_close = (
+                    (live_spread is None and post_info.get("missing_count", 0) >= CLOSE_MISSING_LIMIT)
+                    or (live_spread is not None and live_spread < SPREAD_CLOSE_THRESHOLD and post_info.get("close_confirm_count", 0) >= CLOSE_CONFIRM_POLLS)
+                )
 
                 if should_close:
-                    # Пункт 5: Фиксируем момент закрытия для 20-минутного кулдауна на новые входы
                     symbol_cooldowns[sym_name] = now_ts
 
-                    # Пункт 4: Цены при закрытии берём напрямую из данных текущего прохода цикла
+                    p_long_close = b_val if b_val > 0 else post_info.get("last_long_p", 0.0)
+                    p_short_close = a_val if a_val > 0 else post_info.get("last_short_p", 0.0)
+                    final_spread_val = live_spread if live_spread is not None else post_info.get("last_live_spread")
+
                     prices_close_str = ""
-                    if p_long_live > 0 or p_short_live > 0:
-                        close_sp_line = f" | Итоговый спред: `{live_spread:.2f}%`" if live_spread is not None else ""
+                    if p_long_close > 0 and p_short_close > 0:
+                        close_sp_line = f" | Итоговый спред: `{final_spread_val:.2f}%`" if final_spread_val is not None else ""
                         prices_close_str = (
                             f"\n💵 **Цены при закрытии:**\n"
-                            f"🟢 {long_ex}: `${p_long_live}` | 🔴 {short_ex}: `${p_short_live}`{close_sp_line}\n"
+                            f"🟢 {long_ex}: `${p_long_close}` | 🔴 {short_ex}: `${p_short_close}`{close_sp_line}\n"
                         )
 
                     convergence_text = (
@@ -1126,8 +1167,7 @@ def monitor_spread():
                     del live_spread_posts[chart_key]
                     continue
 
-                # Пункт 2: Гистерезис — если спред откатил ниже входа (5.0%), но ещё >= 2.5%, держим пост активным
-                if live_spread < SPREAD_ENTRY_MIN and live_spread >= SPREAD_HYSTERESIS_THRESHOLD:
+                if live_spread is not None and live_spread < SPREAD_ENTRY_MIN and live_spread >= SPREAD_HYSTERESIS_THRESHOLD:
                     sym_vols = volumes.get(sym_name, {})
                     vol_min = sym_vols.get(long_ex, 0) * 0.01
                     vol_max = sym_vols.get(short_ex, 0) * 0.01
@@ -1137,8 +1177,8 @@ def monitor_spread():
                         "sym": sym_name,
                         "min_ex": long_ex,
                         "max_ex": short_ex,
-                        "min_p": p_long_live,
-                        "max_p": p_short_live,
+                        "min_p": b_val,
+                        "max_p": a_val,
                         "spread": live_spread,
                         "max_pos_usdt": max_pos_usdt,
                         "valid_bids": {k: v for k, v in clean_b.items() if sym_vols.get(k, 0) >= 15_000},
@@ -1148,23 +1188,19 @@ def monitor_spread():
                         "in_hysteresis": True
                     }
 
-            # Поиск новых входов (5.0% - 25.0%) и обновление активных постов в целевом диапазоне
             for sym in all_symbols:
                 sym_bids = bids.get(sym, {})
                 sym_asks = asks.get(sym, {})
                 sym_vols = volumes.get(sym, {})
 
-                # Пункт 3: Фильтруем залипшие котировки до проверки объёма и медианы
                 clean_bids, clean_asks = filter_stale_quotes(sym, sym_bids, sym_asks, quote_stale_tracker)
 
-                # Базовый объем монеты 24h >= $15,000
                 valid_bids = {ex: p for ex, p in clean_bids.items() if sym_vols.get(ex, 0) >= 15_000 and p > 0}
                 valid_asks = {ex: p for ex, p in clean_asks.items() if sym_vols.get(ex, 0) >= 15_000 and p > 0}
 
                 if len(valid_bids) < 2 or len(valid_asks) < 2:
                     continue
 
-                # 1. MEDIAN CHECK (Защита от фейковых/залипших цен как на #OPENAI)
                 all_mid_prices = [valid_bids[ex] for ex in valid_bids]
                 if len(all_mid_prices) >= 3:
                     median_price = statistics.median(all_mid_prices)
@@ -1197,17 +1233,14 @@ def monitor_spread():
 
                 chart_key = f"{sym}_{min_ex}_{max_ex}"
 
-                # Если этот ключ уже закрылся в текущем цикле — не переоткрываем его в том же проходе
                 if chart_key in closed_keys:
                     continue
 
-                # Расчет глубины стакана (защита от проскальзывания для $100-$200 позиции)
                 vol_min = sym_vols.get(min_ex, 0) * 0.01
                 vol_max = sym_vols.get(max_ex, 0) * 0.01
                 max_pos_usdt = int(min(vol_min, vol_max))
                 if max_pos_usdt < 100: max_pos_usdt = 100
 
-                # Целевой диапазон входа: 5.0% - 25.0%
                 if SPREAD_ENTRY_MIN <= spread <= SPREAD_ENTRY_MAX:
                     if chart_key in live_spread_posts:
                         current_detected_spreads[chart_key] = {
@@ -1218,13 +1251,11 @@ def monitor_spread():
                             "in_hysteresis": False
                         }
                     else:
-                        # Пункт 5: Для нового входа проверяем 20-минутный кулдаун монеты
                         if sym in symbol_cooldowns:
                             if chart_key in pending_spreads:
                                 del pending_spreads[chart_key]
                             continue
 
-                        # 2. БУФЕР 25 СЕКУНД + ПРОВЕРКА ВЕКТОРА (спред не сдувается)
                         if chart_key not in pending_spreads:
                             pending_spreads[chart_key] = {
                                 "first_seen": now_ts,
@@ -1234,7 +1265,6 @@ def monitor_spread():
                             elapsed = now_ts - pending_spreads[chart_key]["first_seen"]
                             init_sp = pending_spreads[chart_key]["initial_spread"]
 
-                            # Ждем 25 секунд. Если спред живой, стакан >= $1,000 и спред НЕ упал ниже стартового больше чем на 0.2%
                             if elapsed >= 25:
                                 if max_pos_usdt >= 1000 and spread >= (init_sp - 0.2):
                                     current_detected_spreads[chart_key] = {
@@ -1244,19 +1274,16 @@ def monitor_spread():
                                         "valid_asks": valid_asks, "sym_vols": sym_vols, "fundings": fundings,
                                         "in_hysteresis": False
                                     }
-                                    # Ставим монету на cooldown 20 минут сразу после выдачи сигнала
                                     symbol_cooldowns[sym] = now_ts
                                 del pending_spreads[chart_key]
                 else:
                     if chart_key in pending_spreads:
                         del pending_spreads[chart_key]
 
-            # Чистим зависшие записи в буфере (> 45 сек)
             expired_pending = [k for k, v in pending_spreads.items() if now_ts - v["first_seen"] > 45]
             for k in expired_pending:
                 del pending_spreads[k]
 
-            # Публикация и обновление активных подтвержденных спредов
             for chart_key, data in current_detected_spreads.items():
                 sym = data["sym"]
                 min_ex = data["min_ex"]
@@ -1355,7 +1382,12 @@ def monitor_spread():
                             "min_ex": min_ex,
                             "max_ex": max_ex,
                             "sym": sym,
-                            "last_spread": spread
+                            "last_spread": spread,
+                            "last_long_p": min_p,
+                            "last_short_p": max_p,
+                            "last_live_spread": spread,
+                            "missing_count": 0,
+                            "close_confirm_count": 0
                         }
                 else:
                     post_info = live_spread_posts[chart_key]

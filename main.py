@@ -7,6 +7,7 @@ import re
 import random
 import io
 import statistics
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import pytz
 import requests
 import feedparser
@@ -43,6 +44,8 @@ TOPICS = {
     "CHAT": 1
 }
 
+USER_EXCHANGES = ["Binance", "Bybit", "OKX", "Bitget", "BingX", "Gate", "KuCoin", "MEXC"]
+
 processed_ids = set()
 active_fundings = {}
 spread_history = {}
@@ -58,14 +61,15 @@ spread_monitor_enabled = False
 
 # Пороги логики спредов
 SPREAD_ENTRY_MIN = 5.0
-SPREAD_ENTRY_MAX = 25.0
+SPREAD_ENTRY_MAX = None             # Без жёсткого потолка 25%, чтобы не резать сильные разгоны
 SPREAD_HYSTERESIS_THRESHOLD = 2.5   # Гистерезис для удержания открытого поста
 SPREAD_CLOSE_THRESHOLD = 1.0        # Реальное схождение (< 1.0%)
 PENDING_BUFFER_SECONDS = 15         # Выдержка до подтверждения вектора входа
 MIN_ENTRY_POS_USDT = 500            # Минимальная оценка объема для входа
+MIN_EXCHANGE_VOL_USDT = 5_000       # Минимальный 24h оборот биржи для участия в поиске
 CLOSE_CONFIRM_POLLS = 2             # Подтверждение схождения на 2 циклах подряд
 CLOSE_MISSING_LIMIT = 3             # Допуск битых/пропавших цен перед закрытием
-SYMBOL_COOLDOWN_SECONDS = 600       # 10 минут кулдауна на новые входы после закрытия
+PAIR_COOLDOWN_SECONDS = 180         # Кулдаун на конкретную связку бирж после закрытия
 STALE_POLL_LIMIT = 4                # Сколько циклов подряд цена может стоять без движения при живой монете
 SMOOTH_WINDOW = 3                   # Окно сглаживания спреда для защиты от качелей
 
@@ -96,17 +100,45 @@ def get_kyiv_time():
 def get_kyiv_date_time():
     return datetime.datetime.now(KYIV_TZ).strftime("%H:%M")
 
-def normalize_symbol(raw_sym):
+def parse_normalized_symbol(raw_sym):
+    """
+    Нормализует тикер и возвращает (base_symbol, unit_multiplier),
+    чтобы приводить контракты вида 1000PEPE / 1000000MOG / kBONK к цене за 1 монету.
+    """
     if not raw_sym:
-        return ""
+        return "", 1.0
     sym = raw_sym.upper().replace('_', '').replace('-', '').replace('/', '')
-    if sym.endswith('USDTM'):
-        sym = sym[:-1]
-    if sym.endswith('USDT'):
-        sym = sym[:-4]
-    if sym.endswith('USDC'):
-        sym = sym[:-4]
-    return sym
+    for suffix in ("USDTM", "USDT", "USDC", "SWAP", "PERP"):
+        if sym.endswith(suffix):
+            sym = sym[:-len(suffix)]
+            break
+
+    multiplier = 1.0
+    m = re.match(r'^(\d{2,9})([A-Z0-9]{2,})$', sym)
+    if m:
+        mult_val = float(m.group(1))
+        base_val = m.group(2)
+        if base_val and mult_val >= 10:
+            return base_val, mult_val
+
+    if sym.startswith("K") and len(sym) >= 3 and sym[1:2].isupper():
+        return sym[1:], 1000.0
+
+    return sym, multiplier
+
+def normalize_symbol(raw_sym):
+    base, _ = parse_normalized_symbol(raw_sym)
+    return base
+
+def make_venue_key(exchange, market_type="Fut"):
+    m_tag = "Spot" if market_type.lower().startswith("spot") else "Fut"
+    return f"{exchange} {m_tag}"
+
+def split_venue_key(venue_key):
+    parts = venue_key.rsplit(" ", 1)
+    if len(parts) == 2 and parts[1] in ("Fut", "Spot"):
+        return parts[0], parts[1]
+    return venue_key, "Fut"
 
 # ==================== SECURE REQUESTS & ROTATING HEADERS ====================
 USER_AGENTS = [
@@ -138,67 +170,135 @@ def secure_request(url, timeout=12):
     except Exception:
         return None
 
-# ==================== DIRECT EXCHANGE PRICE ENGINE (NO DEXSCREENER) ====================
+# ==================== DIRECT EXCHANGE PRICE ENGINE ====================
 def fetch_token_prices_on_demand(sym):
-    base_sym = normalize_symbol(sym)
+    base_sym, _ = parse_normalized_symbol(sym)
     ex_prices, ex_vols = {}, {}
 
-    try:
-        r = requests.get(f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={base_sym}USDT", timeout=2).json()
-        if 'price' in r:
-            ex_prices['Binance'] = float(r['price'])
-    except: pass
+    def _bin():
+        try:
+            r = requests.get(f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={base_sym}USDT", timeout=2.5).json()
+            if 'price' in r:
+                ex_prices['Binance Fut'] = float(r['price'])
+        except: pass
+        try:
+            r = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={base_sym}USDT", timeout=2.5).json()
+            if 'price' in r:
+                ex_prices['Binance Spot'] = float(r['price'])
+        except: pass
 
-    try:
-        r = requests.get(f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={base_sym}USDT", timeout=2).json().get('result', {}).get('list', [])
-        if r:
-            ex_prices['Bybit'] = float(r[0]['lastPrice'])
-            ex_vols['Bybit'] = float(r[0].get('turnover24h', 0))
-    except: pass
+    def _byb():
+        try:
+            r = requests.get(f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={base_sym}USDT", timeout=2.5).json().get('result', {}).get('list', [])
+            if r:
+                ex_prices['Bybit Fut'] = float(r[0]['lastPrice'])
+                ex_vols['Bybit Fut'] = float(r[0].get('turnover24h', 0))
+        except: pass
+        try:
+            r = requests.get(f"https://api.bybit.com/v5/market/tickers?category=spot&symbol={base_sym}USDT", timeout=2.5).json().get('result', {}).get('list', [])
+            if r:
+                ex_prices['Bybit Spot'] = float(r[0]['lastPrice'])
+                ex_vols['Bybit Spot'] = float(r[0].get('turnover24h', 0))
+        except: pass
 
-    try:
-        r = requests.get("https://api-futures.kucoin.com/api/v1/contracts/active", timeout=2).json().get('data', [])
-        for item in r:
-            if normalize_symbol(item.get('symbol', '')) == base_sym and 'lastTradePrice' in item:
-                ex_prices['KuCoin'] = float(item['lastTradePrice'])
-                ex_vols['KuCoin'] = float(item.get('turnoverOf24h', 0))
-                break
-    except: pass
+    def _kuc():
+        try:
+            r = requests.get("https://api-futures.kucoin.com/api/v1/contracts/active", timeout=3).json().get('data', [])
+            for item in r:
+                s_base, s_mult = parse_normalized_symbol(item.get('symbol', ''))
+                if s_base == base_sym and 'lastTradePrice' in item:
+                    ex_prices['KuCoin Fut'] = float(item['lastTradePrice']) / s_mult
+                    ex_vols['KuCoin Fut'] = float(item.get('turnoverOf24h', 0))
+                    break
+        except: pass
+        try:
+            r = requests.get(f"https://api.kucoin.com/api/v1/market/orderbook/level1?symbol={base_sym}-USDT", timeout=2.5).json().get('data', {})
+            if isinstance(r, dict) and r.get('price'):
+                ex_prices['KuCoin Spot'] = float(r['price'])
+        except: pass
 
-    try:
-        r = requests.get(f"https://api.gateio.ws/api/v4/futures/usdt/tickers?contract={base_sym}_USDT", timeout=2).json()
-        if isinstance(r, list) and len(r) > 0:
-            ex_prices['Gate'] = float(r[0]['last'])
-            ex_vols['Gate'] = float(r[0].get('total_size', 0)) * float(r[0]['last'])
-    except: pass
+    def _gate():
+        try:
+            r = requests.get(f"https://api.gateio.ws/api/v4/futures/usdt/tickers?contract={base_sym}_USDT", timeout=2.5).json()
+            if isinstance(r, list) and len(r) > 0:
+                ex_prices['Gate Fut'] = float(r[0]['last'])
+                ex_vols['Gate Fut'] = float(r[0].get('total_size', 0)) * float(r[0]['last'])
+        except: pass
+        try:
+            r = requests.get(f"https://api.gateio.ws/api/v4/spot/tickers?currency_pair={base_sym}_USDT", timeout=2.5).json()
+            if isinstance(r, list) and len(r) > 0 and r[0].get('last'):
+                ex_prices['Gate Spot'] = float(r[0]['last'])
+                ex_vols['Gate Spot'] = float(r[0].get('quote_volume', 0))
+        except: pass
 
-    try:
-        r = requests.get(f"https://www.okx.com/api/v5/market/ticker?instId={base_sym}-USDT-SWAP", timeout=2).json().get('data', [])
-        if r:
-            ex_prices['OKX'] = float(r[0]['last'])
-            ex_vols['OKX'] = float(r[0].get('volCcy24h', 0))
-    except: pass
+    def _okx():
+        try:
+            r = requests.get(f"https://www.okx.com/api/v5/market/ticker?instId={base_sym}-USDT-SWAP", timeout=2.5).json().get('data', [])
+            if r:
+                ex_prices['OKX Fut'] = float(r[0]['last'])
+                ex_vols['OKX Fut'] = float(r[0].get('volCcy24h', 0))
+        except: pass
+        try:
+            r = requests.get(f"https://www.okx.com/api/v5/market/ticker?instId={base_sym}-USDT", timeout=2.5).json().get('data', [])
+            if r:
+                ex_prices['OKX Spot'] = float(r[0]['last'])
+                ex_vols['OKX Spot'] = float(r[0].get('volCcy24h', 0))
+        except: pass
 
-    try:
-        r = requests.get(f"https://contract.mexc.com/api/v1/contract/ticker?symbol={base_sym}_USDT", timeout=2).json().get('data', {})
-        if isinstance(r, dict) and 'lastPrice' in r:
-            ex_prices['MEXC'] = float(r['lastPrice'])
-            ex_vols['MEXC'] = float(r.get('amount24h', 0)) * float(r['lastPrice'])
-    except: pass
+    def _mexc():
+        try:
+            r = requests.get(f"https://contract.mexc.com/api/v1/contract/ticker?symbol={base_sym}_USDT", timeout=2.5).json().get('data', {})
+            if isinstance(r, dict) and 'lastPrice' in r:
+                ex_prices['MEXC Fut'] = float(r['lastPrice'])
+                ex_vols['MEXC Fut'] = float(r.get('amount24h', 0)) * float(r['lastPrice'])
+        except: pass
+        try:
+            r = requests.get(f"https://api.mexc.com/api/v3/ticker/24hr?symbol={base_sym}USDT", timeout=2.5).json()
+            if isinstance(r, dict) and r.get('lastPrice'):
+                ex_prices['MEXC Spot'] = float(r['lastPrice'])
+                ex_vols['MEXC Spot'] = float(r.get('quoteVolume', 0))
+        except: pass
 
-    try:
-        r = requests.get(f"https://api.bitget.com/api/v2/mix/market/ticker?symbol={base_sym}USDT&productType=USDT-FUTURES", timeout=2).json().get('data', [])
-        if r:
-            ex_prices['Bitget'] = float(r[0]['lastPr'])
-            ex_vols['Bitget'] = float(r.get('quoteVolume', 0))
-    except: pass
+    def _bitget():
+        try:
+            r = requests.get(f"https://api.bitget.com/api/v2/mix/market/ticker?symbol={base_sym}USDT&productType=USDT-FUTURES", timeout=2.5).json().get('data', [])
+            if r:
+                ex_prices['Bitget Fut'] = float(r[0]['lastPr'])
+                ex_vols['Bitget Fut'] = float(r[0].get('quoteVolume', 0))
+        except: pass
+        try:
+            r = requests.get(f"https://api.bitget.com/api/v2/spot/market/tickers?symbol={base_sym}USDT", timeout=2.5).json().get('data', [])
+            if r:
+                ex_prices['Bitget Spot'] = float(r[0]['lastPr'])
+                ex_vols['Bitget Spot'] = float(r[0].get('quoteVolume', 0))
+        except: pass
+
+    def _bingx():
+        try:
+            r = requests.get(f"https://open-api.bingx.com/openApi/swap/v2/quote/ticker?symbol={base_sym}-USDT", timeout=2.5).json().get('data', {})
+            if isinstance(r, dict) and r.get('lastPrice'):
+                ex_prices['BingX Fut'] = float(r['lastPrice'])
+                ex_vols['BingX Fut'] = float(r.get('volume', 0))
+        except: pass
+        try:
+            r = requests.get(f"https://open-api.bingx.com/openApi/spot/v1/ticker/24hr?symbol={base_sym}-USDT", timeout=2.5).json().get('data', [])
+            if isinstance(r, list) and len(r) > 0 and r[0].get('lastPrice'):
+                ex_prices['BingX Spot'] = float(r[0]['lastPrice'])
+                ex_vols['BingX Spot'] = float(r[0].get('quoteVolume', 0))
+        except: pass
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futs = [pool.submit(fn) for fn in (_bin, _byb, _kuc, _gate, _okx, _mexc, _bitget, _bingx)]
+        for f in as_completed(futs):
+            try: f.result()
+            except: pass
 
     return ex_prices, ex_vols
 
 def fetch_binance_alpha_price(token_query):
     if not token_query:
         return 0.0
-    base_target = normalize_symbol(token_query)
+    base_target, _ = parse_normalized_symbol(token_query)
     ex_prices, _ = fetch_token_prices_on_demand(base_target)
     valid = [p for p in ex_prices.values() if p > 0]
     return valid[0] if valid else 0.0
@@ -414,22 +514,37 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-def get_exchange_url(exchange, symbol="BTCUSDT"):
-    base_sym = normalize_symbol(symbol)
-    ex_upper = exchange.upper()
-    links = {
+def get_exchange_url(exchange, symbol="BTCUSDT", market_type="Fut"):
+    base_sym, _ = parse_normalized_symbol(symbol)
+    ex_name, parsed_m = split_venue_key(exchange)
+    m_type = parsed_m if " " in exchange else market_type
+    ex_upper = ex_name.upper()
+    is_spot = m_type.lower().startswith("spot")
+
+    if is_spot:
+        spot_links = {
+            "BINANCE": f"https://www.binance.com/en/trade/{base_sym}_USDT",
+            "BYBIT": f"https://www.bybit.com/en/trade/spot/{base_sym}/USDT",
+            "OKX": f"https://www.okx.com/trade-spot/{base_sym.lower()}-usdt",
+            "GATE": f"https://www.gate.io/trade/{base_sym}_USDT",
+            "BITGET": f"https://www.bitget.com/spot/{base_sym}USDT",
+            "MEXC": f"https://www.mexc.com/exchange/{base_sym}_USDT",
+            "BINGX": f"https://bingx.com/en/spot/{base_sym}USDT",
+            "KUCOIN": f"https://www.kucoin.com/trade/{base_sym}-USDT"
+        }
+        return spot_links.get(ex_upper, None)
+
+    fut_links = {
         "BINANCE": f"https://www.binance.com/en/futures/{base_sym}USDT",
-        "BYBIT": "https://www.bybit.com",
+        "BYBIT": f"https://www.bybit.com/trade/usdt/{base_sym}USDT",
         "OKX": f"https://www.okx.com/trade-swap/{base_sym.lower()}-usdt-swap",
         "GATE": f"https://www.gate.io/futures/USDT/{base_sym}_USDT",
         "BITGET": f"https://www.bitget.com/futures/usdt/{base_sym}USDT",
         "MEXC": f"https://futures.mexc.com/exchange/{base_sym}_USDT",
         "BINGX": f"https://bingx.com/en/futures/forward/{base_sym}USDT",
-        "KUCOIN": f"https://www.kucoin.com/futures/trade/{base_sym}USDTM",
-        "KRAKEN": "https://futures.kraken.com",
-        "OURBIT": f"https://www.ourbit.com/futures/trade/{base_sym}_USDT"
+        "KUCOIN": f"https://www.kucoin.com/futures/trade/{base_sym}USDTM"
     }
-    return links.get(ex_upper, None)
+    return fut_links.get(ex_upper, None)
 
 latest_prices_cache = {}
 
@@ -508,7 +623,7 @@ def extract_official_web_link(msg_element, fallback_link):
         buttons = msg_element.find_all('a', class_='tgme_widget_message_inline_button')
         for btn in buttons:
             href = btn.get('href', '')
-            if href and any(domain in href.lower() for domain in ['binance.com', 'bybit.com', 'okx.com', 'gate.io', 'gate.com', 'bitget.com', 'mexc.com', 'bingx.com', 'kucoin.com', 'kraken.com']):
+            if href and any(domain in href.lower() for domain in ['binance.com', 'bybit.com', 'okx.com', 'gate.io', 'gate.com', 'bitget.com', 'mexc.com', 'bingx.com', 'kucoin.com']):
                 return href
 
         text_elem = msg_element.find('div', class_='tgme_widget_message_text')
@@ -516,7 +631,7 @@ def extract_official_web_link(msg_element, fallback_link):
             links = text_elem.find_all('a', href=True)
             for a in links:
                 href = a['href']
-                if href and any(domain in href.lower() for domain in ['binance.com', 'bybit.com', 'okx.com', 'gate.io', 'gate.com', 'bitget.com', 'mexc.com', 'bingx.com', 'kucoin.com', 'kraken.com']):
+                if href and any(domain in href.lower() for domain in ['binance.com', 'bybit.com', 'okx.com', 'gate.io', 'gate.com', 'bitget.com', 'mexc.com', 'bingx.com', 'kucoin.com']):
                     return href
     except: pass
     return fallback_link
@@ -598,11 +713,6 @@ def fetch_telegram_channels_promos():
             "channels": ["BingXOfficial", "BingXAnnouncement", "BingXEnglish", "BingXRussianAnnouncements"],
             "web3_channels": [],
             "topic": "BINGX"
-        },
-        "KRAKEN": {
-            "channels": ["kraken_announcements"],
-            "web3_channels": [],
-            "topic": "KRAKEN"
         }
     }
 
@@ -805,171 +915,327 @@ def fetch_global_crypto_promos():
             print(f"Global RSS Error: {e}")
         time.sleep(900)
 
-# ==================== ADVANCED ORDERBOOK & MOMENTUM ENGINE ====================
-def fetch_futures_data():
+# ==================== PARALLEL FUTURES + SPOT MARKET ENGINE ====================
+def _record_quote(bids, asks, volumes, sym, venue, bid_p, ask_p, vol_24h, mult=1.0):
+    if not sym or mult <= 0:
+        return
+    b = float(bid_p or 0.0) / mult
+    a = float(ask_p or 0.0) / mult
+    if b <= 0 and a > 0:
+        b = a
+    elif a <= 0 and b > 0:
+        a = b
+    if b <= 0 or a <= 0:
+        return
+
+    bids.setdefault(sym, {})[venue] = b
+    asks.setdefault(sym, {})[venue] = a
+    if vol_24h is not None:
+        volumes.setdefault(sym, {})[venue] = max(volumes.get(sym, {}).get(venue, 0.0), float(vol_24h or 0.0))
+
+def fetch_futures_data(include_spot=True):
     global latest_prices_cache
     bids, asks, volumes, fundings, funding_times = {}, {}, {}, {}, {}
 
-    try:
-        r = requests.get("https://fapi.binance.com/fapi/v1/ticker/bookTicker", timeout=3).json()
-        for item in r:
-            sym = normalize_symbol(item['symbol'])
-            if sym:
-                bids.setdefault(sym, {})['Binance'] = float(item['bidPrice'])
-                asks.setdefault(sym, {})['Binance'] = float(item['askPrice'])
-    except Exception: pass
+    def _poll_binance():
+        v_fut = make_venue_key("Binance", "Fut")
+        try:
+            book_map = {}
+            r_book = requests.get("https://fapi.binance.com/fapi/v1/ticker/bookTicker", timeout=4).json()
+            if isinstance(r_book, list):
+                for item in r_book:
+                    book_map[item.get('symbol', '')] = (item.get('bidPrice'), item.get('askPrice'))
 
-    try:
-        r = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=3).json()
-        for item in r:
-            sym = normalize_symbol(item['symbol'])
-            if sym:
-                volumes.setdefault(sym, {})['Binance'] = float(item['quoteVolume'])
-    except Exception: pass
+            r_24 = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=4).json()
+            if isinstance(r_24, list):
+                for item in r_24:
+                    raw_s = item.get('symbol', '')
+                    if not raw_s.endswith("USDT"):
+                        continue
+                    sym, mult = parse_normalized_symbol(raw_s)
+                    b_raw, a_raw = book_map.get(raw_s, (item.get('lastPrice'), item.get('lastPrice')))
+                    _record_quote(bids, asks, volumes, sym, v_fut, b_raw, a_raw, item.get('quoteVolume', 0.0), mult)
+        except Exception: pass
 
-    try:
-        r = requests.get("https://fapi.binance.com/fapi/v1/premiumIndex", timeout=3).json()
-        for item in r:
-            sym = normalize_symbol(item['symbol'])
-            if sym:
-                fundings.setdefault(sym, {})['Binance'] = float(item['lastFundingRate']) * 100
-                next_time = int(item.get('nextFundingTime', 0)) // 1000
-                if next_time > 0: funding_times.setdefault(sym, {})['Binance'] = next_time
-    except Exception: pass
+        try:
+            r_prem = requests.get("https://fapi.binance.com/fapi/v1/premiumIndex", timeout=4).json()
+            if isinstance(r_prem, list):
+                for item in r_prem:
+                    sym, _ = parse_normalized_symbol(item.get('symbol', ''))
+                    if sym:
+                        fundings.setdefault(sym, {})[v_fut] = float(item.get('lastFundingRate', 0.0)) * 100
+                        next_time = int(item.get('nextFundingTime', 0)) // 1000
+                        if next_time > 0:
+                            funding_times.setdefault(sym, {})[v_fut] = next_time
+        except Exception: pass
 
-    try:
-        r = requests.get("https://api.bybit.com/v5/market/tickers?category=linear", timeout=3).json().get('result', {}).get('list', [])
-        for item in r:
-            sym = normalize_symbol(item['symbol'])
-            if sym:
-                if item.get('bid1Price') and item.get('ask1Price'):
-                    bids.setdefault(sym, {})['Bybit'] = float(item['bid1Price'])
-                    asks.setdefault(sym, {})['Bybit'] = float(item['ask1Price'])
-                elif item.get('lastPrice'):
-                    p = float(item['lastPrice'])
-                    bids.setdefault(sym, {})['Bybit'] = p
-                    asks.setdefault(sym, {})['Bybit'] = p
+        if include_spot:
+            v_spot = make_venue_key("Binance", "Spot")
+            try:
+                r_s = requests.get("https://api.binance.com/api/v3/ticker/24hr", timeout=4).json()
+                if isinstance(r_s, list):
+                    for item in r_s:
+                        raw_s = item.get('symbol', '')
+                        if not raw_s.endswith("USDT"):
+                            continue
+                        sym, mult = parse_normalized_symbol(raw_s)
+                        _record_quote(bids, asks, volumes, sym, v_spot, item.get('bidPrice') or item.get('lastPrice'), item.get('askPrice') or item.get('lastPrice'), item.get('quoteVolume', 0.0), mult)
+            except Exception: pass
 
-                volumes.setdefault(sym, {})['Bybit'] = float(item.get('turnover24h', 0))
-                if item.get('fundingRate'):
-                    fundings.setdefault(sym, {})['Bybit'] = float(item['fundingRate']) * 100
+    def _poll_bybit():
+        v_fut = make_venue_key("Bybit", "Fut")
+        try:
+            r = requests.get("https://api.bybit.com/v5/market/tickers?category=linear", timeout=4).json().get('result', {}).get('list', [])
+            for item in r:
+                raw_s = item.get('symbol', '')
+                if not raw_s.endswith("USDT"):
+                    continue
+                sym, mult = parse_normalized_symbol(raw_s)
+                lp = item.get('lastPrice')
+                _record_quote(bids, asks, volumes, sym, v_fut, item.get('bid1Price') or lp, item.get('ask1Price') or lp, item.get('turnover24h', 0.0), mult)
+                if sym and item.get('fundingRate') not in (None, ""):
+                    fundings.setdefault(sym, {})[v_fut] = float(item['fundingRate']) * 100
                     next_time = int(item.get('nextFundingTime', 0)) // 1000
-                    if next_time > 0: funding_times.setdefault(sym, {})['Bybit'] = next_time
-    except Exception: pass
+                    if next_time > 0:
+                        funding_times.setdefault(sym, {})[v_fut] = next_time
+        except Exception: pass
 
-    try:
-        r = requests.get("https://www.okx.com/api/v5/market/tickers?instType=SWAP", timeout=3).json().get('data', [])
-        for item in r:
-            sym = normalize_symbol(item['instId'])
-            if sym:
-                if item.get('bidPx') and item.get('askPx'):
-                    bids.setdefault(sym, {})['OKX'] = float(item['bidPx'])
-                    asks.setdefault(sym, {})['OKX'] = float(item['askPx'])
-                elif item.get('last'):
-                    p = float(item['last'])
-                    bids.setdefault(sym, {})['OKX'] = p
-                    asks.setdefault(sym, {})['OKX'] = p
-                volumes.setdefault(sym, {})['OKX'] = float(item.get('volCcy24h', 0))
-    except Exception: pass
+        if include_spot:
+            v_spot = make_venue_key("Bybit", "Spot")
+            try:
+                r = requests.get("https://api.bybit.com/v5/market/tickers?category=spot", timeout=4).json().get('result', {}).get('list', [])
+                for item in r:
+                    raw_s = item.get('symbol', '')
+                    if not raw_s.endswith("USDT"):
+                        continue
+                    sym, mult = parse_normalized_symbol(raw_s)
+                    lp = item.get('lastPrice')
+                    _record_quote(bids, asks, volumes, sym, v_spot, item.get('bid1Price') or lp, item.get('ask1Price') or lp, item.get('turnover24h', 0.0), mult)
+            except Exception: pass
 
-    try:
-        r = requests.get("https://api.okx.com/api/v5/public/funding-rate-all", timeout=3).json().get('data', [])
-        for item in r:
-            sym = normalize_symbol(item['instId'])
-            if sym and item.get('fundingRate'):
-                fundings.setdefault(sym, {})['OKX'] = float(item['fundingRate']) * 100
-                next_time = int(item.get('nextFundingTime', 0)) // 1000
-                if next_time > 0: funding_times.setdefault(sym, {})['OKX'] = next_time
-    except Exception: pass
+    def _poll_okx():
+        v_fut = make_venue_key("OKX", "Fut")
+        try:
+            r = requests.get("https://www.okx.com/api/v5/market/tickers?instType=SWAP", timeout=4).json().get('data', [])
+            for item in r:
+                inst = item.get('instId', '')
+                if not inst.endswith("-USDT-SWAP"):
+                    continue
+                sym, mult = parse_normalized_symbol(inst)
+                lp = item.get('last')
+                _record_quote(bids, asks, volumes, sym, v_fut, item.get('bidPx') or lp, item.get('askPx') or lp, item.get('volCcy24h', 0.0), mult)
+        except Exception: pass
 
-    try:
-        r = requests.get("https://api.gateio.ws/api/v4/futures/usdt/tickers", timeout=3).json()
-        for item in r:
-            sym = normalize_symbol(item['contract'])
-            if sym:
-                if item.get('highest_bid') and item.get('lowest_ask'):
-                    bids.setdefault(sym, {})['Gate'] = float(item['highest_bid'])
-                    asks.setdefault(sym, {})['Gate'] = float(item['lowest_ask'])
-                elif item.get('last'):
-                    p = float(item['last'])
-                    bids.setdefault(sym, {})['Gate'] = p
-                    asks.setdefault(sym, {})['Gate'] = p
-                volumes.setdefault(sym, {})['Gate'] = float(item.get('total_size', 0)) * float(item.get('last', 0))
-                if 'funding_rate' in item:
-                    fundings.setdefault(sym, {})['Gate'] = float(item['funding_rate']) * 100
-                    next_time = int(item.get('funding_next_time', 0))
-                    if next_time > 0: funding_times.setdefault(sym, {})['Gate'] = next_time
-    except Exception: pass
-
-    try:
-        r = requests.get("https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES", timeout=3).json().get('data', [])
-        for item in r:
-            sym = normalize_symbol(item['symbol'])
-            if sym:
-                if item.get('bidPr') and item.get('askPr'):
-                    bids.setdefault(sym, {})['Bitget'] = float(item['bidPr'])
-                    asks.setdefault(sym, {})['Bitget'] = float(item['askPr'])
-                elif item.get('lastPr'):
-                    p = float(item['lastPr'])
-                    bids.setdefault(sym, {})['Bitget'] = p
-                    asks.setdefault(sym, {})['Bitget'] = p
-                volumes.setdefault(sym, {})['Bitget'] = float(item.get('quoteVolume', 0))
-                if item.get('fundingRate'):
-                    fundings.setdefault(sym, {})['Bitget'] = float(item['fundingRate']) * 100
+        try:
+            r_f = requests.get("https://www.okx.com/api/v5/public/funding-rate-all", timeout=4).json().get('data', [])
+            for item in r_f:
+                sym, _ = parse_normalized_symbol(item.get('instId', ''))
+                if sym and item.get('fundingRate') not in (None, ""):
+                    fundings.setdefault(sym, {})[v_fut] = float(item['fundingRate']) * 100
                     next_time = int(item.get('nextFundingTime', 0)) // 1000
-                    if next_time > 0: funding_times.setdefault(sym, {})['Bitget'] = next_time
-    except Exception: pass
+                    if next_time > 0:
+                        funding_times.setdefault(sym, {})[v_fut] = next_time
+        except Exception: pass
 
-    try:
-        r = requests.get("https://contract.mexc.com/api/v1/contract/ticker", timeout=3).json().get('data', [])
-        for item in r:
-            sym = normalize_symbol(item['symbol'])
-            if sym:
-                p = float(item.get('lastPrice', 0))
-                bids.setdefault(sym, {})['MEXC'] = float(item.get('bid1', p))
-                asks.setdefault(sym, {})['MEXC'] = float(item.get('ask1', p))
-                volumes.setdefault(sym, {})['MEXC'] = float(item.get('amount24h', 0)) * p
-                if 'fundingRate' in item:
-                    fundings.setdefault(sym, {})['MEXC'] = float(item['fundingRate']) * 100
-                    next_time = int(item.get('nextSettleTime', 0)) // 1000
-                    if next_time > 0: funding_times.setdefault(sym, {})['MEXC'] = next_time
-    except Exception: pass
+        if include_spot:
+            v_spot = make_venue_key("OKX", "Spot")
+            try:
+                r = requests.get("https://www.okx.com/api/v5/market/tickers?instType=SPOT", timeout=4).json().get('data', [])
+                for item in r:
+                    inst = item.get('instId', '')
+                    if not inst.endswith("-USDT"):
+                        continue
+                    sym, mult = parse_normalized_symbol(inst)
+                    lp = item.get('last')
+                    _record_quote(bids, asks, volumes, sym, v_spot, item.get('bidPx') or lp, item.get('askPx') or lp, item.get('volCcy24h', 0.0), mult)
+            except Exception: pass
 
-    try:
-        r = requests.get("https://open-api.bingx.com/openApi/swap/v2/quote/ticker", timeout=3).json().get('data', [])
-        for item in r:
-            sym = normalize_symbol(item['symbol'])
-            if sym:
-                p = float(item.get('lastPrice', 0))
-                bids.setdefault(sym, {})['BingX'] = float(item.get('bidPrice', p))
-                asks.setdefault(sym, {})['BingX'] = float(item.get('askPrice', p))
-                volumes.setdefault(sym, {})['BingX'] = float(item.get('volume', 0))
-    except Exception: pass
+    def _poll_gate():
+        v_fut = make_venue_key("Gate", "Fut")
+        try:
+            r = requests.get("https://api.gateio.ws/api/v4/futures/usdt/tickers", timeout=4).json()
+            if isinstance(r, list):
+                for item in r:
+                    contract = item.get('contract', '')
+                    if not contract.endswith("_USDT"):
+                        continue
+                    sym, mult = parse_normalized_symbol(contract)
+                    lp = float(item.get('last') or 0.0)
+                    vol_usdt = float(item.get('total_size') or 0.0) * lp
+                    _record_quote(bids, asks, volumes, sym, v_fut, item.get('highest_bid') or lp, item.get('lowest_ask') or lp, vol_usdt, mult)
+                    if sym and 'funding_rate' in item and item['funding_rate'] is not None:
+                        fundings.setdefault(sym, {})[v_fut] = float(item['funding_rate']) * 100
+                        next_time = int(item.get('funding_next_time', 0) or 0)
+                        if next_time > 0:
+                            funding_times.setdefault(sym, {})[v_fut] = next_time
+        except Exception: pass
 
-    try:
-        r = requests.get("https://open-api.bingx.com/openApi/swap/v2/quote/premiumIndex", timeout=3).json().get('data', [])
-        for item in r:
-            sym = normalize_symbol(item['symbol'])
-            if sym and 'lastFundingRate' in item:
-                fundings.setdefault(sym, {})['BingX'] = float(item['lastFundingRate']) * 100
-                next_time = int(item.get('nextFundingTime', 0)) // 1000
-                if next_time > 0: funding_times.setdefault(sym, {})['BingX'] = next_time
-    except Exception: pass
+        if include_spot:
+            v_spot = make_venue_key("Gate", "Spot")
+            try:
+                r = requests.get("https://api.gateio.ws/api/v4/spot/tickers", timeout=4).json()
+                if isinstance(r, list):
+                    for item in r:
+                        pair = item.get('currency_pair', '')
+                        if not pair.endswith("_USDT"):
+                            continue
+                        sym, mult = parse_normalized_symbol(pair)
+                        lp = item.get('last')
+                        _record_quote(bids, asks, volumes, sym, v_spot, item.get('highest_bid') or lp, item.get('lowest_ask') or lp, item.get('quote_volume', 0.0), mult)
+            except Exception: pass
 
-    try:
-        r = requests.get("https://api-futures.kucoin.com/api/v1/contracts/active", timeout=3).json().get('data', [])
-        for item in r:
-            sym = normalize_symbol(item['symbol'])
-            if sym and 'lastTradePrice' in item:
-                p = float(item['lastTradePrice'])
-                bids.setdefault(sym, {})['KuCoin'] = p
-                asks.setdefault(sym, {})['KuCoin'] = p
-                volumes.setdefault(sym, {})['KuCoin'] = float(item.get('turnoverOf24h', 0))
-                if 'fundingFeeRate' in item:
-                    fundings.setdefault(sym, {})['KuCoin'] = float(item['fundingFeeRate']) * 100
-                    next_time = int(item.get('nextFundingRateTime', 0)) // 1000
-                    if next_time > 0: funding_times.setdefault(sym, {})['KuCoin'] = next_time
-    except Exception: pass
+    def _poll_bitget():
+        v_fut = make_venue_key("Bitget", "Fut")
+        try:
+            r = requests.get("https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES", timeout=4).json().get('data', [])
+            for item in r:
+                raw_s = item.get('symbol', '')
+                if not raw_s.endswith("USDT"):
+                    continue
+                sym, mult = parse_normalized_symbol(raw_s)
+                lp = item.get('lastPr')
+                _record_quote(bids, asks, volumes, sym, v_fut, item.get('bidPr') or lp, item.get('askPr') or lp, item.get('quoteVolume', 0.0), mult)
+                if sym and item.get('fundingRate') not in (None, ""):
+                    fundings.setdefault(sym, {})[v_fut] = float(item['fundingRate']) * 100
+                    next_time = int(item.get('nextFundingTime', 0) or 0) // 1000
+                    if next_time > 0:
+                        funding_times.setdefault(sym, {})[v_fut] = next_time
+        except Exception: pass
+
+        if include_spot:
+            v_spot = make_venue_key("Bitget", "Spot")
+            try:
+                r = requests.get("https://api.bitget.com/api/v2/spot/market/tickers", timeout=4).json().get('data', [])
+                for item in r:
+                    raw_s = item.get('symbol', '')
+                    if not raw_s.endswith("USDT"):
+                        continue
+                    sym, mult = parse_normalized_symbol(raw_s)
+                    lp = item.get('lastPr')
+                    _record_quote(bids, asks, volumes, sym, v_spot, item.get('bidPr') or lp, item.get('askPr') or lp, item.get('quoteVolume', 0.0), mult)
+            except Exception: pass
+
+    def _poll_mexc():
+        v_fut = make_venue_key("MEXC", "Fut")
+        try:
+            r = requests.get("https://contract.mexc.com/api/v1/contract/ticker", timeout=4).json().get('data', [])
+            if isinstance(r, list):
+                for item in r:
+                    raw_s = item.get('symbol', '')
+                    if not raw_s.endswith("_USDT"):
+                        continue
+                    sym, mult = parse_normalized_symbol(raw_s)
+                    lp = float(item.get('lastPrice') or 0.0)
+                    vol_usdt = float(item.get('amount24h') or 0.0) * lp
+                    _record_quote(bids, asks, volumes, sym, v_fut, item.get('bid1') or lp, item.get('ask1') or lp, vol_usdt, mult)
+                    if sym and 'fundingRate' in item and item['fundingRate'] is not None:
+                        fundings.setdefault(sym, {})[v_fut] = float(item['fundingRate']) * 100
+                        next_time = int(item.get('nextSettleTime', 0) or 0) // 1000
+                        if next_time > 0:
+                            funding_times.setdefault(sym, {})[v_fut] = next_time
+        except Exception: pass
+
+        if include_spot:
+            v_spot = make_venue_key("MEXC", "Spot")
+            try:
+                r = requests.get("https://api.mexc.com/api/v3/ticker/24hr", timeout=4).json()
+                if isinstance(r, list):
+                    for item in r:
+                        raw_s = item.get('symbol', '')
+                        if not raw_s.endswith("USDT"):
+                            continue
+                        sym, mult = parse_normalized_symbol(raw_s)
+                        lp = item.get('lastPrice')
+                        _record_quote(bids, asks, volumes, sym, v_spot, item.get('bidPrice') or lp, item.get('askPrice') or lp, item.get('quoteVolume', 0.0), mult)
+            except Exception: pass
+
+    def _poll_bingx():
+        v_fut = make_venue_key("BingX", "Fut")
+        try:
+            r = requests.get("https://open-api.bingx.com/openApi/swap/v2/quote/ticker", timeout=4).json().get('data', [])
+            if isinstance(r, list):
+                for item in r:
+                    raw_s = item.get('symbol', '')
+                    if not raw_s.endswith("-USDT"):
+                        continue
+                    sym, mult = parse_normalized_symbol(raw_s)
+                    lp = item.get('lastPrice')
+                    _record_quote(bids, asks, volumes, sym, v_fut, item.get('bidPrice') or lp, item.get('askPrice') or lp, item.get('volume', 0.0), mult)
+        except Exception: pass
+
+        try:
+            r_p = requests.get("https://open-api.bingx.com/openApi/swap/v2/quote/premiumIndex", timeout=4).json().get('data', [])
+            if isinstance(r_p, list):
+                for item in r_p:
+                    sym, _ = parse_normalized_symbol(item.get('symbol', ''))
+                    if sym and 'lastFundingRate' in item and item['lastFundingRate'] is not None:
+                        fundings.setdefault(sym, {})[v_fut] = float(item['lastFundingRate']) * 100
+                        next_time = int(item.get('nextFundingTime', 0) or 0) // 1000
+                        if next_time > 0:
+                            funding_times.setdefault(sym, {})[v_fut] = next_time
+        except Exception: pass
+
+        if include_spot:
+            v_spot = make_venue_key("BingX", "Spot")
+            try:
+                r = requests.get("https://open-api.bingx.com/openApi/spot/v1/ticker/24hr", timeout=4).json().get('data', [])
+                if isinstance(r, list):
+                    for item in r:
+                        raw_s = item.get('symbol', '')
+                        if not raw_s.endswith("-USDT"):
+                            continue
+                        sym, mult = parse_normalized_symbol(raw_s)
+                        lp = item.get('lastPrice')
+                        _record_quote(bids, asks, volumes, sym, v_spot, item.get('bidPrice') or lp, item.get('askPrice') or lp, item.get('quoteVolume', 0.0), mult)
+            except Exception: pass
+
+    def _poll_kucoin():
+        v_fut = make_venue_key("KuCoin", "Fut")
+        try:
+            r = requests.get("https://api-futures.kucoin.com/api/v1/contracts/active", timeout=4).json().get('data', [])
+            if isinstance(r, list):
+                for item in r:
+                    raw_s = item.get('symbol', '')
+                    if not raw_s.endswith("USDTM"):
+                        continue
+                    sym, mult = parse_normalized_symbol(raw_s)
+                    lp = float(item.get('lastTradePrice') or 0.0)
+                    _record_quote(bids, asks, volumes, sym, v_fut, item.get('bestBidPrice') or lp, item.get('bestAskPrice') or lp, item.get('turnoverOf24h', 0.0), mult)
+                    if sym and 'fundingFeeRate' in item and item['fundingFeeRate'] is not None:
+                        fundings.setdefault(sym, {})[v_fut] = float(item['fundingFeeRate']) * 100
+                        next_time = int(item.get('nextFundingRateTime', 0) or 0) // 1000
+                        if next_time > 0:
+                            funding_times.setdefault(sym, {})[v_fut] = next_time
+        except Exception: pass
+
+        if include_spot:
+            v_spot = make_venue_key("KuCoin", "Spot")
+            try:
+                r = requests.get("https://api.kucoin.com/api/v1/market/allTickers", timeout=4).json().get('data', {}).get('ticker', [])
+                if isinstance(r, list):
+                    for item in r:
+                        raw_s = item.get('symbol', '')
+                        if not raw_s.endswith("-USDT"):
+                            continue
+                        sym, mult = parse_normalized_symbol(raw_s)
+                        lp = item.get('last')
+                        _record_quote(bids, asks, volumes, sym, v_spot, item.get('buy') or lp, item.get('sell') or lp, item.get('volValue', 0.0), mult)
+            except Exception: pass
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futs = [
+            pool.submit(_poll_binance),
+            pool.submit(_poll_bybit),
+            pool.submit(_poll_okx),
+            pool.submit(_poll_gate),
+            pool.submit(_poll_bitget),
+            pool.submit(_poll_mexc),
+            pool.submit(_poll_bingx),
+            pool.submit(_poll_kucoin)
+        ]
+        for f in as_completed(futs):
+            try: f.result()
+            except: pass
 
     for sym, b_dict in bids.items():
         if b_dict:
@@ -1055,8 +1321,8 @@ def monitor_spread():
 
     live_spread_posts = {}
     pending_spreads = {}      # Буфер подтверждения вектора входа
-    symbol_cooldowns = {}     # Кулдаун монеты на новые входы после закрытия
-    quote_stale_tracker = {}  # Трекер залипших котировок по (sym -> ex)
+    pair_cooldowns = {}         # Кулдаун на конкретную связку (chart_key) после закрытия
+    quote_stale_tracker = {}  # Трекер залипших котировок по (sym -> venue)
 
     while True:
         if not spread_monitor_enabled:
@@ -1067,13 +1333,13 @@ def monitor_spread():
             continue
 
         try:
-            bids, asks, volumes, fundings, _ = fetch_futures_data()
+            bids, asks, volumes, fundings, _ = fetch_futures_data(include_spot=True)
             curr_time_str = get_kyiv_time()
             now_ts = int(time.time())
 
-            symbol_cooldowns = {
-                sym: ts for sym, ts in symbol_cooldowns.items()
-                if (now_ts - ts) < SYMBOL_COOLDOWN_SECONDS
+            pair_cooldowns = {
+                ck: ts for ck, ts in pair_cooldowns.items()
+                if (now_ts - ts) < PAIR_COOLDOWN_SECONDS
             }
 
             all_symbols = set(bids.keys()).union(set(asks.keys()))
@@ -1102,7 +1368,6 @@ def monitor_spread():
                     post_info["last_live_spread"] = live_spread
                     close_reason = "converged"
                 else:
-                    # Защита от мгновенного закрытия из-за битого/нулевого/пропавшего тика
                     post_info["missing_count"] = post_info.get("missing_count", 0) + 1
                     post_info["close_confirm_count"] = 0
                     if post_info["missing_count"] < CLOSE_MISSING_LIMIT:
@@ -1122,8 +1387,8 @@ def monitor_spread():
                                 "max_p": p_short_hold,
                                 "spread": sp_hold,
                                 "max_pos_usdt": max_pos_usdt,
-                                "valid_bids": {k: v for k, v in clean_b.items() if sym_vols.get(k, 0) >= 15_000},
-                                "valid_asks": {k: v for k, v in clean_a.items() if sym_vols.get(k, 0) >= 15_000},
+                                "valid_bids": {k: v for k, v in clean_b.items() if sym_vols.get(k, 0) >= MIN_EXCHANGE_VOL_USDT},
+                                "valid_asks": {k: v for k, v in clean_a.items() if sym_vols.get(k, 0) >= MIN_EXCHANGE_VOL_USDT},
                                 "sym_vols": sym_vols,
                                 "fundings": fundings,
                                 "in_hysteresis": True
@@ -1147,7 +1412,7 @@ def monitor_spread():
                 )
 
                 if should_close:
-                    symbol_cooldowns[sym_name] = now_ts
+                    pair_cooldowns[chart_key] = now_ts
 
                     p_long_close = b_val if b_val > 0 else post_info.get("last_long_p", 0.0)
                     p_short_close = a_val if a_val > 0 else post_info.get("last_short_p", 0.0)
@@ -1161,7 +1426,7 @@ def monitor_spread():
                             f"🟢 {long_ex}: `${p_long_close}` | 🔴 {short_ex}: `${p_short_close}`{close_sp_line}\n"
                         )
 
-                    cooldown_mins = SYMBOL_COOLDOWN_SECONDS // 60
+                    cooldown_mins = PAIR_COOLDOWN_SECONDS // 60
                     if close_reason == "converged":
                         header_text = "🟢 **СПРЕД СОШЕЛСЯ / ЗАКРЫТИЕ СДЕЛКИ**"
                         reason_text = f"🎯 Спред схлопнулся ниже `{SPREAD_CLOSE_THRESHOLD:.2f}%`. Позицию можно закрывать и фиксировать результат!"
@@ -1174,7 +1439,7 @@ def monitor_spread():
                         f"🪙 **#{sym_name}** (Long: `{long_ex}` | Short: `{short_ex}`)\n"
                         f"{prices_close_str}\n"
                         f"{reason_text}\n"
-                        f"⏸ _Монета поставлена на паузу ({cooldown_mins} мин) от повторных сигналов._\n\n"
+                        f"⏸ _Связка поставлена на паузу ({cooldown_mins} мин) от повторных сигналов._\n\n"
                         f"🕒 _Время: {curr_time_str} (Киев)_"
                     )
                     try:
@@ -1206,8 +1471,8 @@ def monitor_spread():
                         "max_p": a_val,
                         "spread": live_spread,
                         "max_pos_usdt": max_pos_usdt,
-                        "valid_bids": {k: v for k, v in clean_b.items() if sym_vols.get(k, 0) >= 15_000},
-                        "valid_asks": {k: v for k, v in clean_a.items() if sym_vols.get(k, 0) >= 15_000},
+                        "valid_bids": {k: v for k, v in clean_b.items() if sym_vols.get(k, 0) >= MIN_EXCHANGE_VOL_USDT},
+                        "valid_asks": {k: v for k, v in clean_a.items() if sym_vols.get(k, 0) >= MIN_EXCHANGE_VOL_USDT},
                         "sym_vols": sym_vols,
                         "fundings": fundings,
                         "in_hysteresis": True
@@ -1220,8 +1485,8 @@ def monitor_spread():
 
                 clean_bids, clean_asks = filter_stale_quotes(sym, sym_bids, sym_asks, quote_stale_tracker)
 
-                valid_bids = {ex: p for ex, p in clean_bids.items() if sym_vols.get(ex, 0) >= 15_000 and p > 0}
-                valid_asks = {ex: p for ex, p in clean_asks.items() if sym_vols.get(ex, 0) >= 15_000 and p > 0}
+                valid_bids = {ex: p for ex, p in clean_bids.items() if sym_vols.get(ex, 0) >= MIN_EXCHANGE_VOL_USDT and p > 0}
+                valid_asks = {ex: p for ex, p in clean_asks.items() if sym_vols.get(ex, 0) >= MIN_EXCHANGE_VOL_USDT and p > 0}
 
                 if len(valid_bids) < 2 or len(valid_asks) < 2:
                     continue
@@ -1229,10 +1494,12 @@ def monitor_spread():
                 all_mid_prices = [valid_bids[ex] for ex in valid_bids]
                 if len(all_mid_prices) >= 3:
                     median_price = statistics.median(all_mid_prices)
-                    valid_bids = {ex: p for ex, p in valid_bids.items() if abs(p - median_price) / median_price <= 0.18}
-                    valid_asks = {ex: p for ex, p in valid_asks.items() if abs(p - median_price) / median_price <= 0.18}
-                    if len(valid_bids) < 2 or len(valid_asks) < 2:
-                        continue
+                    if median_price > 0:
+                        filtered_b = {ex: p for ex, p in valid_bids.items() if abs(p - median_price) / median_price <= 0.75}
+                        filtered_a = {ex: p for ex, p in valid_asks.items() if abs(p - median_price) / median_price <= 0.75}
+                        if len(filtered_b) >= 2 and len(filtered_a) >= 2:
+                            valid_bids = filtered_b
+                            valid_asks = filtered_a
 
                 min_ex = min(valid_bids, key=valid_bids.get)
                 max_ex = max(valid_asks, key=valid_asks.get)
@@ -1271,7 +1538,9 @@ def monitor_spread():
                 else:
                     spread = raw_spread
 
-                if SPREAD_ENTRY_MIN <= spread <= SPREAD_ENTRY_MAX:
+                in_entry_range = (spread >= SPREAD_ENTRY_MIN) and (SPREAD_ENTRY_MAX is None or spread <= SPREAD_ENTRY_MAX)
+
+                if in_entry_range:
                     if chart_key in live_spread_posts:
                         current_detected_spreads[chart_key] = {
                             "sym": sym, "min_ex": min_ex, "max_ex": max_ex,
@@ -1281,7 +1550,7 @@ def monitor_spread():
                             "in_hysteresis": False
                         }
                     else:
-                        if sym in symbol_cooldowns:
+                        if chart_key in pair_cooldowns:
                             if chart_key in pending_spreads:
                                 del pending_spreads[chart_key]
                             continue
@@ -1304,7 +1573,7 @@ def monitor_spread():
                                         "valid_asks": valid_asks, "sym_vols": sym_vols, "fundings": fundings,
                                         "in_hysteresis": False
                                     }
-                                    symbol_cooldowns[sym] = now_ts
+                                    pair_cooldowns[chart_key] = now_ts
                                 del pending_spreads[chart_key]
                 else:
                     if chart_key in pending_spreads:
@@ -1345,16 +1614,18 @@ def monitor_spread():
                     price_history_long[chart_key] = []
                     price_history_short[chart_key] = []
 
-                price_history_long[chart_key].append({"time": now_ts, "value": round(min_p, 4)})
-                price_history_short[chart_key].append({"time": now_ts, "value": round(max_p, 4)})
+                price_history_long[chart_key].append({"time": now_ts, "value": round(min_p, 6)})
+                price_history_short[chart_key].append({"time": now_ts, "value": round(max_p, 6)})
 
                 if len(price_history_long[chart_key]) > 200:
                     price_history_long[chart_key].pop(0)
                     price_history_short[chart_key].pop(0)
 
                 sym_funds = fundings.get(sym, {})
-                min_fund = sym_funds.get(min_ex, 0.0)
-                max_fund = sym_funds.get(max_ex, 0.0)
+                min_fund_val = sym_funds.get(min_ex)
+                max_fund_val = sym_funds.get(max_ex)
+                min_fund_str = f"`{min_fund_val:.2f}%`" if min_fund_val is not None else "`Spot / N/A`"
+                max_fund_str = f"`{max_fund_val:.2f}%`" if max_fund_val is not None else "`Spot / N/A`"
 
                 all_valid_exs = set(valid_bids.keys()).union(set(valid_asks.keys()))
                 sorted_exs = sorted(all_valid_exs, key=lambda ex: sym_vols.get(ex, 0), reverse=True)
@@ -1365,7 +1636,10 @@ def monitor_spread():
                     v = sym_vols.get(ex, 0)
                     v_str = format_volume(v)
                     url = get_exchange_url(ex, sym)
-                    overview_list.append(f"🔹 [{ex}]({url}): Bid: `{bp}` | Ask: `{ap}` ({v_str})")
+                    if url:
+                        overview_list.append(f"🔹 [{ex}]({url}): Bid: `{bp}` | Ask: `{ap}` ({v_str})")
+                    else:
+                        overview_list.append(f"🔹 {ex}: Bid: `{bp}` | Ask: `{ap}` ({v_str})")
 
                 overview = "\n".join(overview_list)
 
@@ -1377,12 +1651,20 @@ def monitor_spread():
                     chart_url = f"{render_url}/chart?symbol={sym}&min_ex={min_ex}&max_ex={max_ex}"
                     markup.add(InlineKeyboardButton("📈 График схождения (Live)", url=chart_url))
                 else:
-                    markup.add(InlineKeyboardButton("🌐 Биржа Long", url=get_exchange_url(min_ex, sym)))
+                    long_url = get_exchange_url(min_ex, sym)
+                    if long_url:
+                        markup.add(InlineKeyboardButton("🌐 Биржа Long", url=long_url))
+
+                _, min_m_type = split_venue_key(min_ex)
+                _, max_m_type = split_venue_key(max_ex)
+                market_mode_label = "Fut + Spot" if (min_m_type != max_m_type) else ("Spot + Spot" if min_m_type == "Spot" else "Fut + Fut")
 
                 if in_hysteresis:
                     badge = f"⏳ **HOLD / СХОЖДЕНИЕ (ниже 5%, закрытие < {SPREAD_CLOSE_THRESHOLD:.2f}%)**"
                 elif is_momentum:
                     badge = "⚡⚡ **MOMENTUM / PUMP SPREAD**"
+                elif spread >= 25.0:
+                    badge = "🚀🔥 **EXTREME SPREAD (>= 25%)**"
                 elif spread >= 15.0:
                     badge = "🔥🔥🔥 **MEGA SPREAD (>= 15%)**"
                 elif spread >= 10.0:
@@ -1395,9 +1677,9 @@ def monitor_spread():
 
                     msg_text = (
                         f"{badge}\n"
-                        f"🪙 **#{sym} | Spread: `{spread:.2f}%`** (OrderBook LIVE)\n\n"
-                        f"🟢 **Long Bid ({min_ex}):** `${min_p}` (Funding: `{min_fund:.2f}%`)\n"
-                        f"🔴 **Short Ask ({max_ex}):** `${max_p}` (Funding: `{max_fund:.2f}%`)\n\n"
+                        f"🪙 **#{sym} | Spread: `{spread:.2f}%`** ({market_mode_label} LIVE)\n\n"
+                        f"🟢 **Long Bid ({min_ex}):** `${min_p}` (Funding: {min_fund_str})\n"
+                        f"🔴 **Short Ask ({max_ex}):** `${max_p}` (Funding: {max_fund_str})\n\n"
                         f"📊 **Динамика спреда:**\n" + "\n".join(history_lines) + "\n\n"
                         f"💰 **Объем стакана:** `~${max_pos_usdt:,} USDT`\n\n"
                         f"📝 **Стаканы бирж:**\n{overview}\n\n"
@@ -1432,9 +1714,9 @@ def monitor_spread():
 
                     updated_text = (
                         f"{badge}\n"
-                        f"🪙 **#{sym} | Spread: `{spread:.2f}%`** (OrderBook LIVE)\n\n"
-                        f"🟢 **Long Bid ({min_ex}):** `${min_p}` (Funding: `{min_fund:.2f}%`)\n"
-                        f"🔴 **Short Ask ({max_ex}):** `${max_p}` (Funding: `{max_fund:.2f}%`)\n\n"
+                        f"🪙 **#{sym} | Spread: `{spread:.2f}%`** ({market_mode_label} LIVE)\n\n"
+                        f"🟢 **Long Bid ({min_ex}):** `${min_p}` (Funding: {min_fund_str})\n"
+                        f"🔴 **Short Ask ({max_ex}):** `${max_p}` (Funding: {max_fund_str})\n\n"
                         f"📊 **Динамика спреда:**\n" + "\n".join(history) + "\n\n"
                         f"💰 **Объем стакана:** `~${max_pos_usdt:,} USDT`\n\n"
                         f"📝 **Стаканы бирж:**\n{overview}\n\n"
@@ -1461,7 +1743,7 @@ def monitor_funding():
     print("🟢 Funding Monitor started...")
     while True:
         try:
-            _, _, volumes, fundings, funding_times = fetch_futures_data()
+            _, _, volumes, fundings, funding_times = fetch_futures_data(include_spot=False)
             curr_time_str = get_kyiv_time()
 
             for sym, ex_funds in fundings.items():
@@ -1486,7 +1768,10 @@ def monitor_funding():
                         next_t = funding_times.get(sym, {}).get(ex, 0)
                         countdown = format_countdown(next_t)
                         url = get_exchange_url(ex, sym)
-                        rates_list.append(f"🔹 [{ex}]({url}): `{r:+.2f}%` (⏱ `{countdown}`)")
+                        if url:
+                            rates_list.append(f"🔹 [{ex}]({url}): `{r:+.2f}%` (⏱ `{countdown}`)")
+                        else:
+                            rates_list.append(f"🔹 {ex}: `{r:+.2f}%` (⏱ `{countdown}`)")
 
                     msg_text = (
                         f"🔥 **FUNDING ARBITRAGE (Spread >= 0.5%)**\n"
@@ -1606,7 +1891,7 @@ def run_alpha_session(session_key, token_identifier):
 def cmd_spread_on(message):
     global spread_monitor_enabled
     spread_monitor_enabled = True
-    bot.reply_to(message, f"🟢 **Мониторинг спредов ЗАПУЩЕН!**\nИщу подтвержденные спреды (вектор {PENDING_BUFFER_SECONDS}с + ликвидность от ${MIN_ENTRY_POS_USDT:,}).", parse_mode="Markdown")
+    bot.reply_to(message, f"🟢 **Мониторинг спредов ЗАПУЩЕН!**\nИщу подтвержденные спреды от `{SPREAD_ENTRY_MIN:.1f}%` (Fut + Spot, вектор {PENDING_BUFFER_SECONDS}с + ликвидность от ${MIN_ENTRY_POS_USDT:,}).", parse_mode="Markdown")
     send_to_topic("SPREAD", "🟢 **Охота за спредами ЗАПУЩЕНА** (по команде пользователя).")
 
 @bot.message_handler(commands=['spread_off', 's_off'])

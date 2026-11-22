@@ -61,12 +61,14 @@ spread_monitor_enabled = False
 
 # Пороги логики спредов
 SPREAD_ENTRY_MIN = 5.0
-SPREAD_ENTRY_MAX = None             # Без жёсткого потолка 25%, чтобы не резать сильные разгоны
+SPREAD_ENTRY_MAX = 80.0             # Адекватный верхний фильтр против битых стаканов
 SPREAD_HYSTERESIS_THRESHOLD = 2.5   # Гистерезис для удержания открытого поста
 SPREAD_CLOSE_THRESHOLD = 1.0        # Реальное схождение (< 1.0%)
 PENDING_BUFFER_SECONDS = 15         # Выдержка до подтверждения вектора входа
 MIN_ENTRY_POS_USDT = 500            # Минимальная оценка объема для входа
 MIN_EXCHANGE_VOL_USDT = 5_000       # Минимальный 24h оборот биржи для участия в поиске
+MIN_VALID_PRICE = 1e-6              # Отсекаем копеечные глюки вроде 2.5e-05 / 2.5e-50
+MAX_MEDIAN_DEVIATION = 0.40         # Макс. отклонение от медианной цены монеты (40%)
 CLOSE_CONFIRM_POLLS = 2             # Подтверждение схождения на 2 циклах подряд
 CLOSE_MISSING_LIMIT = 3             # Допуск битых/пропавших цен перед закрытием
 PAIR_COOLDOWN_SECONDS = 180         # Кулдаун на конкретную связку бирж после закрытия
@@ -99,6 +101,24 @@ def get_kyiv_time():
 
 def get_kyiv_date_time():
     return datetime.datetime.now(KYIV_TZ).strftime("%H:%M")
+
+def format_price(price):
+    """Форматирует цену без научной записи (e-05 / e-50)."""
+    try:
+        val = float(price)
+    except (TypeError, ValueError):
+        return "0"
+    if val <= 0:
+        return "0"
+    if val >= 1000:
+        s = f"{val:.2f}"
+    elif val >= 1:
+        s = f"{val:.4f}"
+    elif val >= 0.01:
+        s = f"{val:.6f}"
+    else:
+        s = f"{val:.8f}"
+    return s.rstrip('0').rstrip('.') if '.' in s else s
 
 def parse_normalized_symbol(raw_sym):
     """
@@ -140,6 +160,14 @@ def split_venue_key(venue_key):
         return parts[0], parts[1]
     return venue_key, "Fut"
 
+def is_allowed_venue_pair(min_ex, max_ex):
+    """Разрешаем только Fut + Fut и Fut + Spot (исключаем чистый Spot + Spot)."""
+    if not min_ex or not max_ex or min_ex == max_ex:
+        return False
+    _, m1 = split_venue_key(min_ex)
+    _, m2 = split_venue_key(max_ex)
+    return (m1 == "Fut") or (m2 == "Fut")
+
 # ==================== SECURE REQUESTS & ROTATING HEADERS ====================
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
@@ -178,25 +206,25 @@ def fetch_token_prices_on_demand(sym):
     def _bin():
         try:
             r = requests.get(f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={base_sym}USDT", timeout=2.5).json()
-            if 'price' in r:
+            if 'price' in r and float(r['price']) >= MIN_VALID_PRICE:
                 ex_prices['Binance Fut'] = float(r['price'])
         except: pass
         try:
             r = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={base_sym}USDT", timeout=2.5).json()
-            if 'price' in r:
+            if 'price' in r and float(r['price']) >= MIN_VALID_PRICE:
                 ex_prices['Binance Spot'] = float(r['price'])
         except: pass
 
     def _byb():
         try:
             r = requests.get(f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={base_sym}USDT", timeout=2.5).json().get('result', {}).get('list', [])
-            if r:
+            if r and float(r[0]['lastPrice']) >= MIN_VALID_PRICE:
                 ex_prices['Bybit Fut'] = float(r[0]['lastPrice'])
                 ex_vols['Bybit Fut'] = float(r[0].get('turnover24h', 0))
         except: pass
         try:
             r = requests.get(f"https://api.bybit.com/v5/market/tickers?category=spot&symbol={base_sym}USDT", timeout=2.5).json().get('result', {}).get('list', [])
-            if r:
+            if r and float(r[0]['lastPrice']) >= MIN_VALID_PRICE:
                 ex_prices['Bybit Spot'] = float(r[0]['lastPrice'])
                 ex_vols['Bybit Spot'] = float(r[0].get('turnover24h', 0))
         except: pass
@@ -207,26 +235,28 @@ def fetch_token_prices_on_demand(sym):
             for item in r:
                 s_base, s_mult = parse_normalized_symbol(item.get('symbol', ''))
                 if s_base == base_sym and 'lastTradePrice' in item:
-                    ex_prices['KuCoin Fut'] = float(item['lastTradePrice']) / s_mult
-                    ex_vols['KuCoin Fut'] = float(item.get('turnoverOf24h', 0))
+                    p_val = float(item['lastTradePrice']) / s_mult
+                    if p_val >= MIN_VALID_PRICE:
+                        ex_prices['KuCoin Fut'] = p_val
+                        ex_vols['KuCoin Fut'] = float(item.get('turnoverOf24h', 0))
                     break
         except: pass
         try:
             r = requests.get(f"https://api.kucoin.com/api/v1/market/orderbook/level1?symbol={base_sym}-USDT", timeout=2.5).json().get('data', {})
-            if isinstance(r, dict) and r.get('price'):
+            if isinstance(r, dict) and r.get('price') and float(r['price']) >= MIN_VALID_PRICE:
                 ex_prices['KuCoin Spot'] = float(r['price'])
         except: pass
 
     def _gate():
         try:
             r = requests.get(f"https://api.gateio.ws/api/v4/futures/usdt/tickers?contract={base_sym}_USDT", timeout=2.5).json()
-            if isinstance(r, list) and len(r) > 0:
+            if isinstance(r, list) and len(r) > 0 and float(r[0]['last']) >= MIN_VALID_PRICE:
                 ex_prices['Gate Fut'] = float(r[0]['last'])
                 ex_vols['Gate Fut'] = float(r[0].get('total_size', 0)) * float(r[0]['last'])
         except: pass
         try:
             r = requests.get(f"https://api.gateio.ws/api/v4/spot/tickers?currency_pair={base_sym}_USDT", timeout=2.5).json()
-            if isinstance(r, list) and len(r) > 0 and r[0].get('last'):
+            if isinstance(r, list) and len(r) > 0 and r[0].get('last') and float(r[0]['last']) >= MIN_VALID_PRICE:
                 ex_prices['Gate Spot'] = float(r[0]['last'])
                 ex_vols['Gate Spot'] = float(r[0].get('quote_volume', 0))
         except: pass
@@ -234,13 +264,13 @@ def fetch_token_prices_on_demand(sym):
     def _okx():
         try:
             r = requests.get(f"https://www.okx.com/api/v5/market/ticker?instId={base_sym}-USDT-SWAP", timeout=2.5).json().get('data', [])
-            if r:
+            if r and float(r[0]['last']) >= MIN_VALID_PRICE:
                 ex_prices['OKX Fut'] = float(r[0]['last'])
                 ex_vols['OKX Fut'] = float(r[0].get('volCcy24h', 0))
         except: pass
         try:
             r = requests.get(f"https://www.okx.com/api/v5/market/ticker?instId={base_sym}-USDT", timeout=2.5).json().get('data', [])
-            if r:
+            if r and float(r[0]['last']) >= MIN_VALID_PRICE:
                 ex_prices['OKX Spot'] = float(r[0]['last'])
                 ex_vols['OKX Spot'] = float(r[0].get('volCcy24h', 0))
         except: pass
@@ -248,13 +278,13 @@ def fetch_token_prices_on_demand(sym):
     def _mexc():
         try:
             r = requests.get(f"https://contract.mexc.com/api/v1/contract/ticker?symbol={base_sym}_USDT", timeout=2.5).json().get('data', {})
-            if isinstance(r, dict) and 'lastPrice' in r:
+            if isinstance(r, dict) and 'lastPrice' in r and float(r['lastPrice']) >= MIN_VALID_PRICE:
                 ex_prices['MEXC Fut'] = float(r['lastPrice'])
                 ex_vols['MEXC Fut'] = float(r.get('amount24h', 0)) * float(r['lastPrice'])
         except: pass
         try:
             r = requests.get(f"https://api.mexc.com/api/v3/ticker/24hr?symbol={base_sym}USDT", timeout=2.5).json()
-            if isinstance(r, dict) and r.get('lastPrice'):
+            if isinstance(r, dict) and r.get('lastPrice') and float(r['lastPrice']) >= MIN_VALID_PRICE:
                 ex_prices['MEXC Spot'] = float(r['lastPrice'])
                 ex_vols['MEXC Spot'] = float(r.get('quoteVolume', 0))
         except: pass
@@ -262,13 +292,13 @@ def fetch_token_prices_on_demand(sym):
     def _bitget():
         try:
             r = requests.get(f"https://api.bitget.com/api/v2/mix/market/ticker?symbol={base_sym}USDT&productType=USDT-FUTURES", timeout=2.5).json().get('data', [])
-            if r:
+            if r and float(r[0]['lastPr']) >= MIN_VALID_PRICE:
                 ex_prices['Bitget Fut'] = float(r[0]['lastPr'])
                 ex_vols['Bitget Fut'] = float(r[0].get('quoteVolume', 0))
         except: pass
         try:
             r = requests.get(f"https://api.bitget.com/api/v2/spot/market/tickers?symbol={base_sym}USDT", timeout=2.5).json().get('data', [])
-            if r:
+            if r and float(r[0]['lastPr']) >= MIN_VALID_PRICE:
                 ex_prices['Bitget Spot'] = float(r[0]['lastPr'])
                 ex_vols['Bitget Spot'] = float(r[0].get('quoteVolume', 0))
         except: pass
@@ -276,13 +306,13 @@ def fetch_token_prices_on_demand(sym):
     def _bingx():
         try:
             r = requests.get(f"https://open-api.bingx.com/openApi/swap/v2/quote/ticker?symbol={base_sym}-USDT", timeout=2.5).json().get('data', {})
-            if isinstance(r, dict) and r.get('lastPrice'):
+            if isinstance(r, dict) and r.get('lastPrice') and float(r['lastPrice']) >= MIN_VALID_PRICE:
                 ex_prices['BingX Fut'] = float(r['lastPrice'])
                 ex_vols['BingX Fut'] = float(r.get('volume', 0))
         except: pass
         try:
             r = requests.get(f"https://open-api.bingx.com/openApi/spot/v1/ticker/24hr?symbol={base_sym}-USDT", timeout=2.5).json().get('data', [])
-            if isinstance(r, list) and len(r) > 0 and r[0].get('lastPrice'):
+            if isinstance(r, list) and len(r) > 0 and r[0].get('lastPrice') and float(r[0]['lastPrice']) >= MIN_VALID_PRICE:
                 ex_prices['BingX Spot'] = float(r[0]['lastPrice'])
                 ex_vols['BingX Spot'] = float(r[0].get('quoteVolume', 0))
         except: pass
@@ -300,7 +330,7 @@ def fetch_binance_alpha_price(token_query):
         return 0.0
     base_target, _ = parse_normalized_symbol(token_query)
     ex_prices, _ = fetch_token_prices_on_demand(base_target)
-    valid = [p for p in ex_prices.values() if p > 0]
+    valid = [p for p in ex_prices.values() if p >= MIN_VALID_PRICE]
     return valid[0] if valid else 0.0
 
 # ==================== HEALTHCHECK & WEB APP CHART SERVER ====================
@@ -324,8 +354,8 @@ def chart_data_api():
     p_long = current_prices.get(min_ex, 0)
     p_short = current_prices.get(max_ex, 0)
 
-    if p_long == 0 or p_short == 0:
-        valid_p = list(current_prices.values())
+    if p_long < MIN_VALID_PRICE or p_short < MIN_VALID_PRICE:
+        valid_p = [p for p in current_prices.values() if p >= MIN_VALID_PRICE]
         if len(valid_p) >= 2:
             p_long = min(valid_p)
             p_short = max(valid_p)
@@ -371,8 +401,8 @@ def web_chart():
     p_long = current_prices.get(min_ex, 0)
     p_short = current_prices.get(max_ex, 0)
 
-    if p_long == 0 or p_short == 0:
-        valid_p = list(current_prices.values())
+    if p_long < MIN_VALID_PRICE or p_short < MIN_VALID_PRICE:
+        valid_p = [p for p in current_prices.values() if p >= MIN_VALID_PRICE]
         if len(valid_p) >= 2:
             p_long = min(valid_p)
             p_short = max(valid_p)
@@ -925,7 +955,7 @@ def _record_quote(bids, asks, volumes, sym, venue, bid_p, ask_p, vol_24h, mult=1
         b = a
     elif a <= 0 and b > 0:
         a = b
-    if b <= 0 or a <= 0:
+    if b < MIN_VALID_PRICE or a < MIN_VALID_PRICE:
         return
 
     bids.setdefault(sym, {})[venue] = b
@@ -1260,10 +1290,11 @@ symbol_price_tracker = {}
 
 def filter_stale_quotes(sym, sym_bids, sym_asks, stale_state):
     """
-    Отсекает залипшие котировки:
-    - где Ask < Bid (кросс/битый стакан);
+    Отсекает залипшие и аномальные котировки:
+    - где цена < MIN_VALID_PRICE или Ask < Bid;
     - где Bid == Ask и при этом цена по бирже стоит без изменений STALE_POLL_LIMIT циклов подряд,
-      пока по остальным биржам монеты есть движение.
+      пока по остальным биржам монеты есть движение;
+    - где котировка отклоняется от медианной цены монеты по рынку более чем на MAX_MEDIAN_DEVIATION.
     """
     sym_stale = stale_state.setdefault(sym, {})
     cleaned_bids = {}
@@ -1274,7 +1305,7 @@ def filter_stale_quotes(sym, sym_bids, sym_asks, stale_state):
     for ex in candidate_exchanges:
         b = sym_bids.get(ex, 0.0)
         a = sym_asks.get(ex, 0.0)
-        if b <= 0 or a <= 0 or a < b:
+        if b < MIN_VALID_PRICE or a < MIN_VALID_PRICE or a < b:
             continue
 
         sig = (b, a)
@@ -1290,7 +1321,7 @@ def filter_stale_quotes(sym, sym_bids, sym_asks, stale_state):
     for ex in candidate_exchanges:
         b = sym_bids.get(ex, 0.0)
         a = sym_asks.get(ex, 0.0)
-        if b <= 0 or a <= 0 or a < b:
+        if b < MIN_VALID_PRICE or a < MIN_VALID_PRICE or a < b:
             continue
 
         st = sym_stale.get(ex, {"unchanged": 0})
@@ -1303,6 +1334,25 @@ def filter_stale_quotes(sym, sym_bids, sym_asks, stale_state):
             if ex in sym_asks:
                 cleaned_asks[ex] = a
 
+    all_mids = []
+    for ex in set(cleaned_bids.keys()).union(set(cleaned_asks.keys())):
+        bp = cleaned_bids.get(ex, 0.0)
+        ap = cleaned_asks.get(ex, 0.0)
+        if bp >= MIN_VALID_PRICE and ap >= MIN_VALID_PRICE:
+            all_mids.append((bp + ap) / 2.0)
+
+    if len(all_mids) >= 2:
+        med = statistics.median(all_mids)
+        if med > 0:
+            cleaned_bids = {
+                ex: p for ex, p in cleaned_bids.items()
+                if abs(p - med) / med <= MAX_MEDIAN_DEVIATION
+            }
+            cleaned_asks = {
+                ex: p for ex, p in cleaned_asks.items()
+                if abs(p - med) / med <= MAX_MEDIAN_DEVIATION
+            }
+
     return cleaned_bids, cleaned_asks
 
 def smooth_spread_value(state_obj, raw_spread):
@@ -1314,6 +1364,29 @@ def smooth_spread_value(state_obj, raw_spread):
     if len(samples) > SMOOTH_WINDOW:
         samples.pop(0)
     return statistics.median(samples)
+
+def find_best_fut_or_hybrid_pair(valid_bids, valid_asks):
+    """
+    Находит лучшую связку (min_ex, max_ex), где хотя бы одна сторона — Fut
+    (то есть только Fut + Fut или Fut + Spot; чистый Spot + Spot полностью исключён).
+    """
+    best_pair = None
+    best_spread = -1.0
+
+    for b_ex, b_price in valid_bids.items():
+        if b_price < MIN_VALID_PRICE:
+            continue
+        for a_ex, a_price in valid_asks.items():
+            if a_price < MIN_VALID_PRICE or b_ex == a_ex:
+                continue
+            if not is_allowed_venue_pair(b_ex, a_ex):
+                continue
+            sp = ((a_price - b_price) / b_price) * 100
+            if sp > best_spread:
+                best_spread = sp
+                best_pair = (b_ex, a_ex, b_price, a_price, sp)
+
+    return best_pair
 
 def monitor_spread():
     global active_spreads, price_history_long, price_history_short, sent_alerts_cache, symbol_price_tracker, spread_monitor_enabled
@@ -1352,6 +1425,10 @@ def monitor_spread():
                 short_ex = post_info["max_ex"]
                 msg_id = post_info["msg_id"]
 
+                if not is_allowed_venue_pair(long_ex, short_ex):
+                    del live_spread_posts[chart_key]
+                    continue
+
                 raw_b = bids.get(sym_name, {})
                 raw_a = asks.get(sym_name, {})
                 clean_b, clean_a = filter_stale_quotes(sym_name, raw_b, raw_a, quote_stale_tracker)
@@ -1359,7 +1436,7 @@ def monitor_spread():
                 b_val = clean_b.get(long_ex, 0.0)
                 a_val = clean_a.get(short_ex, 0.0)
 
-                if b_val > 0 and a_val > 0:
+                if b_val >= MIN_VALID_PRICE and a_val >= MIN_VALID_PRICE:
                     post_info["missing_count"] = 0
                     post_info["last_long_p"] = b_val
                     post_info["last_short_p"] = a_val
@@ -1374,7 +1451,7 @@ def monitor_spread():
                         p_long_hold = post_info.get("last_long_p", 0.0)
                         p_short_hold = post_info.get("last_short_p", 0.0)
                         sp_hold = post_info.get("last_live_spread", post_info.get("last_spread", SPREAD_HYSTERESIS_THRESHOLD))
-                        if p_long_hold > 0 and p_short_hold > 0:
+                        if p_long_hold >= MIN_VALID_PRICE and p_short_hold >= MIN_VALID_PRICE:
                             sym_vols = volumes.get(sym_name, {})
                             vol_min = sym_vols.get(long_ex, 0) * 0.01
                             vol_max = sym_vols.get(short_ex, 0) * 0.01
@@ -1414,16 +1491,16 @@ def monitor_spread():
                 if should_close:
                     pair_cooldowns[chart_key] = now_ts
 
-                    p_long_close = b_val if b_val > 0 else post_info.get("last_long_p", 0.0)
-                    p_short_close = a_val if a_val > 0 else post_info.get("last_short_p", 0.0)
+                    p_long_close = b_val if b_val >= MIN_VALID_PRICE else post_info.get("last_long_p", 0.0)
+                    p_short_close = a_val if a_val >= MIN_VALID_PRICE else post_info.get("last_short_p", 0.0)
                     final_spread_val = live_spread if live_spread is not None else post_info.get("last_live_spread")
 
                     prices_close_str = ""
-                    if p_long_close > 0 and p_short_close > 0:
+                    if p_long_close >= MIN_VALID_PRICE and p_short_close >= MIN_VALID_PRICE:
                         close_sp_line = f" | Текущий спред: `{final_spread_val:.2f}%`" if final_spread_val is not None else ""
                         prices_close_str = (
                             f"\n💵 **Цены при закрытии:**\n"
-                            f"🟢 {long_ex}: `${p_long_close}` | 🔴 {short_ex}: `${p_short_close}`{close_sp_line}\n"
+                            f"🟢 {long_ex}: `${format_price(p_long_close)}` | 🔴 {short_ex}: `${format_price(p_short_close)}`{close_sp_line}\n"
                         )
 
                     cooldown_mins = PAIR_COOLDOWN_SECONDS // 60
@@ -1485,43 +1562,19 @@ def monitor_spread():
 
                 clean_bids, clean_asks = filter_stale_quotes(sym, sym_bids, sym_asks, quote_stale_tracker)
 
-                valid_bids = {ex: p for ex, p in clean_bids.items() if sym_vols.get(ex, 0) >= MIN_EXCHANGE_VOL_USDT and p > 0}
-                valid_asks = {ex: p for ex, p in clean_asks.items() if sym_vols.get(ex, 0) >= MIN_EXCHANGE_VOL_USDT and p > 0}
+                valid_bids = {ex: p for ex, p in clean_bids.items() if sym_vols.get(ex, 0) >= MIN_EXCHANGE_VOL_USDT and p >= MIN_VALID_PRICE}
+                valid_asks = {ex: p for ex, p in clean_asks.items() if sym_vols.get(ex, 0) >= MIN_EXCHANGE_VOL_USDT and p >= MIN_VALID_PRICE}
 
                 if len(valid_bids) < 2 or len(valid_asks) < 2:
                     continue
 
-                all_mid_prices = [valid_bids[ex] for ex in valid_bids]
-                if len(all_mid_prices) >= 3:
-                    median_price = statistics.median(all_mid_prices)
-                    if median_price > 0:
-                        filtered_b = {ex: p for ex, p in valid_bids.items() if abs(p - median_price) / median_price <= 0.75}
-                        filtered_a = {ex: p for ex, p in valid_asks.items() if abs(p - median_price) / median_price <= 0.75}
-                        if len(filtered_b) >= 2 and len(filtered_a) >= 2:
-                            valid_bids = filtered_b
-                            valid_asks = filtered_a
-
-                min_ex = min(valid_bids, key=valid_bids.get)
-                max_ex = max(valid_asks, key=valid_asks.get)
-
-                if min_ex == max_ex and len(valid_bids) > 1:
-                    sorted_bids = sorted(valid_bids.items(), key=lambda x: x[1])
-                    min_ex = sorted_bids[0][0]
-
-                if min_ex == max_ex and len(valid_asks) > 1:
-                    sorted_asks = sorted(valid_asks.items(), key=lambda x: x[1], reverse=True)
-                    max_ex = sorted_asks[0][0]
-
-                if min_ex == max_ex:
+                best_pair = find_best_fut_or_hybrid_pair(valid_bids, valid_asks)
+                if not best_pair:
                     continue
 
-                min_p = valid_bids.get(min_ex, 0)
-                max_p = valid_asks.get(max_ex, 0)
-
-                if min_p <= 0 or max_p <= 0: continue
-
-                raw_spread = ((max_p - min_p) / min_p) * 100
-                if raw_spread < 0: continue
+                min_ex, max_ex, min_p, max_p, raw_spread = best_pair
+                if raw_spread <= 0:
+                    continue
 
                 chart_key = f"{sym}_{min_ex}_{max_ex}"
 
@@ -1597,6 +1650,9 @@ def monitor_spread():
                 fundings = data["fundings"]
                 in_hysteresis = data.get("in_hysteresis", False)
 
+                if not is_allowed_venue_pair(min_ex, max_ex):
+                    continue
+
                 if sym not in symbol_price_tracker:
                     symbol_price_tracker[sym] = []
                 symbol_price_tracker[sym].append((now_ts, min_p))
@@ -1614,8 +1670,8 @@ def monitor_spread():
                     price_history_long[chart_key] = []
                     price_history_short[chart_key] = []
 
-                price_history_long[chart_key].append({"time": now_ts, "value": round(min_p, 6)})
-                price_history_short[chart_key].append({"time": now_ts, "value": round(max_p, 6)})
+                price_history_long[chart_key].append({"time": now_ts, "value": round(min_p, 8)})
+                price_history_short[chart_key].append({"time": now_ts, "value": round(max_p, 8)})
 
                 if len(price_history_long[chart_key]) > 200:
                     price_history_long[chart_key].pop(0)
@@ -1631,8 +1687,8 @@ def monitor_spread():
                 sorted_exs = sorted(all_valid_exs, key=lambda ex: sym_vols.get(ex, 0), reverse=True)
                 overview_list = []
                 for ex in sorted_exs:
-                    bp = valid_bids.get(ex, 0)
-                    ap = valid_asks.get(ex, 0)
+                    bp = format_price(valid_bids.get(ex, 0))
+                    ap = format_price(valid_asks.get(ex, 0))
                     v = sym_vols.get(ex, 0)
                     v_str = format_volume(v)
                     url = get_exchange_url(ex, sym)
@@ -1657,7 +1713,7 @@ def monitor_spread():
 
                 _, min_m_type = split_venue_key(min_ex)
                 _, max_m_type = split_venue_key(max_ex)
-                market_mode_label = "Fut + Spot" if (min_m_type != max_m_type) else ("Spot + Spot" if min_m_type == "Spot" else "Fut + Fut")
+                market_mode_label = "Fut + Spot" if (min_m_type != max_m_type) else "Fut + Fut"
 
                 if in_hysteresis:
                     badge = f"⏳ **HOLD / СХОЖДЕНИЕ (ниже 5%, закрытие < {SPREAD_CLOSE_THRESHOLD:.2f}%)**"
@@ -1672,14 +1728,17 @@ def monitor_spread():
                 else:
                     badge = "✅ **CONFIRMED SPREAD (>= 5%)** (Вектор подтвержден)"
 
+                min_p_str = format_price(min_p)
+                max_p_str = format_price(max_p)
+
                 if chart_key not in live_spread_posts:
                     history_lines = [f"• `{curr_time_str}` — Вход разрешен: **`{spread:.2f}%`**"]
 
                     msg_text = (
                         f"{badge}\n"
                         f"🪙 **#{sym} | Spread: `{spread:.2f}%`** ({market_mode_label} LIVE)\n\n"
-                        f"🟢 **Long Bid ({min_ex}):** `${min_p}` (Funding: {min_fund_str})\n"
-                        f"🔴 **Short Ask ({max_ex}):** `${max_p}` (Funding: {max_fund_str})\n\n"
+                        f"🟢 **Long Bid ({min_ex}):** `${min_p_str}` (Funding: {min_fund_str})\n"
+                        f"🔴 **Short Ask ({max_ex}):** `${max_p_str}` (Funding: {max_fund_str})\n\n"
                         f"📊 **Динамика спреда:**\n" + "\n".join(history_lines) + "\n\n"
                         f"💰 **Объем стакана:** `~${max_pos_usdt:,} USDT`\n\n"
                         f"📝 **Стаканы бирж:**\n{overview}\n\n"
@@ -1715,8 +1774,8 @@ def monitor_spread():
                     updated_text = (
                         f"{badge}\n"
                         f"🪙 **#{sym} | Spread: `{spread:.2f}%`** ({market_mode_label} LIVE)\n\n"
-                        f"🟢 **Long Bid ({min_ex}):** `${min_p}` (Funding: {min_fund_str})\n"
-                        f"🔴 **Short Ask ({max_ex}):** `${max_p}` (Funding: {max_fund_str})\n\n"
+                        f"🟢 **Long Bid ({min_ex}):** `${min_p_str}` (Funding: {min_fund_str})\n"
+                        f"🔴 **Short Ask ({max_ex}):** `${max_p_str}` (Funding: {max_fund_str})\n\n"
                         f"📊 **Динамика спреда:**\n" + "\n".join(history) + "\n\n"
                         f"💰 **Объем стакана:** `~${max_pos_usdt:,} USDT`\n\n"
                         f"📝 **Стаканы бирж:**\n{overview}\n\n"
@@ -1825,7 +1884,7 @@ def run_alpha_session(session_key, token_identifier):
 
             current_price = fetch_binance_alpha_price(token_identifier)
 
-            if current_price <= 0:
+            if current_price < MIN_VALID_PRICE:
                 time.sleep(5)
                 continue
 
@@ -1852,8 +1911,9 @@ def run_alpha_session(session_key, token_identifier):
             suggested_buy = current_price * (1 - spread_offset)
             suggested_sell = current_price * (1 + spread_offset)
 
-            buy_str = f"{suggested_buy:.8f}".rstrip('0').rstrip('.')
-            sell_str = f"{suggested_sell:.8f}".rstrip('0').rstrip('.')
+            buy_str = format_price(suggested_buy)
+            sell_str = format_price(suggested_sell)
+            curr_p_str = format_price(current_price)
 
             if price_change <= -0.30:
                 trend_icon = "🩸"
@@ -1865,7 +1925,7 @@ def run_alpha_session(session_key, token_identifier):
                 action_advice = "Цена стабильна. Можно безопасно крутить лимитками."
 
             msg_txt = (
-                f"{trend_icon} **Alpha** | `{display_symbol}` | ${current_price} (`{price_change:+.2f}%`)\n\n"
+                f"{trend_icon} **Alpha** | `{display_symbol}` | ${curr_p_str} (`{price_change:+.2f}%`)\n\n"
                 f"📐 **Диапазон ордеров:** Buy `~${buy_str}` | Sell `~${sell_str}`\n"
                 f"🎯 **Совет по откруту:**\n{action_advice}"
             )
@@ -1891,8 +1951,8 @@ def run_alpha_session(session_key, token_identifier):
 def cmd_spread_on(message):
     global spread_monitor_enabled
     spread_monitor_enabled = True
-    bot.reply_to(message, f"🟢 **Мониторинг спредов ЗАПУЩЕН!**\nИщу подтвержденные спреды от `{SPREAD_ENTRY_MIN:.1f}%` (Fut + Spot, вектор {PENDING_BUFFER_SECONDS}с + ликвидность от ${MIN_ENTRY_POS_USDT:,}).", parse_mode="Markdown")
-    send_to_topic("SPREAD", "🟢 **Охота за спредами ЗАПУЩЕНА** (по команде пользователя).")
+    bot.reply_to(message, f"🟢 **Мониторинг спредов ЗАПУЩЕН!**\nИщу подтвержденные спреды от `{SPREAD_ENTRY_MIN:.1f}%` (только Fut + Fut и Fut + Spot, вектор {PENDING_BUFFER_SECONDS}с + ликвидность от ${MIN_ENTRY_POS_USDT:,}).", parse_mode="Markdown")
+    send_to_topic("SPREAD", "🟢 **Охота за спредами ЗАПУЩЕНА** (режим Fut + Fut и Fut + Spot).")
 
 @bot.message_handler(commands=['spread_off', 's_off'])
 def cmd_spread_off(message):
@@ -2057,7 +2117,7 @@ def handle_chat_messages(message):
     for ex, p in sorted(sym_prices.items(), key=lambda x: x[1]):
         v = format_volume(sym_vols.get(ex, 0))
         total_cost = p * quantity
-        lines.append(f"🔹 [{ex}]: `${p}` | Общая стоимость: **`${total_cost:,.2f}`** ({v})")
+        lines.append(f"🔹 [{ex}]: `${format_price(p)}` | Общая стоимость: **`${total_cost:,.2f}`** ({v})")
 
     bot.reply_to(message, "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
 

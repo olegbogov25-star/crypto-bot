@@ -75,6 +75,11 @@ PAIR_COOLDOWN_SECONDS = 180         # Кулдаун на конкретную �
 STALE_POLL_LIMIT = 4                # Сколько циклов подряд цена может стоять без движения при живой монете
 SMOOTH_WINDOW = 3                   # Окно сглаживания спреда для защиты от качелей
 
+# Настройки проверки глубины стакана и проскальзывания для кандидатов на сигнал
+SAMPLE_ORDER_USDT = 1000.0          # Тестовый размер ордера для оценки проскальзывания
+THIN_BOOK_THRESHOLD_USDT = 1500.0   # Ниже этого объёма у верхних уровней стакан считается тонким
+BOOK_CACHE_TTL_SECONDS = 12         # Кэш глубины стакана по паре (сек)
+
 SPREADS_FILE = "active_spreads.json"
 
 def load_active_spreads():
@@ -161,12 +166,231 @@ def split_venue_key(venue_key):
     return venue_key, "Fut"
 
 def is_allowed_venue_pair(min_ex, max_ex):
-    """Разрешаем только Fut + Fut и Fut + Spot (исключаем чистый Spot + Spot)."""
+    """
+    Разрешаем:
+    - Fut + Fut (любые две разные фьючерсные площадки);
+    - Fut + Spot только когда Spot дешевле Fut (то есть min_ex == Spot и max_ex == Fut).
+    Чистый Spot + Spot и варианты, где Spot дороже Fut, исключены.
+    """
     if not min_ex or not max_ex or min_ex == max_ex:
         return False
     _, m1 = split_venue_key(min_ex)
     _, m2 = split_venue_key(max_ex)
-    return (m1 == "Fut") or (m2 == "Fut")
+    if m1 == "Fut" and m2 == "Fut":
+        return True
+    if m1 == "Spot" and m2 == "Fut":
+        return True
+    return False
+
+# ==================== ORDERBOOK DEPTH & SLIPPAGE ENGINE ====================
+_orderbook_cache = {}
+_orderbook_cache_lock = threading.Lock()
+
+def _calc_side_depth_and_slippage(levels, side="bid", target_usdt=SAMPLE_ORDER_USDT):
+    """
+    Считает доступный объём в USDT по верхним уровням стакана и примерное проскальзывание (%)
+    для ордера target_usdt.
+    side="bid" -> покупатель/продавец бьёт в биды (сверху вниз).
+    side="ask" -> покупатель/продавец бьёт в аски (снизу вверх).
+    """
+    parsed = []
+    for item in (levels or []):
+        try:
+            p = float(item[0])
+            q = float(item[1])
+            if p > 0 and q > 0:
+                parsed.append((p, q))
+        except Exception:
+            continue
+
+    if not parsed:
+        return {"depth_usdt": 0.0, "slippage_pct": None, "top_usdt": 0.0}
+
+    parsed.sort(key=lambda x: x[0], reverse=(side == "bid"))
+    best_p = parsed[0][0]
+    top_usdt = parsed[0][0] * parsed[0][1]
+
+    total_usdt = 0.0
+    total_qty = 0.0
+    needed_usdt = float(target_usdt)
+    slippage_pct = None
+
+    for p, q in parsed[:15]:
+        lvl_usdt = p * q
+        total_usdt += lvl_usdt
+        if slippage_pct is None and needed_usdt > 0:
+            take_usdt = min(lvl_usdt, needed_usdt - total_usdt + lvl_usdt)
+            if total_usdt >= needed_usdt:
+                rem = needed_usdt - (total_usdt - lvl_usdt)
+                total_qty += rem / p
+                avg_p = needed_usdt / total_qty if total_qty > 0 else best_p
+                slippage_pct = abs(avg_p - best_p) / best_p * 100.0
+            else:
+                total_qty += q
+
+    if slippage_pct is None and total_usdt > 0:
+        avg_p = total_usdt / total_qty if total_qty > 0 else best_p
+        slippage_pct = abs(avg_p - best_p) / best_p * 100.0
+
+    return {
+        "depth_usdt": total_usdt,
+        "slippage_pct": slippage_pct,
+        "top_usdt": top_usdt
+    }
+
+def _fetch_single_venue_depth(sym, venue_key, target_usdt=SAMPLE_ORDER_USDT):
+    base_sym, mult = parse_normalized_symbol(sym)
+    ex_name, m_type = split_venue_key(venue_key)
+    ex_u = ex_name.upper()
+    is_spot = (m_type == "Spot")
+    scale = 1.0 / mult if mult > 0 else 1.0
+
+    try:
+        if ex_u == "BINANCE":
+            if is_spot:
+                r = requests.get(f"https://api.binance.com/api/v3/depth?symbol={base_sym}USDT&limit=20", timeout=2.5).json()
+            else:
+                r = requests.get(f"https://fapi.binance.com/fapi/v1/depth?symbol={base_sym}USDT&limit=20", timeout=2.5).json()
+            bids_raw = [[float(x[0]) * scale, float(x[1]) / scale] for x in r.get("bids", [])]
+            asks_raw = [[float(x[0]) * scale, float(x[1]) / scale] for x in r.get("asks", [])]
+            return {"bids": bids_raw, "asks": asks_raw}
+
+        if ex_u == "BYBIT":
+            cat = "spot" if is_spot else "linear"
+            r = requests.get(f"https://api.bybit.com/v5/market/orderbook?category={cat}&symbol={base_sym}USDT&limit=25", timeout=2.5).json().get("result", {})
+            bids_raw = [[float(x[0]) * scale, float(x[1]) / scale] for x in r.get("b", [])]
+            asks_raw = [[float(x[0]) * scale, float(x[1]) / scale] for x in r.get("a", [])]
+            return {"bids": bids_raw, "asks": asks_raw}
+
+        if ex_u == "OKX":
+            inst = f"{base_sym}-USDT" if is_spot else f"{base_sym}-USDT-SWAP"
+            r = requests.get(f"https://www.okx.com/api/v5/market/books?instId={inst}&sz=20", timeout=2.5).json().get("data", [])
+            if r:
+                bids_raw = [[float(x[0]) * scale, float(x[1]) / scale] for x in r[0].get("bids", [])]
+                asks_raw = [[float(x[0]) * scale, float(x[1]) / scale] for x in r[0].get("asks", [])]
+                return {"bids": bids_raw, "asks": asks_raw}
+
+        if ex_u == "GATE":
+            if is_spot:
+                r = requests.get(f"https://api.gateio.ws/api/v4/spot/order_book?currency_pair={base_sym}_USDT&limit=20", timeout=2.5).json()
+                bids_raw = [[float(x[0]) * scale, float(x[1]) / scale] for x in r.get("bids", [])]
+                asks_raw = [[float(x[0]) * scale, float(x[1]) / scale] for x in r.get("asks", [])]
+                return {"bids": bids_raw, "asks": asks_raw}
+            else:
+                r = requests.get(f"https://api.gateio.ws/api/v4/futures/usdt/order_book?contract={base_sym}_USDT&limit=20", timeout=2.5).json()
+                bids_raw = [[float(x["p"]) * scale, float(x["s"]) / scale] for x in r.get("bids", [])]
+                asks_raw = [[float(x["p"]) * scale, float(x["s"]) / scale] for x in r.get("asks", [])]
+                return {"bids": bids_raw, "asks": asks_raw}
+
+        if ex_u == "BITGET":
+            if is_spot:
+                r = requests.get(f"https://api.bitget.com/api/v2/spot/market/orderbook?symbol={base_sym}USDT&type=step0&limit=20", timeout=2.5).json().get("data", {})
+            else:
+                r = requests.get(f"https://api.bitget.com/api/v2/mix/market/orderbook?symbol={base_sym}USDT&productType=USDT-FUTURES&limit=20", timeout=2.5).json().get("data", {})
+            bids_raw = [[float(x[0]) * scale, float(x[1]) / scale] for x in r.get("bids", [])]
+            asks_raw = [[float(x[0]) * scale, float(x[1]) / scale] for x in r.get("asks", [])]
+            return {"bids": bids_raw, "asks": asks_raw}
+
+        if ex_u == "MEXC":
+            if is_spot:
+                r = requests.get(f"https://api.mexc.com/api/v3/depth?symbol={base_sym}USDT&limit=20", timeout=2.5).json()
+                bids_raw = [[float(x[0]) * scale, float(x[1]) / scale] for x in r.get("bids", [])]
+                asks_raw = [[float(x[0]) * scale, float(x[1]) / scale] for x in r.get("asks", [])]
+                return {"bids": bids_raw, "asks": asks_raw}
+            else:
+                r = requests.get(f"https://contract.mexc.com/api/v1/contract/depth/{base_sym}_USDT?limit=20", timeout=2.5).json().get("data", {})
+                bids_raw = [[float(x[0]) * scale, float(x[1]) / scale] for x in r.get("bids", [])]
+                asks_raw = [[float(x[0]) * scale, float(x[1]) / scale] for x in r.get("asks", [])]
+                return {"bids": bids_raw, "asks": asks_raw}
+
+        if ex_u == "BINGX":
+            if is_spot:
+                r = requests.get(f"https://open-api.bingx.com/openApi/spot/v1/market/depth?symbol={base_sym}-USDT&limit=20", timeout=2.5).json().get("data", {})
+            else:
+                r = requests.get(f"https://open-api.bingx.com/openApi/swap/v2/quote/depth?symbol={base_sym}-USDT&limit=20", timeout=2.5).json().get("data", {})
+            bids_raw = [[float(x[0]) * scale, float(x[1]) / scale] for x in r.get("bids", [])]
+            asks_raw = [[float(x[0]) * scale, float(x[1]) / scale] for x in r.get("asks", [])]
+            return {"bids": bids_raw, "asks": asks_raw}
+
+        if ex_u == "KUCOIN":
+            if is_spot:
+                r = requests.get(f"https://api.kucoin.com/api/v1/market/orderbook/level2_20?symbol={base_sym}-USDT", timeout=2.5).json().get("data", {})
+                bids_raw = [[float(x[0]) * scale, float(x[1]) / scale] for x in r.get("bids", [])]
+                asks_raw = [[float(x[0]) * scale, float(x[1]) / scale] for x in r.get("asks", [])]
+                return {"bids": bids_raw, "asks": asks_raw}
+            else:
+                r = requests.get(f"https://api-futures.kucoin.com/api/v1/level2/depth20?symbol={base_sym}USDTM", timeout=2.5).json().get("data", {})
+                bids_raw = [[float(x[0]) * scale, float(x[1]) / scale] for x in r.get("bids", [])]
+                asks_raw = [[float(x[0]) * scale, float(x[1]) / scale] for x in r.get("asks", [])]
+                return {"bids": bids_raw, "asks": asks_raw}
+    except Exception:
+        pass
+
+    return None
+
+def inspect_pair_orderbook_liquidity(sym, long_ex, short_ex, target_usdt=SAMPLE_ORDER_USDT):
+    """
+    Возвращает данные по глубине верхних уровней стакана и риску проскальзывания
+    для связки (long_ex -> берём Ask/покупаем, short_ex -> бьём в Bid/шортим).
+    """
+    cache_key = f"{sym}|{long_ex}|{short_ex}"
+    now_ts = time.time()
+
+    with _orderbook_cache_lock:
+        cached = _orderbook_cache.get(cache_key)
+        if cached and (now_ts - cached["ts"]) <= BOOK_CACHE_TTL_SECONDS:
+            return cached["info"]
+
+    ob_long = _fetch_single_venue_depth(sym, long_ex, target_usdt)
+    ob_short = _fetch_single_venue_depth(sym, short_ex, target_usdt)
+
+    if not ob_long and not ob_short:
+        return None
+
+    # Для входа в Long на long_ex смотрим сторону Ask; для входа в Short на short_ex смотрим сторону Bid
+    long_side = _calc_side_depth_and_slippage(ob_long.get("asks") if ob_long else None, side="ask", target_usdt=target_usdt)
+    short_side = _calc_side_depth_and_slippage(ob_short.get("bids") if ob_short else None, side="bid", target_usdt=target_usdt)
+
+    depths = [d["depth_usdt"] for d in (long_side, short_side) if d["depth_usdt"] > 0]
+    min_depth_usdt = min(depths) if depths else 0.0
+
+    slips = [d["slippage_pct"] for d in (long_side, short_side) if d["slippage_pct"] is not None]
+    est_slip_pct = sum(slips) if slips else None
+
+    is_thin = (min_depth_usdt < THIN_BOOK_THRESHOLD_USDT) or (est_slip_pct is not None and est_slip_pct >= 0.8)
+
+    info = {
+        "min_depth_usdt": min_depth_usdt,
+        "long_depth_usdt": long_side["depth_usdt"],
+        "short_depth_usdt": short_side["depth_usdt"],
+        "est_slip_pct": est_slip_pct,
+        "is_thin": is_thin
+    }
+
+    with _orderbook_cache_lock:
+        _orderbook_cache[cache_key] = {"ts": now_ts, "info": info}
+
+    return info
+
+def format_liquidity_note(book_info, fallback_pos_usdt):
+    """Формирует аккуратную строку оценки стакана и риска проскальзывания."""
+    if not book_info:
+        if fallback_pos_usdt < THIN_BOOK_THRESHOLD_USDT:
+            return f"⚠️ **Стакан / Проскальзывание:** Оценка по 24h объёму небольшая (`~${fallback_pos_usdt:,}`) — возможен тонкий стакан и проскальзывание, проверь глубину вручную."
+        return f"ℹ️ **Стакан / Проскальзывание:** Глубокий стакан по 24h оценке (`~${fallback_pos_usdt:,}`), перед входом проверь актуальную плотность у лучшей цены."
+
+    depth_str = f"${book_info['min_depth_usdt']:,.0f}"
+    slip_str = f"`~{book_info['est_slip_pct']:.2f}%` (на `${SAMPLE_ORDER_USDT:,.0f}`)" if book_info["est_slip_pct"] is not None else "`н/д`"
+
+    if book_info["is_thin"]:
+        return (
+            f"⚠️ **Тонкий стакан / Риск проскальзывания:** В верхних уровнях ~`{depth_str}` | Проскальзывание: {slip_str}. "
+            f"Спред на экране может быть красивым, но объёма по лучшей цене мало — ставь лимитки и дроби вход."
+        )
+
+    return (
+        f"✅ **Глубина стакана:** ~`{depth_str}` в верхних уровнях | Проскальзывание: {slip_str}."
+    )
 
 # ==================== SECURE REQUESTS & ROTATING HEADERS ====================
 USER_AGENTS = [
@@ -1367,8 +1591,9 @@ def smooth_spread_value(state_obj, raw_spread):
 
 def find_best_fut_or_hybrid_pair(valid_bids, valid_asks):
     """
-    Находит лучшую связку (min_ex, max_ex), где хотя бы одна сторона — Fut
-    (то есть только Fut + Fut или Fut + Spot; чистый Spot + Spot полностью исключён).
+    Находит лучшую связку (min_ex, max_ex):
+    - либо Fut + Fut (любые две разные фьючерсные площадки);
+    - либо Spot + Fut при условии, что Spot дешевле Fut (min_ex == Spot, max_ex == Fut).
     """
     best_pair = None
     best_spread = -1.0
@@ -1380,6 +1605,11 @@ def find_best_fut_or_hybrid_pair(valid_bids, valid_asks):
             if a_price < MIN_VALID_PRICE or b_ex == a_ex:
                 continue
             if not is_allowed_venue_pair(b_ex, a_ex):
+                continue
+            # Дополнительно проверяем, что для гибридной пары Spot реально дешевле Fut
+            _, m_long = split_venue_key(b_ex)
+            _, m_short = split_venue_key(a_ex)
+            if m_long == "Spot" and m_short == "Fut" and not (b_price < a_price):
                 continue
             sp = ((a_price - b_price) / b_price) * 100
             if sp > best_spread:
@@ -1653,6 +1883,9 @@ def monitor_spread():
                 if not is_allowed_venue_pair(min_ex, max_ex):
                     continue
 
+                book_info = inspect_pair_orderbook_liquidity(sym, min_ex, max_ex, target_usdt=SAMPLE_ORDER_USDT)
+                liquidity_note = format_liquidity_note(book_info, max_pos_usdt)
+
                 if sym not in symbol_price_tracker:
                     symbol_price_tracker[sym] = []
                 symbol_price_tracker[sym].append((now_ts, min_p))
@@ -1713,7 +1946,7 @@ def monitor_spread():
 
                 _, min_m_type = split_venue_key(min_ex)
                 _, max_m_type = split_venue_key(max_ex)
-                market_mode_label = "Fut + Spot" if (min_m_type != max_m_type) else "Fut + Fut"
+                market_mode_label = "Spot < Fut" if (min_m_type != max_m_type) else "Fut + Fut"
 
                 if in_hysteresis:
                     badge = f"⏳ **HOLD / СХОЖДЕНИЕ (ниже 5%, закрытие < {SPREAD_CLOSE_THRESHOLD:.2f}%)**"
@@ -1737,10 +1970,11 @@ def monitor_spread():
                     msg_text = (
                         f"{badge}\n"
                         f"🪙 **#{sym} | Spread: `{spread:.2f}%`** ({market_mode_label} LIVE)\n\n"
-                        f"🟢 **Long Bid ({min_ex}):** `${min_p_str}` (Funding: {min_fund_str})\n"
-                        f"🔴 **Short Ask ({max_ex}):** `${max_p_str}` (Funding: {max_fund_str})\n\n"
+                        f"🟢 **Long ({min_ex}):** `${min_p_str}` (Funding: {min_fund_str})\n"
+                        f"🔴 **Short ({max_ex}):** `${max_p_str}` (Funding: {max_fund_str})\n\n"
                         f"📊 **Динамика спреда:**\n" + "\n".join(history_lines) + "\n\n"
-                        f"💰 **Объем стакана:** `~${max_pos_usdt:,} USDT`\n\n"
+                        f"💰 **Объем (24h оценка):** `~${max_pos_usdt:,} USDT`\n"
+                        f"{liquidity_note}\n\n"
                         f"📝 **Стаканы бирж:**\n{overview}\n\n"
                         f"🔄 _Обновлено: {curr_time_str} (Киев)_"
                     )
@@ -1774,10 +2008,11 @@ def monitor_spread():
                     updated_text = (
                         f"{badge}\n"
                         f"🪙 **#{sym} | Spread: `{spread:.2f}%`** ({market_mode_label} LIVE)\n\n"
-                        f"🟢 **Long Bid ({min_ex}):** `${min_p_str}` (Funding: {min_fund_str})\n"
-                        f"🔴 **Short Ask ({max_ex}):** `${max_p_str}` (Funding: {max_fund_str})\n\n"
+                        f"🟢 **Long ({min_ex}):** `${min_p_str}` (Funding: {min_fund_str})\n"
+                        f"🔴 **Short ({max_ex}):** `${max_p_str}` (Funding: {max_fund_str})\n\n"
                         f"📊 **Динамика спреда:**\n" + "\n".join(history) + "\n\n"
-                        f"💰 **Объем стакана:** `~${max_pos_usdt:,} USDT`\n\n"
+                        f"💰 **Объем (24h оценка):** `~${max_pos_usdt:,} USDT`\n"
+                        f"{liquidity_note}\n\n"
                         f"📝 **Стаканы бирж:**\n{overview}\n\n"
                         f"🔄 _Обновлено: {curr_time_str} (Киев)_"
                     )
@@ -1951,8 +2186,8 @@ def run_alpha_session(session_key, token_identifier):
 def cmd_spread_on(message):
     global spread_monitor_enabled
     spread_monitor_enabled = True
-    bot.reply_to(message, f"🟢 **Мониторинг спредов ЗАПУЩЕН!**\nИщу подтвержденные спреды от `{SPREAD_ENTRY_MIN:.1f}%` (только Fut + Fut и Fut + Spot, вектор {PENDING_BUFFER_SECONDS}с + ликвидность от ${MIN_ENTRY_POS_USDT:,}).", parse_mode="Markdown")
-    send_to_topic("SPREAD", "🟢 **Охота за спредами ЗАПУЩЕНА** (режим Fut + Fut и Fut + Spot).")
+    bot.reply_to(message, f"🟢 **Мониторинг спредов ЗАПУЩЕН!**\nИщу подтвержденные спреды от `{SPREAD_ENTRY_MIN:.1f}%` (Fut + Fut и Spot < Fut, вектор {PENDING_BUFFER_SECONDS}с + ликвидность от ${MIN_ENTRY_POS_USDT:,}).", parse_mode="Markdown")
+    send_to_topic("SPREAD", "🟢 **Охота за спредами ЗАПУЩЕНА** (режим Fut + Fut и Spot < Fut).")
 
 @bot.message_handler(commands=['spread_off', 's_off'])
 def cmd_spread_off(message):

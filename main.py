@@ -75,9 +75,11 @@ PAIR_COOLDOWN_SECONDS = 180         # Кулдаун на конкретную �
 STALE_POLL_LIMIT = 4                # Сколько циклов подряд цена может стоять без движения при живой монете
 SMOOTH_WINDOW = 3                   # Окно сглаживания спреда для защиты от качелей
 
-# Настройки проверки глубины стакана и проскальзывания для кандидатов на сигнал
-SAMPLE_ORDER_USDT = 1000.0          # Тестовый размер ордера для оценки проскальзывания
-THIN_BOOK_THRESHOLD_USDT = 1500.0   # Ниже этого объёма у верхних уровней стакан считается тонким
+# Настройки проверки глубины стакана и проскальзывания под вход ~$100
+SAMPLE_ORDER_USDT = 100.0           # Тестовый размер ордера для оценки проскальзывания
+MIN_BOOK_DEPTH_USDT = 500.0         # Минимальный объём в верхних уровнях стакана (USDT)
+MAX_SLIPPAGE_PCT = 0.5              # Максимально допустимое проскальзывание (%) на SAMPLE_ORDER_USDT
+THIN_BOOK_THRESHOLD_USDT = 1500.0   # Ниже этого объёма у верхних уровней стакан помечается как тонкий
 BOOK_CACHE_TTL_SECONDS = 12         # Кэш глубины стакана по паре (сек)
 
 SPREADS_FILE = "active_spreads.json"
@@ -168,14 +170,16 @@ def split_venue_key(venue_key):
 def is_allowed_venue_pair(min_ex, max_ex):
     """
     Разрешаем:
-    - Fut + Fut (любые две разные фьючерсные площадки);
-    - Fut + Spot только когда Spot дешевле Fut (то есть min_ex == Spot и max_ex == Fut).
-    Чистый Spot + Spot и варианты, где Spot дороже Fut, исключены.
+    - Fut + Fut на разных биржах;
+    - Spot + Fut на разных биржах только когда Spot дешевле Fut (то есть min_ex == Spot и max_ex == Fut).
+    Связки на одной и той же бирже, чистый Spot + Spot и варианты, где Spot дороже Fut, исключены.
     """
     if not min_ex or not max_ex or min_ex == max_ex:
         return False
-    _, m1 = split_venue_key(min_ex)
-    _, m2 = split_venue_key(max_ex)
+    ex1, m1 = split_venue_key(min_ex)
+    ex2, m2 = split_venue_key(max_ex)
+    if ex1 == ex2:
+        return False
     if m1 == "Fut" and m2 == "Fut":
         return True
     if m1 == "Spot" and m2 == "Fut":
@@ -357,13 +361,15 @@ def inspect_pair_orderbook_liquidity(sym, long_ex, short_ex, target_usdt=SAMPLE_
     slips = [d["slippage_pct"] for d in (long_side, short_side) if d["slippage_pct"] is not None]
     est_slip_pct = sum(slips) if slips else None
 
-    is_thin = (min_depth_usdt < THIN_BOOK_THRESHOLD_USDT) or (est_slip_pct is not None and est_slip_pct >= 0.8)
+    is_too_thin = (min_depth_usdt < MIN_BOOK_DEPTH_USDT) or (est_slip_pct is not None and est_slip_pct > MAX_SLIPPAGE_PCT)
+    is_thin = (min_depth_usdt < THIN_BOOK_THRESHOLD_USDT) or (est_slip_pct is not None and est_slip_pct >= (MAX_SLIPPAGE_PCT * 0.7))
 
     info = {
         "min_depth_usdt": min_depth_usdt,
         "long_depth_usdt": long_side["depth_usdt"],
         "short_depth_usdt": short_side["depth_usdt"],
         "est_slip_pct": est_slip_pct,
+        "is_too_thin": is_too_thin,
         "is_thin": is_thin
     }
 
@@ -1591,8 +1597,8 @@ def smooth_spread_value(state_obj, raw_spread):
 
 def find_best_fut_or_hybrid_pair(valid_bids, valid_asks):
     """
-    Находит лучшую связку (min_ex, max_ex):
-    - либо Fut + Fut (любые две разные фьючерсные площадки);
+    Находит лучшую связку (min_ex, max_ex) на разных биржах:
+    - либо Fut + Fut;
     - либо Spot + Fut при условии, что Spot дешевле Fut (min_ex == Spot, max_ex == Fut).
     """
     best_pair = None
@@ -1606,7 +1612,6 @@ def find_best_fut_or_hybrid_pair(valid_bids, valid_asks):
                 continue
             if not is_allowed_venue_pair(b_ex, a_ex):
                 continue
-            # Дополнительно проверяем, что для гибридной пары Spot реально дешевле Fut
             _, m_long = split_venue_key(b_ex)
             _, m_short = split_venue_key(a_ex)
             if m_long == "Spot" and m_short == "Fut" and not (b_price < a_price):
@@ -1849,11 +1854,16 @@ def monitor_spread():
 
                             if elapsed >= PENDING_BUFFER_SECONDS:
                                 if max_pos_usdt >= MIN_ENTRY_POS_USDT and spread >= (init_sp - 0.5):
+                                    book_info = inspect_pair_orderbook_liquidity(sym, min_ex, max_ex, target_usdt=SAMPLE_ORDER_USDT)
+                                    if book_info and book_info.get("is_too_thin"):
+                                        del pending_spreads[chart_key]
+                                        continue
                                     current_detected_spreads[chart_key] = {
                                         "sym": sym, "min_ex": min_ex, "max_ex": max_ex,
                                         "min_p": min_p, "max_p": max_p, "spread": spread,
                                         "max_pos_usdt": max_pos_usdt, "valid_bids": valid_bids,
                                         "valid_asks": valid_asks, "sym_vols": sym_vols, "fundings": fundings,
+                                        "book_info": book_info,
                                         "in_hysteresis": False
                                     }
                                     pair_cooldowns[chart_key] = now_ts
@@ -1883,7 +1893,9 @@ def monitor_spread():
                 if not is_allowed_venue_pair(min_ex, max_ex):
                     continue
 
-                book_info = inspect_pair_orderbook_liquidity(sym, min_ex, max_ex, target_usdt=SAMPLE_ORDER_USDT)
+                book_info = data.get("book_info")
+                if book_info is None:
+                    book_info = inspect_pair_orderbook_liquidity(sym, min_ex, max_ex, target_usdt=SAMPLE_ORDER_USDT)
                 liquidity_note = format_liquidity_note(book_info, max_pos_usdt)
 
                 if sym not in symbol_price_tracker:
@@ -2186,8 +2198,8 @@ def run_alpha_session(session_key, token_identifier):
 def cmd_spread_on(message):
     global spread_monitor_enabled
     spread_monitor_enabled = True
-    bot.reply_to(message, f"🟢 **Мониторинг спредов ЗАПУЩЕН!**\nИщу подтвержденные спреды от `{SPREAD_ENTRY_MIN:.1f}%` (Fut + Fut и Spot < Fut, вектор {PENDING_BUFFER_SECONDS}с + ликвидность от ${MIN_ENTRY_POS_USDT:,}).", parse_mode="Markdown")
-    send_to_topic("SPREAD", "🟢 **Охота за спредами ЗАПУЩЕНА** (режим Fut + Fut и Spot < Fut).")
+    bot.reply_to(message, f"🟢 **Мониторинг спредов ЗАПУЩЕН!**\nИщу подтвержденные спреды от `{SPREAD_ENTRY_MIN:.1f}%` (Fut + Fut и Spot < Fut на разных биржах, вектор {PENDING_BUFFER_SECONDS}с, глубина от ${MIN_BOOK_DEPTH_USDT:,.0f}, проскальзывание до {MAX_SLIPPAGE_PCT:.1f}% на ${SAMPLE_ORDER_USDT:,.0f}).", parse_mode="Markdown")
+    send_to_topic("SPREAD", "🟢 **Охота за спредами ЗАПУЩЕНА** (режим Fut + Fut и Spot < Fut, разные биржи).")
 
 @bot.message_handler(commands=['spread_off', 's_off'])
 def cmd_spread_off(message):

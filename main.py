@@ -59,6 +59,10 @@ alpha_price_memory = {}
 # Флаг управления мониторингом спредов (по умолчанию выключен, включается командой /spread_on)
 spread_monitor_enabled = False
 
+# Черный список монет и бирж для мониторинга спредов
+IGNORED_SPREAD_SYMBOLS = {"OURA", "AURA"}
+EXCLUDED_SPREAD_EXCHANGES = {"MEXC"}
+
 # Пороги логики спредов
 SPREAD_ENTRY_MIN = 5.0
 SPREAD_ENTRY_MAX = 80.0             # Адекватный верхний фильтр против битых стаканов
@@ -71,7 +75,8 @@ MIN_VALID_PRICE = 1e-6              # Отсекаем копеечные глю
 MAX_MEDIAN_DEVIATION = 0.40         # Макс. отклонение от медианной цены монеты (40%)
 CLOSE_CONFIRM_POLLS = 2             # Подтверждение схождения на 2 циклах подряд
 CLOSE_MISSING_LIMIT = 3             # Допуск битых/пропавших цен перед закрытием
-PAIR_COOLDOWN_SECONDS = 180         # Кулдаун на конкретную связку бирж после закрытия
+PAIR_COOLDOWN_SECONDS = 180         # Кулдаун на конкретную связку бирж после схождения
+MISSING_QUOTE_COOLDOWN_SECONDS = 2400  # Расширенный кулдаун (40 мин) при потере котировок
 STALE_POLL_LIMIT = 4                # Сколько циклов подряд цена может стоять без движения при живой монете
 SMOOTH_WINDOW = 3                   # Окно сглаживания спреда для защиты от качелей
 
@@ -157,6 +162,13 @@ def normalize_symbol(raw_sym):
     base, _ = parse_normalized_symbol(raw_sym)
     return base
 
+def is_ignored_spread_symbol(sym):
+    if not sym:
+        return True
+    raw_u = str(sym).upper().strip()
+    base_u = normalize_symbol(raw_u)
+    return raw_u in IGNORED_SPREAD_SYMBOLS or base_u in IGNORED_SPREAD_SYMBOLS
+
 def make_venue_key(exchange, market_type="Fut"):
     m_tag = "Spot" if market_type.lower().startswith("spot") else "Fut"
     return f"{exchange} {m_tag}"
@@ -167,14 +179,23 @@ def split_venue_key(venue_key):
         return parts[0], parts[1]
     return venue_key, "Fut"
 
+def is_excluded_spread_venue(venue_key):
+    if not venue_key:
+        return True
+    ex_name, _ = split_venue_key(venue_key)
+    return ex_name.upper() in {e.upper() for e in EXCLUDED_SPREAD_EXCHANGES}
+
 def is_allowed_venue_pair(min_ex, max_ex):
     """
     Разрешаем:
     - Fut + Fut на разных биржах;
     - Spot + Fut на разных биржах только когда Spot дешевле Fut (то есть min_ex == Spot и max_ex == Fut).
-    Связки на одной и той же бирже, чистый Spot + Spot и варианты, где Spot дороже Fut, исключены.
+    Связки на одной и той же бирже, чистый Spot + Spot, варианты, где Spot дороже Fut,
+    а также биржи из EXCLUDED_SPREAD_EXCHANGES (например, MEXC) исключены.
     """
     if not min_ex or not max_ex or min_ex == max_ex:
+        return False
+    if is_excluded_spread_venue(min_ex) or is_excluded_spread_venue(max_ex):
         return False
     ex1, m1 = split_venue_key(min_ex)
     ex2, m2 = split_venue_key(max_ex)
@@ -1605,10 +1626,10 @@ def find_best_fut_or_hybrid_pair(valid_bids, valid_asks):
     best_spread = -1.0
 
     for b_ex, b_price in valid_bids.items():
-        if b_price < MIN_VALID_PRICE:
+        if b_price < MIN_VALID_PRICE or is_excluded_spread_venue(b_ex):
             continue
         for a_ex, a_price in valid_asks.items():
-            if a_price < MIN_VALID_PRICE or b_ex == a_ex:
+            if a_price < MIN_VALID_PRICE or b_ex == a_ex or is_excluded_spread_venue(a_ex):
                 continue
             if not is_allowed_venue_pair(b_ex, a_ex):
                 continue
@@ -1629,7 +1650,7 @@ def monitor_spread():
 
     live_spread_posts = {}
     pending_spreads = {}      # Буфер подтверждения вектора входа
-    pair_cooldowns = {}         # Кулдаун на конкретную связку (chart_key) после закрытия
+    pair_cooldowns = {}         # Кулдаун на конкретную связку (chart_key) после закрытия: {key: {"ts": ..., "duration": ...}}
     quote_stale_tracker = {}  # Трекер залипших котировок по (sym -> venue)
 
     while True:
@@ -1646,11 +1667,14 @@ def monitor_spread():
             now_ts = int(time.time())
 
             pair_cooldowns = {
-                ck: ts for ck, ts in pair_cooldowns.items()
-                if (now_ts - ts) < PAIR_COOLDOWN_SECONDS
+                ck: cd for ck, cd in pair_cooldowns.items()
+                if (now_ts - cd["ts"]) < cd["duration"]
             }
 
-            all_symbols = set(bids.keys()).union(set(asks.keys()))
+            all_symbols = {
+                s for s in set(bids.keys()).union(set(asks.keys()))
+                if not is_ignored_spread_symbol(s)
+            }
             current_detected_spreads = {}
             closed_keys = []
 
@@ -1660,12 +1684,17 @@ def monitor_spread():
                 short_ex = post_info["max_ex"]
                 msg_id = post_info["msg_id"]
 
-                if not is_allowed_venue_pair(long_ex, short_ex):
+                if (
+                    is_ignored_spread_symbol(sym_name)
+                    or is_excluded_spread_venue(long_ex)
+                    or is_excluded_spread_venue(short_ex)
+                    or not is_allowed_venue_pair(long_ex, short_ex)
+                ):
                     del live_spread_posts[chart_key]
                     continue
 
-                raw_b = bids.get(sym_name, {})
-                raw_a = asks.get(sym_name, {})
+                raw_b = {ex: p for ex, p in bids.get(sym_name, {}).items() if not is_excluded_spread_venue(ex)}
+                raw_a = {ex: p for ex, p in asks.get(sym_name, {}).items() if not is_excluded_spread_venue(ex)}
                 clean_b, clean_a = filter_stale_quotes(sym_name, raw_b, raw_a, quote_stale_tracker)
 
                 b_val = clean_b.get(long_ex, 0.0)
@@ -1699,8 +1728,8 @@ def monitor_spread():
                                 "max_p": p_short_hold,
                                 "spread": sp_hold,
                                 "max_pos_usdt": max_pos_usdt,
-                                "valid_bids": {k: v for k, v in clean_b.items() if sym_vols.get(k, 0) >= MIN_EXCHANGE_VOL_USDT},
-                                "valid_asks": {k: v for k, v in clean_a.items() if sym_vols.get(k, 0) >= MIN_EXCHANGE_VOL_USDT},
+                                "valid_bids": {k: v for k, v in clean_b.items() if not is_excluded_spread_venue(k) and sym_vols.get(k, 0) >= MIN_EXCHANGE_VOL_USDT},
+                                "valid_asks": {k: v for k, v in clean_a.items() if not is_excluded_spread_venue(k) and sym_vols.get(k, 0) >= MIN_EXCHANGE_VOL_USDT},
                                 "sym_vols": sym_vols,
                                 "fundings": fundings,
                                 "in_hysteresis": True
@@ -1724,7 +1753,8 @@ def monitor_spread():
                 )
 
                 if should_close:
-                    pair_cooldowns[chart_key] = now_ts
+                    cd_duration = MISSING_QUOTE_COOLDOWN_SECONDS if close_reason == "missing_quotes" else PAIR_COOLDOWN_SECONDS
+                    pair_cooldowns[chart_key] = {"ts": now_ts, "duration": cd_duration}
 
                     p_long_close = b_val if b_val >= MIN_VALID_PRICE else post_info.get("last_long_p", 0.0)
                     p_short_close = a_val if a_val >= MIN_VALID_PRICE else post_info.get("last_short_p", 0.0)
@@ -1738,7 +1768,7 @@ def monitor_spread():
                             f"🟢 {long_ex}: `${format_price(p_long_close)}` | 🔴 {short_ex}: `${format_price(p_short_close)}`{close_sp_line}\n"
                         )
 
-                    cooldown_mins = PAIR_COOLDOWN_SECONDS // 60
+                    cooldown_mins = max(1, cd_duration // 60)
                     if close_reason == "converged":
                         header_text = "🟢 **СПРЕД СОШЕЛСЯ / ЗАКРЫТИЕ СДЕЛКИ**"
                         reason_text = f"🎯 Спред схлопнулся ниже `{SPREAD_CLOSE_THRESHOLD:.2f}%`. Позицию можно закрывать и фиксировать результат!"
@@ -1783,22 +1813,25 @@ def monitor_spread():
                         "max_p": a_val,
                         "spread": live_spread,
                         "max_pos_usdt": max_pos_usdt,
-                        "valid_bids": {k: v for k, v in clean_b.items() if sym_vols.get(k, 0) >= MIN_EXCHANGE_VOL_USDT},
-                        "valid_asks": {k: v for k, v in clean_a.items() if sym_vols.get(k, 0) >= MIN_EXCHANGE_VOL_USDT},
+                        "valid_bids": {k: v for k, v in clean_b.items() if not is_excluded_spread_venue(k) and sym_vols.get(k, 0) >= MIN_EXCHANGE_VOL_USDT},
+                        "valid_asks": {k: v for k, v in clean_a.items() if not is_excluded_spread_venue(k) and sym_vols.get(k, 0) >= MIN_EXCHANGE_VOL_USDT},
                         "sym_vols": sym_vols,
                         "fundings": fundings,
                         "in_hysteresis": True
                     }
 
             for sym in all_symbols:
-                sym_bids = bids.get(sym, {})
-                sym_asks = asks.get(sym, {})
+                if is_ignored_spread_symbol(sym):
+                    continue
+
+                sym_bids = {ex: p for ex, p in bids.get(sym, {}).items() if not is_excluded_spread_venue(ex)}
+                sym_asks = {ex: p for ex, p in asks.get(sym, {}).items() if not is_excluded_spread_venue(ex)}
                 sym_vols = volumes.get(sym, {})
 
                 clean_bids, clean_asks = filter_stale_quotes(sym, sym_bids, sym_asks, quote_stale_tracker)
 
-                valid_bids = {ex: p for ex, p in clean_bids.items() if sym_vols.get(ex, 0) >= MIN_EXCHANGE_VOL_USDT and p >= MIN_VALID_PRICE}
-                valid_asks = {ex: p for ex, p in clean_asks.items() if sym_vols.get(ex, 0) >= MIN_EXCHANGE_VOL_USDT and p >= MIN_VALID_PRICE}
+                valid_bids = {ex: p for ex, p in clean_bids.items() if not is_excluded_spread_venue(ex) and sym_vols.get(ex, 0) >= MIN_EXCHANGE_VOL_USDT and p >= MIN_VALID_PRICE}
+                valid_asks = {ex: p for ex, p in clean_asks.items() if not is_excluded_spread_venue(ex) and sym_vols.get(ex, 0) >= MIN_EXCHANGE_VOL_USDT and p >= MIN_VALID_PRICE}
 
                 if len(valid_bids) < 2 or len(valid_asks) < 2:
                     continue
@@ -1866,7 +1899,7 @@ def monitor_spread():
                                         "book_info": book_info,
                                         "in_hysteresis": False
                                     }
-                                    pair_cooldowns[chart_key] = now_ts
+                                    pair_cooldowns[chart_key] = {"ts": now_ts, "duration": PAIR_COOLDOWN_SECONDS}
                                 del pending_spreads[chart_key]
                 else:
                     if chart_key in pending_spreads:
@@ -1890,7 +1923,7 @@ def monitor_spread():
                 fundings = data["fundings"]
                 in_hysteresis = data.get("in_hysteresis", False)
 
-                if not is_allowed_venue_pair(min_ex, max_ex):
+                if is_ignored_spread_symbol(sym) or not is_allowed_venue_pair(min_ex, max_ex):
                     continue
 
                 book_info = data.get("book_info")
@@ -1928,7 +1961,10 @@ def monitor_spread():
                 min_fund_str = f"`{min_fund_val:.2f}%`" if min_fund_val is not None else "`Spot / N/A`"
                 max_fund_str = f"`{max_fund_val:.2f}%`" if max_fund_val is not None else "`Spot / N/A`"
 
-                all_valid_exs = set(valid_bids.keys()).union(set(valid_asks.keys()))
+                all_valid_exs = {
+                    ex for ex in set(valid_bids.keys()).union(set(valid_asks.keys()))
+                    if not is_excluded_spread_venue(ex)
+                }
                 sorted_exs = sorted(all_valid_exs, key=lambda ex: sym_vols.get(ex, 0), reverse=True)
                 overview_list = []
                 for ex in sorted_exs:
@@ -2198,8 +2234,8 @@ def run_alpha_session(session_key, token_identifier):
 def cmd_spread_on(message):
     global spread_monitor_enabled
     spread_monitor_enabled = True
-    bot.reply_to(message, f"🟢 **Мониторинг спредов ЗАПУЩЕН!**\nИщу подтвержденные спреды от `{SPREAD_ENTRY_MIN:.1f}%` (Fut + Fut и Spot < Fut на разных биржах, вектор {PENDING_BUFFER_SECONDS}с, глубина от ${MIN_BOOK_DEPTH_USDT:,.0f}, проскальзывание до {MAX_SLIPPAGE_PCT:.1f}% на ${SAMPLE_ORDER_USDT:,.0f}).", parse_mode="Markdown")
-    send_to_topic("SPREAD", "🟢 **Охота за спредами ЗАПУЩЕНА** (режим Fut + Fut и Spot < Fut, разные биржи).")
+    bot.reply_to(message, f"🟢 **Мониторинг спредов ЗАПУЩЕН!**\nИщу подтвержденные спреды от `{SPREAD_ENTRY_MIN:.1f}%` (Fut + Fut и Spot < Fut на разных биржах, кроме MEXC; без OURA/AURA; вектор {PENDING_BUFFER_SECONDS}с, глубина от ${MIN_BOOK_DEPTH_USDT:,.0f}, проскальзывание до {MAX_SLIPPAGE_PCT:.1f}% на ${SAMPLE_ORDER_USDT:,.0f}).", parse_mode="Markdown")
+    send_to_topic("SPREAD", "🟢 **Охота за спредами ЗАПУЩЕНА** (режим Fut + Fut и Spot < Fut, разные биржи, без MEXC и OURA/AURA).")
 
 @bot.message_handler(commands=['spread_off', 's_off'])
 def cmd_spread_off(message):

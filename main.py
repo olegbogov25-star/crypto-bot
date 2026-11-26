@@ -73,6 +73,8 @@ MIN_ENTRY_POS_USDT = 500            # Минимальная оценка объ
 MIN_EXCHANGE_VOL_USDT = 5_000       # Минимальный 24h оборот биржи для участия в поиске
 MIN_VALID_PRICE = 1e-6              # Отсекаем копеечные глюки вроде 2.5e-05 / 2.5e-50
 MAX_MEDIAN_DEVIATION = 0.40         # Макс. отклонение от медианной цены монеты (40%)
+MAX_SPOT_LAST_DEVIATION = 0.15      # Макс. отклонение спотового bid/ask от lastPrice (15%)
+MAX_SPOT_INNER_SPREAD_PCT = 12.0    # Макс. внутренний спред (ask-bid)/bid на споте до отсева краёв
 CLOSE_CONFIRM_POLLS = 2             # Подтверждение схождения на 2 циклах подряд
 CLOSE_MISSING_LIMIT = 3             # Допуск битых/пропавших цен перед закрытием
 PAIR_COOLDOWN_SECONDS = 180         # Кулдаун на конкретную связку бирж после схождения
@@ -212,12 +214,6 @@ _orderbook_cache = {}
 _orderbook_cache_lock = threading.Lock()
 
 def _calc_side_depth_and_slippage(levels, side="bid", target_usdt=SAMPLE_ORDER_USDT):
-    """
-    Считает доступный объём в USDT по верхним уровням стакана и примерное проскальзывание (%)
-    для ордера target_usdt.
-    side="bid" -> покупатель/продавец бьёт в биды (сверху вниз).
-    side="ask" -> покупатель/продавец бьёт в аски (снизу вверх).
-    """
     parsed = []
     for item in (levels or []):
         try:
@@ -244,7 +240,6 @@ def _calc_side_depth_and_slippage(levels, side="bid", target_usdt=SAMPLE_ORDER_U
         lvl_usdt = p * q
         total_usdt += lvl_usdt
         if slippage_pct is None and needed_usdt > 0:
-            take_usdt = min(lvl_usdt, needed_usdt - total_usdt + lvl_usdt)
             if total_usdt >= needed_usdt:
                 rem = needed_usdt - (total_usdt - lvl_usdt)
                 total_qty += rem / p
@@ -354,10 +349,6 @@ def _fetch_single_venue_depth(sym, venue_key, target_usdt=SAMPLE_ORDER_USDT):
     return None
 
 def inspect_pair_orderbook_liquidity(sym, long_ex, short_ex, target_usdt=SAMPLE_ORDER_USDT):
-    """
-    Возвращает данные по глубине верхних уровней стакана и риску проскальзывания
-    для связки (long_ex -> берём Ask/покупаем, short_ex -> бьём в Bid/шортим).
-    """
     cache_key = f"{sym}|{long_ex}|{short_ex}"
     now_ts = time.time()
 
@@ -372,7 +363,6 @@ def inspect_pair_orderbook_liquidity(sym, long_ex, short_ex, target_usdt=SAMPLE_
     if not ob_long and not ob_short:
         return None
 
-    # Для входа в Long на long_ex смотрим сторону Ask; для входа в Short на short_ex смотрим сторону Bid
     long_side = _calc_side_depth_and_slippage(ob_long.get("asks") if ob_long else None, side="ask", target_usdt=target_usdt)
     short_side = _calc_side_depth_and_slippage(ob_short.get("bids") if ob_short else None, side="bid", target_usdt=target_usdt)
 
@@ -400,7 +390,6 @@ def inspect_pair_orderbook_liquidity(sym, long_ex, short_ex, target_usdt=SAMPLE_
     return info
 
 def format_liquidity_note(book_info, fallback_pos_usdt):
-    """Формирует аккуратную строку оценки стакана и риска проскальзывания."""
     if not book_info:
         if fallback_pos_usdt < THIN_BOOK_THRESHOLD_USDT:
             return f"⚠️ **Стакан / Проскальзывание:** Оценка по 24h объёму небольшая (`~${fallback_pos_usdt:,}`) — возможен тонкий стакан и проскальзывание, проверь глубину вручную."
@@ -1197,6 +1186,15 @@ def fetch_global_crypto_promos():
         time.sleep(900)
 
 # ==================== PARALLEL FUTURES + SPOT MARKET ENGINE ====================
+def _to_float_or_none(val):
+    if val is None or val == "":
+        return None
+    try:
+        f = float(val)
+        return f if f > 0 else None
+    except (TypeError, ValueError):
+        return None
+
 def _record_quote(bids, asks, volumes, sym, venue, bid_p, ask_p, vol_24h, mult=1.0):
     if not sym or mult <= 0:
         return
@@ -1207,6 +1205,68 @@ def _record_quote(bids, asks, volumes, sym, venue, bid_p, ask_p, vol_24h, mult=1
     elif a <= 0 and b > 0:
         a = b
     if b < MIN_VALID_PRICE or a < MIN_VALID_PRICE:
+        return
+
+    bids.setdefault(sym, {})[venue] = b
+    asks.setdefault(sym, {})[venue] = a
+    if vol_24h is not None:
+        volumes.setdefault(sym, {})[venue] = max(volumes.get(sym, {}).get(venue, 0.0), float(vol_24h or 0.0))
+
+def _record_spot_quote(bids, asks, volumes, sym, venue, bid_raw, ask_raw, last_raw, vol_24h, mult=1.0):
+    """
+    Читает спотовые котировки с проверкой краёв стакана (bid/ask) относительно lastPrice
+    и внутреннего спреда стакана, чтобы отсекать «дырявые» или улетевшие края.
+    """
+    if not sym or mult <= 0:
+        return
+
+    b_val = _to_float_or_none(bid_raw)
+    a_val = _to_float_or_none(ask_raw)
+    l_val = _to_float_or_none(last_raw)
+
+    b = (b_val / mult) if b_val is not None else None
+    a = (a_val / mult) if a_val is not None else None
+    last_p = (l_val / mult) if l_val is not None else None
+
+    if last_p is not None and last_p < MIN_VALID_PRICE:
+        last_p = None
+    if b is not None and b < MIN_VALID_PRICE:
+        b = None
+    if a is not None and a < MIN_VALID_PRICE:
+        a = None
+
+    # Если есть и bid, и ask — проверяем пересечение и аномально широкий внутренний стакан
+    if b is not None and a is not None:
+        if a < b:
+            b, a = last_p, last_p
+        else:
+            inner_spread_pct = ((a - b) / b) * 100.0 if b > 0 else 0.0
+            if inner_spread_pct > MAX_SPOT_INNER_SPREAD_PCT:
+                if last_p is not None:
+                    b_ok = abs(b - last_p) / last_p <= MAX_SPOT_LAST_DEVIATION
+                    a_ok = abs(a - last_p) / last_p <= MAX_SPOT_LAST_DEVIATION
+                    b = b if b_ok else last_p
+                    a = a if a_ok else last_p
+                else:
+                    b = None
+                    a = None
+
+    # Сверяем края стакана с ценой последней сделки (lastPrice)
+    if last_p is not None:
+        if b is not None and abs(b - last_p) / last_p > MAX_SPOT_LAST_DEVIATION:
+            b = last_p
+        if a is not None and abs(a - last_p) / last_p > MAX_SPOT_LAST_DEVIATION:
+            a = last_p
+
+    if b is None and a is None:
+        b = last_p
+        a = last_p
+    elif b is None:
+        b = a
+    elif a is None:
+        a = b
+
+    if b is None or a is None or b < MIN_VALID_PRICE or a < MIN_VALID_PRICE:
         return
 
     bids.setdefault(sym, {})[venue] = b
@@ -1260,7 +1320,11 @@ def fetch_futures_data(include_spot=True):
                         if not raw_s.endswith("USDT"):
                             continue
                         sym, mult = parse_normalized_symbol(raw_s)
-                        _record_quote(bids, asks, volumes, sym, v_spot, item.get('bidPrice') or item.get('lastPrice'), item.get('askPrice') or item.get('lastPrice'), item.get('quoteVolume', 0.0), mult)
+                        _record_spot_quote(
+                            bids, asks, volumes, sym, v_spot,
+                            item.get('bidPrice'), item.get('askPrice'), item.get('lastPrice'),
+                            item.get('quoteVolume', 0.0), mult
+                        )
             except Exception: pass
 
     def _poll_bybit():
@@ -1290,8 +1354,11 @@ def fetch_futures_data(include_spot=True):
                     if not raw_s.endswith("USDT"):
                         continue
                     sym, mult = parse_normalized_symbol(raw_s)
-                    lp = item.get('lastPrice')
-                    _record_quote(bids, asks, volumes, sym, v_spot, item.get('bid1Price') or lp, item.get('ask1Price') or lp, item.get('turnover24h', 0.0), mult)
+                    _record_spot_quote(
+                        bids, asks, volumes, sym, v_spot,
+                        item.get('bid1Price'), item.get('ask1Price'), item.get('lastPrice'),
+                        item.get('turnover24h', 0.0), mult
+                    )
             except Exception: pass
 
     def _poll_okx():
@@ -1327,8 +1394,11 @@ def fetch_futures_data(include_spot=True):
                     if not inst.endswith("-USDT"):
                         continue
                     sym, mult = parse_normalized_symbol(inst)
-                    lp = item.get('last')
-                    _record_quote(bids, asks, volumes, sym, v_spot, item.get('bidPx') or lp, item.get('askPx') or lp, item.get('volCcy24h', 0.0), mult)
+                    _record_spot_quote(
+                        bids, asks, volumes, sym, v_spot,
+                        item.get('bidPx'), item.get('askPx'), item.get('last'),
+                        item.get('volCcy24h', 0.0), mult
+                    )
             except Exception: pass
 
     def _poll_gate():
@@ -1361,8 +1431,11 @@ def fetch_futures_data(include_spot=True):
                         if not pair.endswith("_USDT"):
                             continue
                         sym, mult = parse_normalized_symbol(pair)
-                        lp = item.get('last')
-                        _record_quote(bids, asks, volumes, sym, v_spot, item.get('highest_bid') or lp, item.get('lowest_ask') or lp, item.get('quote_volume', 0.0), mult)
+                        _record_spot_quote(
+                            bids, asks, volumes, sym, v_spot,
+                            item.get('highest_bid'), item.get('lowest_ask'), item.get('last'),
+                            item.get('quote_volume', 0.0), mult
+                        )
             except Exception: pass
 
     def _poll_bitget():
@@ -1392,8 +1465,11 @@ def fetch_futures_data(include_spot=True):
                     if not raw_s.endswith("USDT"):
                         continue
                     sym, mult = parse_normalized_symbol(raw_s)
-                    lp = item.get('lastPr')
-                    _record_quote(bids, asks, volumes, sym, v_spot, item.get('bidPr') or lp, item.get('askPr') or lp, item.get('quoteVolume', 0.0), mult)
+                    _record_spot_quote(
+                        bids, asks, volumes, sym, v_spot,
+                        item.get('bidPr'), item.get('askPr'), item.get('lastPr'),
+                        item.get('quoteVolume', 0.0), mult
+                    )
             except Exception: pass
 
     def _poll_mexc():
@@ -1426,8 +1502,11 @@ def fetch_futures_data(include_spot=True):
                         if not raw_s.endswith("USDT"):
                             continue
                         sym, mult = parse_normalized_symbol(raw_s)
-                        lp = item.get('lastPrice')
-                        _record_quote(bids, asks, volumes, sym, v_spot, item.get('bidPrice') or lp, item.get('askPrice') or lp, item.get('quoteVolume', 0.0), mult)
+                        _record_spot_quote(
+                            bids, asks, volumes, sym, v_spot,
+                            item.get('bidPrice'), item.get('askPrice'), item.get('lastPrice'),
+                            item.get('quoteVolume', 0.0), mult
+                        )
             except Exception: pass
 
     def _poll_bingx():
@@ -1466,8 +1545,11 @@ def fetch_futures_data(include_spot=True):
                         if not raw_s.endswith("-USDT"):
                             continue
                         sym, mult = parse_normalized_symbol(raw_s)
-                        lp = item.get('lastPrice')
-                        _record_quote(bids, asks, volumes, sym, v_spot, item.get('bidPrice') or lp, item.get('askPrice') or lp, item.get('quoteVolume', 0.0), mult)
+                        _record_spot_quote(
+                            bids, asks, volumes, sym, v_spot,
+                            item.get('bidPrice'), item.get('askPrice'), item.get('lastPrice'),
+                            item.get('quoteVolume', 0.0), mult
+                        )
             except Exception: pass
 
     def _poll_kucoin():
@@ -1499,8 +1581,11 @@ def fetch_futures_data(include_spot=True):
                         if not raw_s.endswith("-USDT"):
                             continue
                         sym, mult = parse_normalized_symbol(raw_s)
-                        lp = item.get('last')
-                        _record_quote(bids, asks, volumes, sym, v_spot, item.get('buy') or lp, item.get('sell') or lp, item.get('volValue', 0.0), mult)
+                        _record_spot_quote(
+                            bids, asks, volumes, sym, v_spot,
+                            item.get('buy'), item.get('sell'), item.get('last'),
+                            item.get('volValue', 0.0), mult
+                        )
             except Exception: pass
 
     with ThreadPoolExecutor(max_workers=8) as pool:
@@ -1540,13 +1625,6 @@ def format_countdown(target_timestamp):
 symbol_price_tracker = {}
 
 def filter_stale_quotes(sym, sym_bids, sym_asks, stale_state):
-    """
-    Отсекает залипшие и аномальные котировки:
-    - где цена < MIN_VALID_PRICE или Ask < Bid;
-    - где Bid == Ask и при этом цена по бирже стоит без изменений STALE_POLL_LIMIT циклов подряд,
-      пока по остальным биржам монеты есть движение;
-    - где котировка отклоняется от медианной цены монеты по рынку более чем на MAX_MEDIAN_DEVIATION.
-    """
     sym_stale = stale_state.setdefault(sym, {})
     cleaned_bids = {}
     cleaned_asks = {}
@@ -1607,7 +1685,6 @@ def filter_stale_quotes(sym, sym_bids, sym_asks, stale_state):
     return cleaned_bids, cleaned_asks
 
 def smooth_spread_value(state_obj, raw_spread):
-    """Сглаживает краткосрочные качели спреда по скользящему окну."""
     if raw_spread is None:
         return None
     samples = state_obj.setdefault("spread_samples", [])
@@ -1617,11 +1694,6 @@ def smooth_spread_value(state_obj, raw_spread):
     return statistics.median(samples)
 
 def find_best_fut_or_hybrid_pair(valid_bids, valid_asks):
-    """
-    Находит лучшую связку (min_ex, max_ex) на разных биржах:
-    - либо Fut + Fut;
-    - либо Spot + Fut при условии, что Spot дешевле Fut (min_ex == Spot, max_ex == Fut).
-    """
     best_pair = None
     best_spread = -1.0
 
@@ -1649,9 +1721,9 @@ def monitor_spread():
     print("🟢 Smart Spread Monitor initialized (Waiting for /spread_on command)...")
 
     live_spread_posts = {}
-    pending_spreads = {}      # Буфер подтверждения вектора входа
-    pair_cooldowns = {}         # Кулдаун на конкретную связку (chart_key) после закрытия: {key: {"ts": ..., "duration": ...}}
-    quote_stale_tracker = {}  # Трекер залипших котировок по (sym -> venue)
+    pending_spreads = {}
+    pair_cooldowns = {}
+    quote_stale_tracker = {}
 
     while True:
         if not spread_monitor_enabled:
